@@ -281,7 +281,6 @@ impl<'a, 'b> Parser<'a, 'b> {
     // --- Nodes ---
     //
 
-
     fn parse_items(&mut self) {
         loop {
             self.skip_ws();
@@ -328,8 +327,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             match self.current() {
                 Some(R_PAREN) => {
                     self.bump();
-                    break
-                },
+                    break;
+                }
                 None => {
                     let cur_span = self.span();
                     self.diag
@@ -342,8 +341,14 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
             self.parse_fn_arg();
             self.skip_ws();
-            self.expect(COMMA);
+            if self.current() == Some(COMMA) {
+                self.bump();
+                self.skip_ws();
+                continue;
+            }
+            self.expect(R_PAREN);
             self.skip_ws();
+            break;
         }
 
         self.finish_node();
@@ -426,7 +431,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use crate::lang::{parse, Diagnostics, Parse, Session, Lang};
+    use crate::lang::{parse, Diagnostics, Lang, Parse, Session};
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
     use rowan::{GreenNode, SyntaxNode};
 
@@ -482,13 +487,42 @@ mod tests {
         SyntaxNode::new_root(parse_source_text(text).green_node)
     }
 
+
     #[test]
-    fn test_parser_basic() {
-        insta::assert_debug_snapshot!(parse_source_text_to_syntax(
-            r#"
+    fn whitespace_tests() {
+        insta::assert_debug_snapshot!(
+            parse_source_text_to_syntax(
+                r#"
+fn main(){}
+    fn main2    (    )    {     }
+fn main3(    arg:f32    ) { }
+fn main4(  arg   :   f32) {}
+"#
+            )
+        );
+    }
+
+    #[test]
+    fn basic_parser_tests() {
+        insta::assert_debug_snapshot!(
+            "empty function",
+            parse_source_text_to_syntax(
+                r#"
 fn main() {
 }
-        "#
-        ));
+"#
+            )
+        );
+
+        insta::assert_debug_snapshot!(
+            "empty functions with arguments",
+            parse_source_text_to_syntax(
+                r#"
+fn zero_arg() {}
+fn one_arg(a : i32) {}
+fn two_args(a : f32, b: f32) {}
+"#
+            )
+        );
     }
 }

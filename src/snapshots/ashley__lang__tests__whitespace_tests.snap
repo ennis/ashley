@@ -1,0 +1,73 @@
+---
+source: src/lang.rs
+expression: "parse_source_text_to_syntax(r#\"\nfn main(){}\n    fn main2    (    )    {     }\nfn main3(    arg:f32    ) { }\nfn main4(  arg   :   f32) {}\n\"#)"
+---
+ROOT@0..106
+  WHITESPACE@0..1 "\n"
+  FUNCTION@1..12
+    FN_KW@1..3 "fn"
+    WHITESPACE@3..4 " "
+    IDENT@4..8 "main"
+    ARG_LIST@8..10
+      L_PAREN@8..9 "("
+      R_PAREN@9..10 ")"
+    BLOCK@10..12
+      L_BRACE@10..11 "{"
+      R_BRACE@11..12 "}"
+  WHITESPACE@12..17 "\n    "
+  FUNCTION@17..46
+    FN_KW@17..19 "fn"
+    WHITESPACE@19..20 " "
+    IDENT@20..25 "main2"
+    WHITESPACE@25..29 "    "
+    ARG_LIST@29..35
+      L_PAREN@29..30 "("
+      WHITESPACE@30..34 "    "
+      R_PAREN@34..35 ")"
+    WHITESPACE@35..39 "    "
+    BLOCK@39..46
+      L_BRACE@39..40 "{"
+      WHITESPACE@40..45 "     "
+      R_BRACE@45..46 "}"
+  WHITESPACE@46..47 "\n"
+  FUNCTION@47..76
+    FN_KW@47..49 "fn"
+    WHITESPACE@49..50 " "
+    IDENT@50..55 "main3"
+    ARG_LIST@55..73
+      L_PAREN@55..56 "("
+      WHITESPACE@56..60 "    "
+      FN_ARG@60..67
+        IDENT@60..63 "arg"
+        COLON@63..64 ":"
+        TYPE_REF@64..67
+          IDENT@64..67 "f32"
+      WHITESPACE@67..71 "    "
+      R_PAREN@71..72 ")"
+      WHITESPACE@72..73 " "
+    BLOCK@73..76
+      L_BRACE@73..74 "{"
+      WHITESPACE@74..75 " "
+      R_BRACE@75..76 "}"
+  WHITESPACE@76..77 "\n"
+  FUNCTION@77..105
+    FN_KW@77..79 "fn"
+    WHITESPACE@79..80 " "
+    IDENT@80..85 "main4"
+    ARG_LIST@85..103
+      L_PAREN@85..86 "("
+      WHITESPACE@86..88 "  "
+      FN_ARG@88..101
+        IDENT@88..91 "arg"
+        WHITESPACE@91..94 "   "
+        COLON@94..95 ":"
+        WHITESPACE@95..98 "   "
+        TYPE_REF@98..101
+          IDENT@98..101 "f32"
+      R_PAREN@101..102 ")"
+      WHITESPACE@102..103 " "
+    BLOCK@103..105
+      L_BRACE@103..104 "{"
+      R_BRACE@104..105 "}"
+  WHITESPACE@105..106 "\n"
+

@@ -1,0 +1,41 @@
+---
+source: src/syntax_kind.rs
+expression: "to_tokens(r#\"100 0.1234 ident _ident _0 \"string\" \"#)"
+---
+- - INT_LIT
+  - start: 0
+    end: 3
+- - WHITESPACE
+  - start: 3
+    end: 4
+- - FLOAT_LIT
+  - start: 4
+    end: 10
+- - WHITESPACE
+  - start: 10
+    end: 11
+- - IDENT
+  - start: 11
+    end: 16
+- - WHITESPACE
+  - start: 16
+    end: 17
+- - IDENT
+  - start: 17
+    end: 23
+- - WHITESPACE
+  - start: 23
+    end: 24
+- - IDENT
+  - start: 24
+    end: 26
+- - WHITESPACE
+  - start: 26
+    end: 27
+- - STRING
+  - start: 27
+    end: 35
+- - WHITESPACE
+  - start: 35
+    end: 36
+

@@ -1,17 +1,39 @@
-mod lang;
-mod syntax_kind;
+extern crate core;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+mod syntax;
+mod hir;
+mod id_vec;
+mod diagnostic;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// High-level workflow:
+// - register source code into the session object
+// - possibly load serialized modules into the session
+// - query the ast of a file
+//
+//      sess.ast(source_id, diag) -> Option<Module>
+//
+// - query the HIR of a file
+//
+//      let hir_session = HirSession::new(...)
+//      let hir_mod = hir.module(source_id);
+//      let hir_lowered = hir.lowered_shader_module(source_id);
+//
+// - pass: shader module lowering (module -> module with only functions)
+//         result: ShaderNode
+//
+// - create a new HIR module:
+//
+//      let builder = HirBuilder::new();
+//      builder.build_function(...);
+//
+//
+// Three sessions:
+//      - syntax session, for parsing to ASTs, syntax highlighting
+//      - HIR session, for getting the HIR and applying transformations
+//      - CG session, for codegen
+//
+// CG depends on HIR, HIR depends on syntax
+//
+// What to codegen?
+// - the codegen granularity is the whole session

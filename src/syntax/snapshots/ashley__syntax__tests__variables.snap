@@ -1,0 +1,212 @@
+---
+source: src/syntax/mod.rs
+expression: "parse_source_text(r#\"\n// global variables\nin v_position: vec3;\nout f_position: vec3 = vec3(0.0);\nuniform u_model_matrix: mat4;\n\nfn main() {\n    let x = 0;\n    var x = 0;\n    let y: f32 = 0;\n    let z;\n    let w: f32;\n\n    if one {\n        let x;\n        var x;\n    }\n\n    if one {\n        let x;\n        var x;\n    } else {\n        let x;\n        var x;\n    }\n\n    while true {\n        let x;\n        var x;\n    }\n}\n\"#)"
+---
+MODULE@0..395
+  WHITESPACE@0..1 "\n"
+  LINE_COMMENT@1..20 "// global variables"
+  WHITESPACE@20..21 "\n"
+  GLOBAL@21..41
+    IN_KW@21..23 "in"
+    WHITESPACE@23..24 " "
+    IDENT@24..34 "v_position"
+    COLON@34..35 ":"
+    WHITESPACE@35..36 " "
+    TYPE_REF@36..40
+      IDENT@36..40 "vec3"
+    SEMICOLON@40..41 ";"
+  WHITESPACE@41..42 "\n"
+  GLOBAL@42..75
+    OUT_KW@42..45 "out"
+    WHITESPACE@45..46 " "
+    IDENT@46..56 "f_position"
+    COLON@56..57 ":"
+    WHITESPACE@57..58 " "
+    TYPE_REF@58..62
+      IDENT@58..62 "vec3"
+    WHITESPACE@62..63 " "
+    INITIALIZER@63..74
+      EQ@63..64 "="
+      WHITESPACE@64..65 " "
+      CALL_EXPR@65..74
+        PATH_EXPR@65..69
+          IDENT@65..69 "vec3"
+        ARG_LIST@69..74
+          L_PAREN@69..70 "("
+          LIT_EXPR@70..73
+            FLOAT_NUMBER@70..73 "0.0"
+          R_PAREN@73..74 ")"
+    SEMICOLON@74..75 ";"
+  WHITESPACE@75..76 "\n"
+  GLOBAL@76..105
+    UNIFORM_KW@76..83 "uniform"
+    WHITESPACE@83..84 " "
+    IDENT@84..98 "u_model_matrix"
+    COLON@98..99 ":"
+    WHITESPACE@99..100 " "
+    TYPE_REF@100..104
+      IDENT@100..104 "mat4"
+    SEMICOLON@104..105 ";"
+  WHITESPACE@105..107 "\n\n"
+  FN_DEF@107..394
+    FN_KW@107..109 "fn"
+    WHITESPACE@109..110 " "
+    IDENT@110..114 "main"
+    PARAM_LIST@114..116
+      L_PAREN@114..115 "("
+      R_PAREN@115..116 ")"
+    WHITESPACE@116..117 " "
+    BLOCK@117..394
+      L_CURLY@117..118 "{"
+      WHITESPACE@118..123 "\n    "
+      LOCAL_VARIABLE@123..133
+        LET_KW@123..126 "let"
+        WHITESPACE@126..127 " "
+        IDENT@127..128 "x"
+        WHITESPACE@128..129 " "
+        INITIALIZER@129..132
+          EQ@129..130 "="
+          WHITESPACE@130..131 " "
+          LIT_EXPR@131..132
+            INT_NUMBER@131..132 "0"
+        SEMICOLON@132..133 ";"
+      WHITESPACE@133..138 "\n    "
+      LOCAL_VARIABLE@138..148
+        VAR_KW@138..141 "var"
+        WHITESPACE@141..142 " "
+        IDENT@142..143 "x"
+        WHITESPACE@143..144 " "
+        INITIALIZER@144..147
+          EQ@144..145 "="
+          WHITESPACE@145..146 " "
+          LIT_EXPR@146..147
+            INT_NUMBER@146..147 "0"
+        SEMICOLON@147..148 ";"
+      WHITESPACE@148..153 "\n    "
+      LOCAL_VARIABLE@153..168
+        LET_KW@153..156 "let"
+        WHITESPACE@156..157 " "
+        IDENT@157..158 "y"
+        COLON@158..159 ":"
+        WHITESPACE@159..160 " "
+        TYPE_REF@160..163
+          IDENT@160..163 "f32"
+        WHITESPACE@163..164 " "
+        INITIALIZER@164..167
+          EQ@164..165 "="
+          WHITESPACE@165..166 " "
+          LIT_EXPR@166..167
+            INT_NUMBER@166..167 "0"
+        SEMICOLON@167..168 ";"
+      WHITESPACE@168..173 "\n    "
+      LOCAL_VARIABLE@173..179
+        LET_KW@173..176 "let"
+        WHITESPACE@176..177 " "
+        IDENT@177..178 "z"
+        SEMICOLON@178..179 ";"
+      WHITESPACE@179..184 "\n    "
+      LOCAL_VARIABLE@184..195
+        LET_KW@184..187 "let"
+        WHITESPACE@187..188 " "
+        IDENT@188..189 "w"
+        COLON@189..190 ":"
+        WHITESPACE@190..191 " "
+        TYPE_REF@191..194
+          IDENT@191..194 "f32"
+        SEMICOLON@194..195 ";"
+      WHITESPACE@195..201 "\n\n    "
+      IF_STMT@201..251
+        IF_KW@201..203 "if"
+        WHITESPACE@203..204 " "
+        CONDITION@204..208
+          PATH_EXPR@204..207
+            IDENT@204..207 "one"
+          WHITESPACE@207..208 " "
+        BLOCK@208..245
+          L_CURLY@208..209 "{"
+          WHITESPACE@209..218 "\n        "
+          LOCAL_VARIABLE@218..224
+            LET_KW@218..221 "let"
+            WHITESPACE@221..222 " "
+            IDENT@222..223 "x"
+            SEMICOLON@223..224 ";"
+          WHITESPACE@224..233 "\n        "
+          LOCAL_VARIABLE@233..239
+            VAR_KW@233..236 "var"
+            WHITESPACE@236..237 " "
+            IDENT@237..238 "x"
+            SEMICOLON@238..239 ";"
+          WHITESPACE@239..244 "\n    "
+          R_CURLY@244..245 "}"
+        WHITESPACE@245..251 "\n\n    "
+      IF_STMT@251..338
+        IF_KW@251..253 "if"
+        WHITESPACE@253..254 " "
+        CONDITION@254..258
+          PATH_EXPR@254..257
+            IDENT@254..257 "one"
+          WHITESPACE@257..258 " "
+        BLOCK@258..295
+          L_CURLY@258..259 "{"
+          WHITESPACE@259..268 "\n        "
+          LOCAL_VARIABLE@268..274
+            LET_KW@268..271 "let"
+            WHITESPACE@271..272 " "
+            IDENT@272..273 "x"
+            SEMICOLON@273..274 ";"
+          WHITESPACE@274..283 "\n        "
+          LOCAL_VARIABLE@283..289
+            VAR_KW@283..286 "var"
+            WHITESPACE@286..287 " "
+            IDENT@287..288 "x"
+            SEMICOLON@288..289 ";"
+          WHITESPACE@289..294 "\n    "
+          R_CURLY@294..295 "}"
+        WHITESPACE@295..296 " "
+        ELSE_BRANCH@296..338
+          ELSE_KW@296..300 "else"
+          WHITESPACE@300..301 " "
+          BLOCK@301..338
+            L_CURLY@301..302 "{"
+            WHITESPACE@302..311 "\n        "
+            LOCAL_VARIABLE@311..317
+              LET_KW@311..314 "let"
+              WHITESPACE@314..315 " "
+              IDENT@315..316 "x"
+              SEMICOLON@316..317 ";"
+            WHITESPACE@317..326 "\n        "
+            LOCAL_VARIABLE@326..332
+              VAR_KW@326..329 "var"
+              WHITESPACE@329..330 " "
+              IDENT@330..331 "x"
+              SEMICOLON@331..332 ";"
+            WHITESPACE@332..337 "\n    "
+            R_CURLY@337..338 "}"
+      WHITESPACE@338..344 "\n\n    "
+      WHILE_STMT@344..392
+        WHILE_KW@344..349 "while"
+        WHITESPACE@349..350 " "
+        CONDITION@350..355
+          LIT_EXPR@350..354
+            TRUE_KW@350..354 "true"
+          WHITESPACE@354..355 " "
+        BLOCK@355..392
+          L_CURLY@355..356 "{"
+          WHITESPACE@356..365 "\n        "
+          LOCAL_VARIABLE@365..371
+            LET_KW@365..368 "let"
+            WHITESPACE@368..369 " "
+            IDENT@369..370 "x"
+            SEMICOLON@370..371 ";"
+          WHITESPACE@371..380 "\n        "
+          LOCAL_VARIABLE@380..386
+            VAR_KW@380..383 "var"
+            WHITESPACE@383..384 " "
+            IDENT@384..385 "x"
+            SEMICOLON@385..386 ";"
+          WHITESPACE@386..391 "\n    "
+          R_CURLY@391..392 "}"
+      WHITESPACE@392..393 "\n"
+      R_CURLY@393..394 "}"
+  WHITESPACE@394..395 "\n"
+

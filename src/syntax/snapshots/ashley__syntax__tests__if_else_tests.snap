@@ -1,0 +1,171 @@
+---
+source: src/syntax/mod.rs
+expression: "parse_source_text(r#\"\nfn main() {\n    if one {\n        ok();\n    }\n\n    if one {\n        ok();\n    } else {\n        not_ok();\n    }\n\n    if one {\n    } else if two {\n    } else if three {\n    } else {\n    }\n\n    if one {\n    } else if two {\n    } else if three {\n    }\n}\n\"#)"
+---
+MODULE@0..250
+  WHITESPACE@0..1 "\n"
+  FN_DEF@1..249
+    FN_KW@1..3 "fn"
+    WHITESPACE@3..4 " "
+    IDENT@4..8 "main"
+    PARAM_LIST@8..10
+      L_PAREN@8..9 "("
+      R_PAREN@9..10 ")"
+    WHITESPACE@10..11 " "
+    BLOCK@11..249
+      L_CURLY@11..12 "{"
+      WHITESPACE@12..17 "\n    "
+      IF_STMT@17..51
+        IF_KW@17..19 "if"
+        WHITESPACE@19..20 " "
+        CONDITION@20..24
+          PATH_EXPR@20..23
+            IDENT@20..23 "one"
+          WHITESPACE@23..24 " "
+        BLOCK@24..45
+          L_CURLY@24..25 "{"
+          WHITESPACE@25..34 "\n        "
+          EXPR_STMT@34..39
+            CALL_EXPR@34..38
+              PATH_EXPR@34..36
+                IDENT@34..36 "ok"
+              ARG_LIST@36..38
+                L_PAREN@36..37 "("
+                R_PAREN@37..38 ")"
+            SEMICOLON@38..39 ";"
+          WHITESPACE@39..44 "\n    "
+          R_CURLY@44..45 "}"
+        WHITESPACE@45..51 "\n\n    "
+      IF_STMT@51..110
+        IF_KW@51..53 "if"
+        WHITESPACE@53..54 " "
+        CONDITION@54..58
+          PATH_EXPR@54..57
+            IDENT@54..57 "one"
+          WHITESPACE@57..58 " "
+        BLOCK@58..79
+          L_CURLY@58..59 "{"
+          WHITESPACE@59..68 "\n        "
+          EXPR_STMT@68..73
+            CALL_EXPR@68..72
+              PATH_EXPR@68..70
+                IDENT@68..70 "ok"
+              ARG_LIST@70..72
+                L_PAREN@70..71 "("
+                R_PAREN@71..72 ")"
+            SEMICOLON@72..73 ";"
+          WHITESPACE@73..78 "\n    "
+          R_CURLY@78..79 "}"
+        WHITESPACE@79..80 " "
+        ELSE_BRANCH@80..110
+          ELSE_KW@80..84 "else"
+          WHITESPACE@84..85 " "
+          BLOCK@85..110
+            L_CURLY@85..86 "{"
+            WHITESPACE@86..95 "\n        "
+            EXPR_STMT@95..104
+              CALL_EXPR@95..103
+                PATH_EXPR@95..101
+                  IDENT@95..101 "not_ok"
+                ARG_LIST@101..103
+                  L_PAREN@101..102 "("
+                  R_PAREN@102..103 ")"
+              SEMICOLON@103..104 ";"
+            WHITESPACE@104..109 "\n    "
+            R_CURLY@109..110 "}"
+      WHITESPACE@110..116 "\n\n    "
+      IF_STMT@116..185
+        IF_KW@116..118 "if"
+        WHITESPACE@118..119 " "
+        CONDITION@119..123
+          PATH_EXPR@119..122
+            IDENT@119..122 "one"
+          WHITESPACE@122..123 " "
+        BLOCK@123..130
+          L_CURLY@123..124 "{"
+          WHITESPACE@124..129 "\n    "
+          R_CURLY@129..130 "}"
+        WHITESPACE@130..131 " "
+        ELSE_BRANCH@131..185
+          ELSE_KW@131..135 "else"
+          WHITESPACE@135..136 " "
+          IF_STMT@136..185
+            IF_KW@136..138 "if"
+            WHITESPACE@138..139 " "
+            CONDITION@139..143
+              PATH_EXPR@139..142
+                IDENT@139..142 "two"
+              WHITESPACE@142..143 " "
+            BLOCK@143..150
+              L_CURLY@143..144 "{"
+              WHITESPACE@144..149 "\n    "
+              R_CURLY@149..150 "}"
+            WHITESPACE@150..151 " "
+            ELSE_BRANCH@151..185
+              ELSE_KW@151..155 "else"
+              WHITESPACE@155..156 " "
+              IF_STMT@156..185
+                IF_KW@156..158 "if"
+                WHITESPACE@158..159 " "
+                CONDITION@159..165
+                  PATH_EXPR@159..164
+                    IDENT@159..164 "three"
+                  WHITESPACE@164..165 " "
+                BLOCK@165..172
+                  L_CURLY@165..166 "{"
+                  WHITESPACE@166..171 "\n    "
+                  R_CURLY@171..172 "}"
+                WHITESPACE@172..173 " "
+                ELSE_BRANCH@173..185
+                  ELSE_KW@173..177 "else"
+                  WHITESPACE@177..178 " "
+                  BLOCK@178..185
+                    L_CURLY@178..179 "{"
+                    WHITESPACE@179..184 "\n    "
+                    R_CURLY@184..185 "}"
+      WHITESPACE@185..191 "\n\n    "
+      IF_STMT@191..248
+        IF_KW@191..193 "if"
+        WHITESPACE@193..194 " "
+        CONDITION@194..198
+          PATH_EXPR@194..197
+            IDENT@194..197 "one"
+          WHITESPACE@197..198 " "
+        BLOCK@198..205
+          L_CURLY@198..199 "{"
+          WHITESPACE@199..204 "\n    "
+          R_CURLY@204..205 "}"
+        WHITESPACE@205..206 " "
+        ELSE_BRANCH@206..248
+          ELSE_KW@206..210 "else"
+          WHITESPACE@210..211 " "
+          IF_STMT@211..248
+            IF_KW@211..213 "if"
+            WHITESPACE@213..214 " "
+            CONDITION@214..218
+              PATH_EXPR@214..217
+                IDENT@214..217 "two"
+              WHITESPACE@217..218 " "
+            BLOCK@218..225
+              L_CURLY@218..219 "{"
+              WHITESPACE@219..224 "\n    "
+              R_CURLY@224..225 "}"
+            WHITESPACE@225..226 " "
+            ELSE_BRANCH@226..248
+              ELSE_KW@226..230 "else"
+              WHITESPACE@230..231 " "
+              IF_STMT@231..248
+                IF_KW@231..233 "if"
+                WHITESPACE@233..234 " "
+                CONDITION@234..240
+                  PATH_EXPR@234..239
+                    IDENT@234..239 "three"
+                  WHITESPACE@239..240 " "
+                BLOCK@240..247
+                  L_CURLY@240..241 "{"
+                  WHITESPACE@241..246 "\n    "
+                  R_CURLY@246..247 "}"
+                WHITESPACE@247..248 "\n"
+      R_CURLY@248..249 "}"
+  WHITESPACE@249..250 "\n"
+

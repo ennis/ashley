@@ -1,14 +1,14 @@
 ---
-source: src/syntax_kind.rs
+source: src/syntax/syntax_kind.rs
 expression: "to_tokens(r#\"100 0.1234 ident _ident _0 \"string\" \"#)"
 ---
-- - INT_LIT
+- - INT_NUMBER
   - start: 0
     end: 3
 - - WHITESPACE
   - start: 3
     end: 4
-- - FLOAT_LIT
+- - FLOAT_NUMBER
   - start: 4
     end: 10
 - - WHITESPACE

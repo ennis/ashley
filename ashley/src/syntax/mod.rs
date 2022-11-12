@@ -23,6 +23,16 @@ pub struct Span {
     pub end: usize,
 }
 
+impl Default for Span {
+    fn default() -> Self {
+        Span {
+            file_id: usize::MAX,
+            start: 0,
+            end: 0
+        }
+    }
+}
+
 //--------------------------------------------------------------------------------------------------
 
 /// Second, implementing the `Language` trait teaches rowan to convert between

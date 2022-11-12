@@ -1,20 +1,19 @@
-pub(crate) mod ty;
+mod ty;
+mod arena;
 
-use crate::hir::ty::{ScalarType, TypeKind};
+use crate::hir::ir::ty::TypeCtxt;
 use crate::id_vec::{Id, IdVec};
 use crate::syntax;
+use crate::syntax::{SourceId, Span};
 use bumpalo::Bump;
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
-use ty::Type;
-use crate::syntax::SourceId;
+use std::marker::PhantomData;
 
-pub struct Arena<'hir> {
-    pub(crate) dropless: Bump,
-    pub(crate) type_kinds: typed_arena::Arena<TypeKind<'hir>>,
-}
+pub use ty::{Type, HasTypeId};
 
-pub(crate) struct PredefinedTypes<'hir> {
+/*pub(crate) struct PredefinedTypes<'hir> {
     pub(crate) ty_void: Type<'hir>,
     pub(crate) ty_bool: Type<'hir>,
     pub(crate) ty_int: Type<'hir>,
@@ -48,12 +47,12 @@ pub(crate) struct PredefinedTypes<'hir> {
     pub(crate) ty_mat4x2: Type<'hir>,
     pub(crate) ty_mat4x3: Type<'hir>,
     pub(crate) ty_string: Type<'hir>,
-}
+}*/
 
-impl<'hir> PredefinedTypes<'hir> {
+/*impl<'hir> PredefinedTypes<'hir> {
     #[rustfmt::skip]
     pub(crate) fn new(arena: &'hir Arena<'hir>, type_set: &mut HashSet<&'hir TypeKind<'hir>>) -> PredefinedTypes<'hir> {
-        let ty_void = Type(arena.type_kinds.alloc(TypeKind::Void));
+        /*let ty_void = Type(arena.type_kinds.alloc(TypeKind::Void));
         let ty_bool = Type(arena.type_kinds.alloc(TypeKind::Scalar(ScalarType::Bool)));
         let ty_int = Type(arena.type_kinds.alloc(TypeKind::Scalar(ScalarType::Int)));
         let ty_uint = Type(arena.type_kinds.alloc(TypeKind::Scalar(ScalarType::UnsignedInt)));
@@ -155,179 +154,144 @@ impl<'hir> PredefinedTypes<'hir> {
             ty_mat4x2,
             ty_mat4x3,
             ty_string
-        }
+        }*/
     }
-}
+}*/
 
-pub struct HirCtxtInner<'hir> {
-    syntax: &'hir syntax::Session,
+pub struct HirCtxt<'hir> {
     arena: &'hir Arena<'hir>,
-    items: IdVec<Item<'hir>>,
-    types: HashSet<&'hir TypeKind<'hir>>,
-
-    predefined_types: PredefinedTypes<'hir>,
-    modules: IdVec<Module>,
-
+    ty_ctxt: TypeCtxt<'hir>,
+    values: IdVec<Value>,
+    blocks: IdVec<Block<'hir>>,
+    /// Top-level instructions.
+    instrs: Vec<Instr<'hir>>,
 }
 
-impl<'hir> fmt::Debug for HirCtxtInner<'hir> {
+pub type ValueId = Id<Value>;
+pub type BlockId = Id<Block<'static>>;
+
+impl<'hir> fmt::Debug for HirCtxt<'hir> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("HirCtxt")
-            .field("syntax", &self.syntax)
-            .field("items", &self.items)
-            .field("types", &self.types)
-            .field("modules", &self.modules)
+            //.field("types", &self.types)
+            .field("values", &self.values)
+            .field("blocks", &self.blocks)
             .finish_non_exhaustive()
     }
 }
 
-impl<'hir> HirCtxtInner<'hir> {
-    pub fn new(arena: &'hir Arena<'hir>, syntax: &'hir syntax::Session) -> HirCtxtInner<'hir> {
-        let mut types = HashSet::default();
-        let predefined_types = PredefinedTypes::new(arena, &mut types);
-        HirCtxtInner {
-            syntax,
+impl<'hir> HirCtxt<'hir> {
+    pub fn new(arena: &'hir Arena<'hir>) -> HirCtxt<'hir> {
+        let ty_ctxt = TypeCtxt::new();
+        HirCtxt {
             arena,
-            items: IdVec::new(),
-            types,
-            predefined_types,
-            modules: IdVec::new(),
+            ty_ctxt,
+            values: IdVec::new(),
+            blocks: IdVec::new(),
+            instrs: vec![],
         }
     }
-
-    pub fn ty_uint(&self) -> Type<'hir> {
-        self.predefined_types.ty_uint
-    }
-
-    pub fn ty_int(&self) -> Type<'hir> {
-        self.predefined_types.ty_int
-    }
-
-    pub fn ty_float(&self) -> Type<'hir> {
-        self.predefined_types.ty_float
-    }
-
-    pub fn ty_bool(&self) -> Type<'hir> {
-        self.predefined_types.ty_bool
-    }
-
-    pub fn make_vector(&mut self, elem_ty: ScalarType, count: u8) -> Type<'hir> {
-        self.make_type(TypeKind::Vector(elem_ty, count))
-    }
-
-    pub fn make_matrix(&mut self, elem_ty: ScalarType, rows: u8, cols: u8) -> Type<'hir> {
-        self.make_type(TypeKind::Matrix(elem_ty, rows, cols))
-    }
-
-    pub fn make_pointer(&mut self, pointee_ty: Type<'hir>) -> Type<'hir> {
-        self.make_type(TypeKind::Pointer(pointee_ty))
-    }
-
-    pub fn make_type(&mut self, kind: TypeKind<'hir>) -> Type<'hir> {
-        if let Some(kind) = self.types.get(&kind).cloned() {
-            Type(kind)
-        } else {
-            let kind = self.arena.type_kinds.alloc(kind);
-            self.types.insert(kind);
-            Type(kind)
-        }
-    }
-
-    /*/// Returns the HIR module for the specified source ID.
-    pub fn module(&mut self, source_id: SourceId) -> &Module {
-
-    }*/
 }
 
 //--------------------------------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
-pub struct FnDecl<'hir> {
-    name: &'hir str,
-    args: &'hir [Type<'hir>],
-    ret_ty: Type<'hir>,
-}
-
-
-pub type StmtId = Id<Stmt>;
-pub type LocalId = Id<Stmt>;
-
-// statements:
-//
-// assign (place, rvalue)
-
-// Issue with defines: possible to re-use the same temporary ID, which is bad
-
-// rvalue:
-// - function call
-// - bin expr
-// - ...
-
-
-// places:
-// - local
-// - local w/ projection
-// - temporary:
-
-// - locals are mutable
-
-
-pub struct Local {
-
-}
-
-#[derive(Clone,Debug)]
-pub enum PlaceLocation {
-    Local(LocalId),
-    //Temporary(TemporaryId),
-}
-
-pub struct PlaceAccess {
-    location: PlaceLocation,
-
-}
-
-// and store it / read it once
-#[derive(Clone,Debug)]
-pub struct Place {
-    location: PlaceLocation,
-}
-
-pub enum Value {
-
+pub struct Block<'hir> {
+    instrs: Vec<Instr<'hir>>,
 }
 
 #[derive(Clone, Debug)]
-pub enum Stmt {
-    Assign(Place)
+pub struct Value;
 
+type DialectId = u16;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Opcode(pub DialectId, pub u16);
+
+impl Opcode {
+    pub fn dialect(&self) -> DialectId {
+        self.0
+    }
+
+    pub fn opcode(&self) -> u16 {
+        self.1
+    }
 }
 
 #[derive(Clone, Debug)]
-pub enum Item<'hir> {
-    FnDecl(FnDecl<'hir>),
+pub struct Instr<'hir> {
+    pub opcode: Opcode,
+    pub operands: &'hir [ValueId],
+    pub results: &'hir [ValueId],
+    //pub attributes: &'hir [&'hir dyn Attribute],
+    pub blocks: Vec<Block<'hir>>,
+    pub location: Span,
 }
 
-pub type ItemId = Id<Item<'static>>;
+/*instruction!(
+    IAdd <0, "add"> {lhs, rhs} -> {0} attr {} region {}
+    Func<0, "func">
+);
 
-#[derive(Clone, Debug)]
-pub struct Module {
-    source_id: syntax::SourceId,
-    items: Vec<ItemId>,
+// turns into
+
+pub struct IAdd<'hir> {
+    instr: &'hir Instr<'hir>,
 }
 
-// Module interface:
-// * inputs (and uniforms)
-// * outputs
-//  -> more generally, "global variables" with metadata (variability)
+impl<'hir> IAdd<'hir> {
+    pub fn lhs(&self) -> ValueId {
+        self.instr.operands[0]
+    }
 
-//
-// "Magic operations" that represent rasterization
+    pub fn rhs(&self) -> ValueId {
+        self.instr.operands[1]
+    }
+}
 
+#[derive(Default)]
+pub struct IAddBuilder {
+    location: Span,
+    lhs: ValueId,
+    rhs: ValueId,
+}
 
-#[derive(Copy, Clone, Debug)]
-pub struct HirCtxt<'hir>(&'hir HirCtxtInner<'hir>);
+impl IAddBuilder {
+    pub fn lhs(mut self, value: ValueId) -> Self {
 
+    }
+
+    pub fn rhs(mut self, value: ValueId) -> Self {
+
+        let block_id = ...;
+        let instr = ...;
+
+        let lhs = ctx.const_val(0);
+        let rhs = ctx.const_val(1);
+
+        IAdd::build(&ctx).lhs(...).rhs(...).location().append(block_id);
+
+    }
+
+    pub fn append(mut self, block: BlockId) -> ValueId {
+
+    }
+}
+
+pub trait InstrDesc<'hir> {
+    const OPCODE: Opcode;
+    fn instr(&self) -> &'hir Instr<'hir>;
+}
+
+impl<'hir> InstrDesc<'hir> for IAdd<'hir> {
+    const OPCODE: Opcode = Opcode(0,0);
+
+    fn instr(&self) -> &'hir Instr<'hir> {
+        self.instr
+    }
+}
+
+*/
 
 // Goals:
 // * easy to modify / patch / transform functions
@@ -374,4 +338,45 @@ pub struct HirCtxt<'hir>(&'hir HirCtxtInner<'hir>);
 // -
 
 // Optimization passes:
+// Q:
 
+#[cfg(test)]
+mod tests {
+    use crate::hir::ir::{Arena, HirCtxt, Instr, Value};
+
+    mod ins {
+        use crate::hir::ir::Opcode;
+        pub const OP_UNDEF: Opcode = Opcode(0, 0);
+        pub const OP_VARIABLE: Opcode = Opcode(0, 1);
+    }
+    use crate::syntax::Span;
+    use ins::*;
+
+    #[test]
+    fn basic_hir() {
+        /*let arena = Arena::new();
+        let mut ctxt = HirCtxt::new(&arena);
+
+        let r_undef = ctxt.values.push(Value);
+        ctxt.instrs.push(Instr {
+            opcode: OP_UNDEF,
+            operands: &[],
+            results: &[r_undef],
+            //attributes: &[],
+            blocks: vec![],
+            location: Default::default()
+        });
+
+        //let undef_ty =
+
+        let r_var = ctxt.values.push(Value);
+        ctxt.instrs.push(Instr {
+            opcode: OP_VARIABLE,
+            operands: &[],
+            results: &[],
+            //attributes: &[],
+            blocks: vec![],
+            location: Default::default()
+        });*/
+    }
+}

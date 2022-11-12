@@ -129,6 +129,7 @@ impl_ast_token!(AstString<STRING>);
 impl_ast_token!(IntNumber<INT_NUMBER>);
 impl_ast_token!(FloatNumber<FLOAT_NUMBER>);
 impl_ast_token!(Else<ELSE_KW>);
+impl_ast_token!(Eq<EQ>);
 
 impl_ast_node!(Module<MODULE>
               [nodes items: Item]);
@@ -147,6 +148,9 @@ impl_ast_node!(FnDef<FN_DEF>
 impl_ast_node!(RetType    <RET_TYPE>    [node ty: Type]);
 impl_ast_node!(ExprStmt   <EXPR_STMT>   [node expr: Expr]);
 impl_ast_node!(ReturnStmt <RETURN_STMT> [node expr: Expr]);
+impl_ast_node!(BreakStmt <BREAK_STMT> []);
+impl_ast_node!(ContinueStmt <CONTINUE_STMT> []);
+impl_ast_node!(DiscardStmt <DISCARD_STMT> []);
 impl_ast_node!(IfStmt     <IF_STMT>     [node condition: Expr, node block: Block, node else_branch: ElseBranch]);
 impl_ast_node!(WhileStmt  <WHILE_STMT>  [node condition: Expr, node block: Block]);
 impl_ast_node!(ElseBranch <ELSE_BRANCH> [token else_: Else, node block: Block]);
@@ -158,13 +162,20 @@ impl_ast_node!(PrefixExpr <PREFIX_EXPR> []);
 impl_ast_node!(FieldExpr  <FIELD_EXPR>  []);
 impl_ast_node!(LitExpr    <LIT_EXPR>    []);
 impl_ast_node!(PathExpr   <PATH_EXPR>   []);
+impl_ast_node!(Initializer <INITIALIZER> [token eq_: Eq, node expr: Expr]);
+impl_ast_node!(Global     <GLOBAL>       [token name: Ident, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef ]);
-impl_ast_variant_node!(Item, [ FN_DEF => FnDef ]);
+impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global ]);
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
     RETURN_STMT => ReturnStmt,
     WHILE_STMT => WhileStmt,
+    BREAK_STMT => BreakStmt,
+    CONTINUE_STMT => ContinueStmt,
+    DISCARD_STMT => DiscardStmt,
+    LOCAL_VARIABLE => LocalVariable,
     IF_STMT => IfStmt
 ]);
 impl_ast_variant_node!(Expr, [
@@ -389,6 +400,7 @@ fn main() {
             Item::FnDef(d) => {
                 assert_eq!(d.name().unwrap().text(), "main");
             }
+            _ => {}
         }
     }
 }

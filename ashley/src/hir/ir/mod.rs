@@ -1,17 +1,17 @@
-mod ty;
 mod arena;
+mod ty;
 
-use crate::hir::ir::ty::TypeCtxt;
-use crate::id_vec::{Id, IdVec};
-use crate::syntax;
-use crate::syntax::{SourceId, Span};
+use crate::{
+    hir::ir::ty::TypeCtxt,
+    id_vec::{Id, IdVec},
+    syntax,
+    syntax::{SourceId, Span},
+};
 use bumpalo::Bump;
-use std::any::Any;
-use std::collections::HashSet;
-use std::fmt;
-use std::marker::PhantomData;
+use std::{any::Any, collections::HashSet, fmt, marker::PhantomData};
 
-pub use ty::{Type, HasTypeId};
+pub use arena::{Arena, ArenaAlloc, ArenaAny, Interner};
+pub use ty::Type;
 
 /*pub(crate) struct PredefinedTypes<'hir> {
     pub(crate) ty_void: Type<'hir>,
@@ -159,7 +159,7 @@ pub use ty::{Type, HasTypeId};
 }*/
 
 pub struct HirCtxt<'hir> {
-    arena: &'hir Arena<'hir>,
+    arena: &'hir Arena,
     ty_ctxt: TypeCtxt<'hir>,
     values: IdVec<Value>,
     blocks: IdVec<Block<'hir>>,
@@ -181,7 +181,7 @@ impl<'hir> fmt::Debug for HirCtxt<'hir> {
 }
 
 impl<'hir> HirCtxt<'hir> {
-    pub fn new(arena: &'hir Arena<'hir>) -> HirCtxt<'hir> {
+    pub fn new(arena: &'hir Arena) -> HirCtxt<'hir> {
         let ty_ctxt = TypeCtxt::new();
         HirCtxt {
             arena,
@@ -342,7 +342,7 @@ impl<'hir> InstrDesc<'hir> for IAdd<'hir> {
 
 #[cfg(test)]
 mod tests {
-    use crate::hir::ir::{Arena, HirCtxt, Instr, Value};
+    use crate::hir::ir::{HirCtxt, Instr, Value};
 
     mod ins {
         use crate::hir::ir::Opcode;

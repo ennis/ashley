@@ -45,7 +45,7 @@ pub struct VectorType(ScalarType, u8);
 //#[uuid("be5259b7-b91d-42d7-8fa2-fc563cb00f5f")]
 pub struct MatrixType(ScalarType, u8, u8);
 
-macro_rules! impl_type {
+/*macro_rules! impl_type {
     ($v:vis struct $n:name { $($attr_name:ident : $attr_ty:ty ;)* } ) => {
         $v struct $n<'a>(&'a Type);
 
@@ -61,4 +61,4 @@ macro_rules! impl_type {
 
 impl_type!{
     pub struct VectorType();
-}
+}*/

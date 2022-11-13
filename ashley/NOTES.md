@@ -227,7 +227,8 @@ instance access: `ty.cast::<ConcreteType>()`
 (+) clean API for downcasting
 (+) no lifetime annotations
 (+) possible to have drop impls
-(-) Arc overhead
+(+) easy to require interfaces like Debug (just define `Type: Debug`)
+(-) Arc overhead: allocation and pointer size
 (-) instances need a separate ID for serialization 
 
 The choice is only meaningful for Attributes, which are the only thing that can contain truly arbitrary data. 
@@ -253,4 +254,4 @@ Examples of attributes:
 # Extensibility
 Do we need extensibility? Removing extensibility would simplify the design a lot, but might miss some opportunities for re-use in other places.
 Also, we'd need to move more things into HIR:
-* concepts for the execution graph (shader stages, composition graph)
+* concepts for the execution graph (shader stages, composition graph, types)

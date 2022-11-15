@@ -222,8 +222,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         if self.current() == Some(THIN_ARROW) {
             self.start_node(RET_TYPE);
             self.bump();
+            self.skip_ws();
             self.parse_type();
             self.finish_node();
+            self.skip_ws();
         }
         self.parse_block();
         self.finish_node();
@@ -293,8 +295,87 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn parse_type(&mut self) {
         // for now, only ident
-        self.start_node(TYPE_REF);
-        self.expect_ident("type name");
+        match self.current() {
+            Some(T!['(']) => {
+                self.parse_tuple_type();
+            }
+            Some(IDENT) => {
+                self.start_node(TYPE_REF);
+                self.bump();
+                self.finish_node();
+            }
+            None => {
+                let cur_span = self.span();
+                self.diag
+                    .error("unexpected end of file")
+                    .primary_label(cur_span, "")
+                    .emit();
+            }
+            _ => {
+                let cur_span = self.span();
+                self.diag
+                    .error("syntax error (TODO parse_type)")
+                    .primary_label(cur_span, "")
+                    .emit();
+            }
+        }
+    }
+
+    fn parse_separated_list(&mut self, sep: SyntaxKind, end: SyntaxKind, allow_trailing: bool, tuple_rule: bool, mut parse_item: impl FnMut(&mut Self)) {
+        let mut trailing_sep = false;
+        let mut last_sep_span = None;
+        let mut item_count = 0;
+        loop {
+            self.skip_ws();
+            match self.current() {
+                Some(x) if x == end => {
+                    if trailing_sep && !allow_trailing {
+                        self.diag
+                            .error("trailing separator not allowed here")
+                            .primary_label(last_sep_span, "")
+                            .emit()
+                    }
+                    break;
+                }
+                None => break,
+                _ => {}
+            }
+            parse_item(self);
+            item_count += 1;
+            self.skip_ws();
+            match self.current() {
+                Some(x) if x == end => {
+                    if item_count == 1 && tuple_rule {
+                        // should end with a comma
+                        self.diag
+                            .error("single-element tuple types should have a trailing `,`")
+                            .primary_label(last_sep_span, "")
+                            .emit()
+                    }
+                    break;
+                }
+                Some(x) if x == sep => {
+                    last_sep_span = self.span();
+                    self.bump();
+                    trailing_sep = true;
+                }
+                _ => {
+                    let span = self.span();
+                    self.diag
+                        .error("syntax error (TODO)")
+                        .primary_label(span, "")
+                        .emit();
+                    trailing_sep = false;
+                }
+            }
+        }
+    }
+
+    fn parse_tuple_type(&mut self) {
+        self.start_node(TUPLE_TYPE);
+        self.expect(T!['(']);
+        self.parse_separated_list(T![,], T![')'], true, true, Self::parse_type);
+        self.expect(T![')']);
         self.finish_node();
     }
 
@@ -327,11 +408,34 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.finish_node();
             }
             Some(T!['(']) => {
-                self.start_node(PAREN_EXPR);
+                let cp = self.b.checkpoint();
                 self.bump();
+                self.skip_ws();
                 self.parse_expr();
-                self.expect(T![')']);
-                self.finish_node();
+                self.skip_ws();
+                match self.current() {
+                    Some(T![')']) => {
+                        self.b.start_node_at(cp, PAREN_EXPR.into());
+                        self.bump();
+                        self.finish_node();
+                    }
+                    Some(T![,]) => {
+                        // tuple
+                        self.b.start_node_at(cp, TUPLE_EXPR.into());
+                        self.bump();
+                        self.skip_ws();
+                        self.parse_separated_list(T![,], T![')'], true, false, Self::parse_expr);
+                        self.expect(T![')']);
+                        self.finish_node();
+                    }
+                    _ => {
+                        let span = self.span();
+                        self.diag
+                            .error("syntax error")
+                            .primary_label(span, "")
+                            .emit();
+                    }
+                }
             }
             _ => {
                 let span = self.span();
@@ -590,10 +694,6 @@ impl<'a, 'b> Parser<'a, 'b> {
                     | op @ T![&]
                     | op @ T![<<]
                     | op @ T![>>]
-                    | op @ T![+]
-                    | op @ T![-]
-                    | op @ T![*]
-                    | op @ T![/]
                     | op @ T![%],
                 ) => op,
                 Some(T!['[']) => {
@@ -717,6 +817,13 @@ fn main4(  arg   :   f32) {}
                 r#"
 fn main() {
 }
+
+fn test() -> i32 {
+}
+
+// tuple types
+fn test2() -> (i32,i32) {
+}
 "#
             )
         );
@@ -772,6 +879,10 @@ fn expr_test() {
 
         insta::assert_debug_snapshot!(expr(
             "f(1, 10.0, f(10), test, 1 + 2, tests()[4], tests()[f(0)])"
+        ));
+
+        insta::assert_debug_snapshot!(expr(
+            "f(1, 10.0, f(10), (test, 1 + 2), (test,), tests()[4], tests()[f(0)])"
         ));
     }
 

@@ -1,17 +1,14 @@
-mod arena;
 mod ty;
 
 use crate::{
-    hir::ir::ty::TypeCtxt,
     id_vec::{Id, IdVec},
     syntax,
     syntax::{SourceId, Span},
 };
 use bumpalo::Bump;
 use std::{any::Any, collections::HashSet, fmt, marker::PhantomData};
-
-pub use arena::{Arena, ArenaAlloc, ArenaAny, Interner};
-pub use ty::Type;
+pub use ty::{TypeBase, Type};
+use crate::utils::Interner;
 
 /*pub(crate) struct PredefinedTypes<'hir> {
     pub(crate) ty_void: Type<'hir>,
@@ -159,8 +156,8 @@ pub use ty::Type;
 }*/
 
 pub struct HirCtxt<'hir> {
-    arena: &'hir Arena,
-    ty_ctxt: TypeCtxt<'hir>,
+    arena: &'hir Bump,
+    types: Interner<'hir>,
     values: IdVec<Value>,
     blocks: IdVec<Block<'hir>>,
     /// Top-level instructions.
@@ -173,7 +170,6 @@ pub type BlockId = Id<Block<'static>>;
 impl<'hir> fmt::Debug for HirCtxt<'hir> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("HirCtxt")
-            //.field("types", &self.types)
             .field("values", &self.values)
             .field("blocks", &self.blocks)
             .finish_non_exhaustive()
@@ -181,11 +177,10 @@ impl<'hir> fmt::Debug for HirCtxt<'hir> {
 }
 
 impl<'hir> HirCtxt<'hir> {
-    pub fn new(arena: &'hir Arena) -> HirCtxt<'hir> {
-        let ty_ctxt = TypeCtxt::new();
+    pub fn new(arena: &'hir Bump) -> HirCtxt<'hir> {
         HirCtxt {
             arena,
-            ty_ctxt,
+            types: Interner::new(),
             values: IdVec::new(),
             blocks: IdVec::new(),
             instrs: vec![],
@@ -258,23 +253,17 @@ pub struct IAddBuilder {
 
 impl IAddBuilder {
     pub fn lhs(mut self, value: ValueId) -> Self {
-
     }
 
     pub fn rhs(mut self, value: ValueId) -> Self {
-
         let block_id = ...;
         let instr = ...;
-
         let lhs = ctx.const_val(0);
         let rhs = ctx.const_val(1);
-
         IAdd::build(&ctx).lhs(...).rhs(...).location().append(block_id);
-
     }
 
     pub fn append(mut self, block: BlockId) -> ValueId {
-
     }
 }
 
@@ -290,7 +279,6 @@ impl<'hir> InstrDesc<'hir> for IAdd<'hir> {
         self.instr
     }
 }
-
 */
 
 // Goals:

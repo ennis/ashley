@@ -1,9 +1,8 @@
-extern crate core;
-
 mod syntax;
 mod hir;
 mod id_vec;
 mod diagnostic;
+mod utils;
 
 
 // High-level workflow:

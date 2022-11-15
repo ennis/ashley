@@ -1,8 +1,8 @@
 ---
-source: src/syntax/mod.rs
-expression: "parse_source_text(r#\"\nfn main() {\n}\n\"#)"
+source: ashley/src/syntax/mod.rs
+expression: "parse_source_text(r#\"\nfn main() {\n}\n\nfn test() -> i32 {\n}\n\n// tuple types\nfn test2() -> (i32,i32) {\n}\n\"#)"
 ---
-MODULE@0..15
+MODULE@0..81
   WHITESPACE@0..1 "\n"
   FN_DEF@1..14
     FN_KW@1..3 "fn"
@@ -16,5 +16,51 @@ MODULE@0..15
       L_CURLY@11..12 "{"
       WHITESPACE@12..13 "\n"
       R_CURLY@13..14 "}"
-  WHITESPACE@14..15 "\n"
+  WHITESPACE@14..16 "\n\n"
+  FN_DEF@16..36
+    FN_KW@16..18 "fn"
+    WHITESPACE@18..19 " "
+    IDENT@19..23 "test"
+    PARAM_LIST@23..25
+      L_PAREN@23..24 "("
+      R_PAREN@24..25 ")"
+    WHITESPACE@25..26 " "
+    RET_TYPE@26..32
+      THIN_ARROW@26..28 "->"
+      WHITESPACE@28..29 " "
+      TYPE_REF@29..32
+        IDENT@29..32 "i32"
+    WHITESPACE@32..33 " "
+    BLOCK@33..36
+      L_CURLY@33..34 "{"
+      WHITESPACE@34..35 "\n"
+      R_CURLY@35..36 "}"
+  WHITESPACE@36..38 "\n\n"
+  LINE_COMMENT@38..52 "// tuple types"
+  WHITESPACE@52..53 "\n"
+  FN_DEF@53..80
+    FN_KW@53..55 "fn"
+    WHITESPACE@55..56 " "
+    IDENT@56..61 "test2"
+    PARAM_LIST@61..63
+      L_PAREN@61..62 "("
+      R_PAREN@62..63 ")"
+    WHITESPACE@63..64 " "
+    RET_TYPE@64..76
+      THIN_ARROW@64..66 "->"
+      WHITESPACE@66..67 " "
+      TUPLE_TYPE@67..76
+        L_PAREN@67..68 "("
+        TYPE_REF@68..71
+          IDENT@68..71 "i32"
+        COMMA@71..72 ","
+        TYPE_REF@72..75
+          IDENT@72..75 "i32"
+        R_PAREN@75..76 ")"
+    WHITESPACE@76..77 " "
+    BLOCK@77..80
+      L_CURLY@77..78 "{"
+      WHITESPACE@78..79 "\n"
+      R_CURLY@79..80 "}"
+  WHITESPACE@80..81 "\n"
 

@@ -1,7 +1,9 @@
-use codespan_reporting::diagnostic::{Diagnostic, Label, LabelStyle, Severity};
-use codespan_reporting::term;
-use codespan_reporting::term::termcolor::WriteColor;
 use crate::syntax::{FileId, SourceFiles, Span};
+use codespan_reporting::{
+    diagnostic::{Diagnostic, Label, LabelStyle, Severity},
+    term,
+    term::termcolor::WriteColor,
+};
 
 pub(crate) struct Diagnostics<'a> {
     writer: &'a mut dyn WriteColor,
@@ -13,11 +15,7 @@ pub(crate) struct Diagnostics<'a> {
 }
 
 impl<'a> Diagnostics<'a> {
-    pub(crate) fn new(
-        files: SourceFiles,
-        writer: &'a mut dyn WriteColor,
-        config: term::Config,
-    ) -> Diagnostics {
+    pub(crate) fn new(files: SourceFiles, writer: &'a mut dyn WriteColor, config: term::Config) -> Diagnostics {
         Diagnostics {
             writer,
             config,
@@ -80,11 +78,7 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
         self
     }
 
-    pub fn primary_label(
-        self,
-        span: impl Into<Option<Span>>,
-        message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a, 'b> {
+    pub fn primary_label(self, span: impl Into<Option<Span>>, message: impl Into<String>) -> DiagnosticBuilder<'a, 'b> {
         self.label(span, LabelStyle::Primary, message)
     }
 
@@ -114,12 +108,6 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
             }
             _ => {}
         }
-        term::emit(
-            self.sink.writer,
-            &self.sink.config,
-            &self.sink.files,
-            &self.diag,
-        )
-            .expect("diagnostic output failed")
+        term::emit(self.sink.writer, &self.sink.config, &self.sink.files, &self.diag).expect("diagnostic output failed")
     }
 }

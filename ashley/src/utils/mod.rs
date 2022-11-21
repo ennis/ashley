@@ -1,5 +1,4 @@
 mod arena_any;
-mod intern;
 
-pub use arena_any::{DowncastExt, ArenaAny, impl_arena_any};
-pub use intern::Interner;
+pub use arena_any::{impl_arena_any, ArenaAny, DowncastExt};
+pub use ashley_derive::ArenaAny;

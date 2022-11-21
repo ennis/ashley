@@ -388,6 +388,7 @@ IR example:
             %3 = base.store %i
             // ... sample %i0 at uv+i and accumulate into color ...
         }
+
         %o0 = gfx.out %fragCoord %color  	// fragment output (expects the fragCoord and a value that flows from the same fragcoord)
 		
 	}
@@ -426,3 +427,175 @@ When the user selects an image / buffer to show, or the structure of the graph h
 - the structure of the graph is encoded in the HIR
 - lowering passes are applied to get the final evaluation plan
 
+
+# ID-based objects
+
+## SSA value IDs
+Q: Should they be unique across the whole program to simplify SPIR-V emission?
+A: Not necessarily, this makes allocating ID maps for functions/regions difficult (need hash maps)
+
+In general, should be able to access values defined in a parent region.
+=> so, global SSA value IDs
+
+How to efficiently represent maps keyed by value IDs, considering that:
+* maps may be sparse (e.g. information calculated only for the values in a block or function)
+* the value IDs may grow 
+
+
+Instructions may have multiple outputs.
+Analysis passes often need to go to the instruction that produced the value
+
+    Op {
+      outputs: Vec<ValueId>,
+      ...
+    }
+  
+    OperationId -> Operation
+  
+    Value {
+      source: OperationId,
+    }
+
+
+Alternative:
+
+    OperationId == ValueId -> Operation
+    
+    Value { 
+        defining operation (pointer?) OR block argument index
+    }
+
+    Operation {
+        output values (pointers?)
+    }
+
+
+# IR transformations
+
+* replace all uses with ("RAUW")
+* region inlining (INLINE)
+* value: go to defining operation  (GTDO)
+* insert operation before/after another (INS)
+* attach values to entities per region (REGION-MAP)
+* attach values to all entities in the context (GLOBAL-MAP)
+
+
+# List of IRs
+
+* [cranelift IR](https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/docs/ir.md)
+  * https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/entities/index.html
+  * 32-bit local entity IDs (not globally unique)
+  * slotmaps, with ID linked-list in secondary slotmap to define order
+  
+* [SPIRT](https://github.com/EmbarkStudios/spirt)
+  * Chunked ID allocators (can have "local maps" for all ID ranges in a function)
+  * Element storage in parent element, but ID allocation is global
+  * Linked lists with IDs
+  
+* [MLIR](https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/)
+  * Pointer linked lists
+  * def-use chains
+
+* [MIR](https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/index.html)
+  * `Vec<Statement>` that refer to `Local`s inside functions by index
+
+* naga
+  * Function-local ID vectors
+
+
+
+# Region tree representation
+
+* Owned: local slotmap `RegionId -> RegionData`
+* Owned: global slotmap `RegionId -> RegionData`, and `Vec<RegionId>` for child regions
+
+# Possible instruction representations
+
+## MLIR-like: pointer linked lists
+Value reference: `&'hir Value`
+Region: `Vec<&'hir Instruction>`
+
+Extensive interior mutability
+
+-> RAUW: find & replace in successors, or maintained def-use chain (interior mutability)
+-> INLINE: OK (?)
+-> GTDO: values have a backpointer to the defining op
+-> INS: OK (linked-list), but must use interior mutability
+-> REGION-MAP: values don't have IDs, so not straightforward; `HashMap<&'hir Value, Data>`, or linked-list of pass results directly on the value
+-> GLOBAL-MAP: same as above
+
+## Region-local IDs
+Each region has an IdVec of values. Values don't have a global ID, are visible & accessible only in the containing region.
+
+-> RAUW: find & replace in successors
+-> INLINE: OK (?)
+-> GTDO: each value has an operation ID
+-> INS: ID linked-list
+-> REGION-MAP: per-region SecondaryMap, should be relatively efficient
+-> GLOBAL-MAP: nested SecondaryMaps 
+
+## Global IDs
+Operations are allocated in global slotmaps. Values are still only visible in their defining regions.
+
+-> RAUW: find & replace in successors within region
+-> INLINE: OK (?)
+-> GTDO: same as above
+-> INS: ID linked-list
+-> REGION-MAP: SparseSecondaryMap
+-> GLOBAL-MAP: SecondaryMap
+
+
+## Decision:
+
+Either global IDs or pointer linked-lists
+
+### Global IDs:
+(+) serialization is easy
+(+) less lifetimes
+(+) no interior mutability required
+(-) syntactical indirection to access the data (slightly more noisy)
+
+
+### Pointer linked-lists
+(+) less syntactical noise (although not necessarily more efficient)
+(-) possibly less compact (64-bit pointers vs 32-bit indices)
+(-) need interior mutability to replace value refs (implications?) - absolutely no mutable borrows possible
+(-) mapping always needs a hash map
+
+
+# Operation definition
+
+Several things:
+* opcodes
+* mnemonics
+* global registration
+* builder extension trait
+* wrapper type
+* matcher
+* custom printing & parsing
+
+Wrapper type:
+* associate positional arguments 
+
+# Projectional editors?
+(for artifice, no relation to the HIR)
+https://enso.org/
+
+
+# Operation types
+A wrapper around operations for type-safe access.
+* `&OperationData`? can't borrow HIR because it prevents all access
+* copy of the results
+
+The workflow will probably go something like this:
+* iterate over the ops in a region
+* big match on opcodes
+* opcode matches => deconstruct operands, attributes with the op type, borrow is released there
+
+# TODO
+* IR builder traits (essential)
+* terse operation definitions
+  * code generation?
+* location propagation
+* define the base dialect
+* unify FileId/SourceId

@@ -1,9 +1,12 @@
-mod syntax;
-mod hir;
-mod id_vec;
-mod diagnostic;
-mod utils;
+extern crate self as ashley;
 
+pub mod diagnostic;
+pub mod dialect;
+pub mod syntax;
+pub mod hir;
+mod id_vec;
+mod lower;
+mod utils;
 
 // High-level workflow:
 // - register source code into the session object

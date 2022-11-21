@@ -4,10 +4,7 @@ use logos::Logos;
 ///
 /// We also define a `logos` lexer for the token nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Logos)]
-#[cfg_attr(
-    any(test, feature = "serde"),
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(any(test, feature = "serde"), derive(serde::Serialize, serde::Deserialize))]
 #[allow(non_camel_case_types)]
 #[repr(u16)]
 pub enum SyntaxKind {
@@ -137,6 +134,8 @@ pub enum SyntaxKind {
     OUT_KW,
     #[token("uniform")]
     UNIFORM_KW,
+    #[token("struct")]
+    STRUCT_KW,
 
     #[regex(r#"[a-zA-Z_][a-zA-Z0-9_]*"#)]
     IDENT,
@@ -166,12 +165,14 @@ pub enum SyntaxKind {
     // Nodes
     //
     FN_DEF,
+    STRUCT_DEF,
+    STRUCT_FIELD,
     GLOBAL,
     INITIALIZER,
     LOCAL_VARIABLE,
     PARAM_LIST,
     ARG_LIST,
-    FN_ARG,
+    FN_PARAM,
     BLOCK,
     LIT_EXPR,
     BIN_EXPR,
@@ -179,6 +180,7 @@ pub enum SyntaxKind {
     INDEX_EXPR,
     PAREN_EXPR,
     TUPLE_EXPR,
+    ARRAY_EXPR,
     PATH_EXPR,
     FIELD_EXPR,
     CALL_EXPR,
@@ -205,11 +207,17 @@ pub enum SyntaxKind {
 
 impl SyntaxKind {
     pub fn is_literal(self) -> bool {
-        matches!(self, SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER | SyntaxKind::STRING)
+        matches!(
+            self,
+            SyntaxKind::INT_NUMBER | SyntaxKind::FLOAT_NUMBER | SyntaxKind::STRING
+        )
     }
 
     pub fn is_trivia(&self) -> bool {
-        matches!(self, SyntaxKind::WHITESPACE | SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT)
+        matches!(
+            self,
+            SyntaxKind::WHITESPACE | SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT
+        )
     }
 }
 
@@ -320,7 +328,6 @@ macro_rules ! T {
     //[shebang] => { $ crate :: syntax :: SyntaxKind :: SHEBANG } ;
 }
 
-
 pub use T;
 
 /// Some boilerplate is needed, as rowan settled on using its own
@@ -350,7 +357,7 @@ mod tests {
 
     #[cfg(test)]
     fn to_tokens(text: &str) -> Vec<(SyntaxKind, Range<usize>)> {
-        let mut lexer = SyntaxKind::create_lexer(text);
+        let lexer = SyntaxKind::create_lexer(text);
         let tokens: Vec<(SyntaxKind, Range<usize>)> = lexer.collect();
         tokens
     }

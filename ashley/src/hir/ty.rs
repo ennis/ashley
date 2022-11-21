@@ -1,25 +1,18 @@
-use crate::{
-    hir::ir::HirCtxt,
-    utils::{ArenaAny, DowncastExt},
-};
-use fxhash::{FxHashMap, FxHashSet, FxHasher64};
-use indexmap::Equivalent;
+use crate::utils::{ArenaAny, DowncastExt};
 use std::{
-    cell::Cell,
     cmp::Ordering,
-    collections::HashSet,
     fmt,
     hash::{Hash, Hasher},
-    marker::PhantomData,
-    mem, ptr,
+    ptr,
 };
+use crate::hir::{IRPrintable, IRVisitable};
 
 /// Trait implemented by types.
-pub trait TypeBase<'hir>: fmt::Debug + ArenaAny<'hir> {}
+pub trait TypeBase<'hir>: fmt::Debug + ArenaAny<'hir> + IRPrintable<'hir> {}
 
 /// Represents an interned type.
 #[derive(Copy, Clone, Debug)]
-pub struct Type<'hir>(&'hir dyn TypeBase<'hir>);
+pub struct Type<'hir>(pub(crate) &'hir dyn TypeBase<'hir>);
 
 impl<'hir> PartialEq for Type<'hir> {
     fn eq(&self, other: &Self) -> bool {
@@ -55,7 +48,7 @@ impl<'hir> Type<'hir> {
     /// Casts to a concrete type.
     pub fn cast<T>(&self) -> Option<&'hir T>
     where
-        T: TypeBase<'hir>
+        T: TypeBase<'hir>,
     {
         self.0.cast::<T>()
     }

@@ -1,6 +1,7 @@
-use crate::syntax::SyntaxNode;
-use crate::syntax::{ArithOp, BinaryOp, CmpOp, Lang, LogicOp, SyntaxKind, SyntaxToken};
-use crate::T;
+use crate::{
+    syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken},
+    T,
+};
 use rowan::SyntaxText;
 
 pub trait AstNode {
@@ -137,11 +138,19 @@ impl_ast_node!(Module<MODULE>
 impl_ast_node!(TypeRef<TYPE_REF>
               [token ident: Ident]);
 
+impl_ast_node!(TupleType<TUPLE_TYPE>
+              [nodes fields: Type]);
+
 impl_ast_node!(Block<BLOCK>
                [nodes stmts: Stmt]);
 
+
+impl_ast_node!(FnParam<FN_PARAM> [token ident: Ident, node ty: Type]);
+impl_ast_node!(ParamList<PARAM_LIST> [nodes parameters: FnParam]);
+
 impl_ast_node!(FnDef<FN_DEF>
                [node ret_type: RetType,
+                node param_list: ParamList,
                 node block: Block,
                 token name: Ident]);
 
@@ -162,11 +171,13 @@ impl_ast_node!(PrefixExpr <PREFIX_EXPR> []);
 impl_ast_node!(FieldExpr  <FIELD_EXPR>  []);
 impl_ast_node!(LitExpr    <LIT_EXPR>    []);
 impl_ast_node!(PathExpr   <PATH_EXPR>   []);
+impl_ast_node!(TupleExpr  <TUPLE_EXPR>   [nodes fields: Expr]);
+impl_ast_node!(ArrayExpr  <ARRAY_EXPR>   [nodes elements: Expr]);
 impl_ast_node!(Initializer <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Global     <GLOBAL>       [token name: Ident, node ty: Type, node initializer: Initializer ]);
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
-impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef ]);
+impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType ]);
 impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global ]);
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
@@ -184,7 +195,9 @@ impl_ast_variant_node!(Expr, [
     INDEX_EXPR => IndexExpr,
     PAREN_EXPR => ParenExpr,
     LIT_EXPR => LitExpr,
-    PATH_EXPR => PathExpr
+    PATH_EXPR => PathExpr,
+    TUPLE_EXPR => TupleExpr,
+    ARRAY_EXPR => ArrayExpr
 ]);
 
 //--------------------------------------------------------------------------------------------------
@@ -375,7 +388,7 @@ impl IndexExpr {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::{AstNode, Item, Module, Session};
+    use crate::syntax::{ast::AstNode, ast::Item, ast::Module, Session};
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 
     fn parse_module(text: &str) -> Option<Module> {

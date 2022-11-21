@@ -1,18 +1,17 @@
-//! Interner that works with `ArenaAny` instances.
-
-use crate::utils::ArenaAny;
-use bumpalo::Bump;
+//! Interner for objects allocated in a `HirArena`.
+use crate::{hir::HirArena, utils::ArenaAny};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     hash::{Hash, Hasher},
-    ptr,
 };
-use std::borrow::Borrow;
+use indexmap::IndexSet;
 
+/// Utility trait for object-safe equality comparison between `ArenaAny` objects.
 pub trait DynEq<'a> {
     fn any_eq(&self, other: &dyn ArenaAny<'a>) -> bool;
 }
 
+/// Utility trait for object-safe hashing.
 pub trait DynHash {
     fn hash(&self, state: &mut dyn Hasher);
 }
@@ -39,6 +38,7 @@ where
     }
 }
 
+/// Objects that can be interned with `Interner`.
 trait Internable<'a>: ArenaAny<'a> + DynEq<'a> + DynHash {}
 impl<'a, T> Internable<'a> for T where T: ArenaAny<'a> + DynEq<'a> + DynHash {}
 
@@ -58,30 +58,9 @@ impl<'a> Hash for dyn Internable<'a> {
 
 //--------------------------------------------------------------------------------------------------
 
-struct InternKey<'a>(&'a dyn Internable<'a>);
-
-impl<'a> PartialEq for InternKey<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        PartialEq::eq(&self.0, &other.0)
-    }
-}
-
-impl<'a> Eq for InternKey<'a> {}
-
-impl<'a> Hash for InternKey<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Hash::hash(&self.0, state)
-    }
-}
-
+/// Interns values of arbitrary types allocated on an arena.
 pub struct Interner<'a> {
-    items: HashSet<InternKey<'a>>,
-}
-
-impl<'a> Borrow<dyn Internable<'a>> for InternKey<'a> {
-    fn borrow(&self) -> &dyn Internable<'a> {
-        self.0
-    }
+    items: HashSet<&'a dyn Internable<'a>>,
 }
 
 impl<'a> Interner<'a> {
@@ -91,35 +70,48 @@ impl<'a> Interner<'a> {
         }
     }
 
+    /// Returns whether this interner contains the specified value.
     pub fn contains<T>(&mut self, value: &T) -> bool
     where
-        T: ArenaAny<'a> + Eq + Hash
+        T: ArenaAny<'a> + Eq + Hash,
     {
         self.items.contains(value as &dyn Internable<'a>)
     }
 
-    pub fn intern<T>(&mut self, arena: &'a Bump, value: T) -> &'a T
-        where
-            T: ArenaAny<'a> + Eq + Hash
+    /// Interns the specified value.
+    ///
+    /// Returns a reference to the interned object.
+    ///
+    /// # Arguments
+    /// * arena the arena in which to allocate the object if necessary
+    /// * value the value to intern
+    ///
+    /// # Note
+    /// The `arena` must be the same for all calls to `intern` on this object.
+    pub fn intern<T>(&mut self, arena: &'a HirArena, value: T) -> (&'a T, bool)
+    where
+        T: ArenaAny<'a> + Eq + Hash,
     {
         if let Some(value) = self.items.get(&value as &dyn Internable<'a>) {
-            return value.0.as_any().cast::<T>().unwrap();
+            return (value.as_any().cast::<T>().unwrap(), false);
         }
 
-        let wrap = arena.alloc((0u8, value));
-        self.items.insert(InternKey(&wrap.1));
-        &wrap.1
+        // the (u8, value) tuple is there to ensure that each interned value has a unique address, even
+        // in the presence of ZSTs.
+        let wrap = arena.0.alloc((0u8, value));
+        self.items.insert(&wrap.1);
+        (&wrap.1, true)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Debug;
-    use std::ptr;
-    use crate::utils::intern::{Interner};
-    use bumpalo::Bump;
-    use crate::impl_arena_any;
-    use crate::utils::ArenaAny;
+    use crate::{
+        hir::{intern::Interner, HirArena},
+        impl_arena_any,
+        utils::ArenaAny,
+    };
+    use std::{fmt::Debug, ptr};
 
     trait Type<'a>: ArenaAny<'a> + Debug {}
 
@@ -143,21 +135,20 @@ mod tests {
     impl_arena_any!(ArrayType<'a>);
     impl<'a> Type<'a> for ArrayType<'a> {}
 
-
     #[test]
     fn interner() {
-        let arena = Bump::new();
+        let arena = HirArena::new();
         let mut interner = Interner::new();
 
-        let a1 = interner.intern(&arena, OpaqueType("hello"));
-        let a2 = interner.intern(&arena, OpaqueType("hello"));
-        let a3 = interner.intern(&arena, IntegerType(16));
-        let a4 = interner.intern(&arena, IntegerType(32));
+        let (a1,_) = interner.intern(&arena, OpaqueType("hello"));
+        let (a2,_) = interner.intern(&arena, OpaqueType("hello"));
+        let (a3,_) = interner.intern(&arena, IntegerType(16));
+        let (a4,_) = interner.intern(&arena, IntegerType(32));
 
         assert!(ptr::eq(a1, a2));
         assert!(!ptr::eq(a3, a4));
 
         // upcast
-        let a1 : &dyn Type = a1;
+        let a1: &dyn Type = a1;
     }
 }

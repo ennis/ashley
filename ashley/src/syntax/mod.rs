@@ -1,20 +1,22 @@
-mod ast;
+pub mod ast;
 mod operators;
 mod session;
 mod syntax_kind;
 
-use crate::diagnostic::Diagnostics;
-use crate::T;
-pub use ast::{AstNode, FnDef, Item, Module};
-pub use operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp};
+pub use self::{
+    operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp},
+    session::{Session, SourceId},
+};
+
+pub(crate) use self::{
+    session::{FileId, SourceFiles},
+    syntax_kind::SyntaxKind,
+};
+
+use self::syntax_kind::{Lexer, SyntaxKind::*};
+use crate::{diagnostic::Diagnostics, T};
 use rowan::{GreenNode, GreenNodeBuilder};
-pub(crate) use session::FileId;
-pub(crate) use session::SourceFiles;
-pub use session::{Session, SourceId};
 use std::ops::Range;
-use syntax_kind::Lexer;
-pub(crate) use syntax_kind::SyntaxKind;
-use syntax_kind::SyntaxKind::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Span {
@@ -28,16 +30,13 @@ impl Default for Span {
         Span {
             file_id: usize::MAX,
             start: 0,
-            end: 0
+            end: 0,
         }
     }
 }
 
 //--------------------------------------------------------------------------------------------------
 
-/// Second, implementing the `Language` trait teaches rowan to convert between
-/// these two SyntaxKind types, allowing for a nicer SyntaxNode API where
-/// "kinds" are values from our `enum SyntaxKind`, instead of plain u16 values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lang {}
 impl rowan::Language for Lang {
@@ -54,10 +53,6 @@ impl rowan::Language for Lang {
 pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 
-/// Now, let's write a parser.
-/// Note that `parse` does not return a `Result`:
-/// by design, syntax tree can be built even for
-/// completely invalid source code.
 pub(crate) fn parse(text: &str, file_id: FileId, diag: Diagnostics) -> SyntaxNode {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
@@ -114,10 +109,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn skip_ws(&mut self) {
-        while matches!(
-            self.current(),
-            Some(WHITESPACE | BLOCK_COMMENT | LINE_COMMENT)
-        ) {
+        while matches!(self.current(), Some(WHITESPACE | BLOCK_COMMENT | LINE_COMMENT)) {
             self.bump()
         }
     }
@@ -197,18 +189,40 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW) => {
                     self.parse_global_variable();
                 }
+                Some(STRUCT_KW) => {
+                    self.parse_struct_def();
+                }
                 None => break,
                 _ => {
                     // unexpected token
                     let span = self.span();
-                    self.diag
-                        .error("unexpected token")
-                        .primary_label(span, "")
-                        .emit();
+                    self.diag.error("unexpected token").primary_label(span, "").emit();
                     self.bump();
                 }
             }
         }
+    }
+
+    fn parse_struct_def(&mut self) {
+        self.start_node(STRUCT_DEF);
+        self.expect(STRUCT_KW);
+        self.skip_ws();
+        self.expect_ident("struct name");
+        self.skip_ws();
+        self.expect(T!['{']);
+        self.parse_separated_list(T![,], T!['}'], true, false, Self::parse_struct_field);
+        self.expect(T!['}']);
+        self.finish_node();     // STRUCT_DEF
+    }
+
+    fn parse_struct_field(&mut self) {
+        self.start_node(STRUCT_FIELD);
+        self.expect_ident("field name");
+        self.skip_ws();
+        self.expect(T![:]);
+        self.skip_ws();
+        self.parse_type();
+        self.finish_node(); // STRUCT_FIELD
     }
 
     fn parse_fn(&mut self) {
@@ -217,7 +231,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.skip_ws();
         self.expect_ident("function name");
         self.skip_ws();
-        self.parse_fn_arg_list();
+        self.parse_fn_param_list();
         self.skip_ws();
         if self.current() == Some(THIN_ARROW) {
             self.start_node(RET_TYPE);
@@ -231,7 +245,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.finish_node();
     }
 
-    fn parse_fn_arg_list(&mut self) {
+    fn parse_fn_param_list(&mut self) {
         self.start_node(PARAM_LIST);
         if !self.expect(L_PAREN) {
             self.finish_node();
@@ -256,7 +270,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 _ => {}
             }
-            self.parse_fn_arg();
+            self.parse_fn_parameter();
             self.skip_ws();
             if self.current() == Some(COMMA) {
                 self.bump();
@@ -282,8 +296,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.finish_node();
     }
 
-    fn parse_fn_arg(&mut self) {
-        self.start_node(FN_ARG);
+    fn parse_fn_parameter(&mut self) {
+        self.start_node(FN_PARAM);
         // <ident> : <type>
         self.expect_ident("argument name");
         self.skip_ws();
@@ -321,7 +335,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    fn parse_separated_list(&mut self, sep: SyntaxKind, end: SyntaxKind, allow_trailing: bool, tuple_rule: bool, mut parse_item: impl FnMut(&mut Self)) {
+    fn parse_separated_list(
+        &mut self,
+        sep: SyntaxKind,
+        end: SyntaxKind,
+        allow_trailing: bool,
+        tuple_rule: bool,
+        mut parse_item: impl FnMut(&mut Self),
+    ) {
         let mut trailing_sep = false;
         let mut last_sep_span = None;
         let mut item_count = 0;
@@ -361,10 +382,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 _ => {
                     let span = self.span();
-                    self.diag
-                        .error("syntax error (TODO)")
-                        .primary_label(span, "")
-                        .emit();
+                    self.diag.error("syntax error (TODO)").primary_label(span, "").emit();
                     trailing_sep = false;
                 }
             }
@@ -430,19 +448,21 @@ impl<'a, 'b> Parser<'a, 'b> {
                     }
                     _ => {
                         let span = self.span();
-                        self.diag
-                            .error("syntax error")
-                            .primary_label(span, "")
-                            .emit();
+                        self.diag.error("syntax error").primary_label(span, "").emit();
                     }
                 }
             }
+            Some(T!['[']) => {
+                self.start_node(ARRAY_EXPR);
+                self.skip_ws();
+                self.parse_separated_list(T![,], T![']'], true, false, Self::parse_expr);
+                self.skip_ws();
+                self.expect(T![']']);
+                self.finish_node();
+            }
             _ => {
                 let span = self.span();
-                self.diag
-                    .error("syntax error")
-                    .primary_label(span, "")
-                    .emit();
+                self.diag.error("syntax error").primary_label(span, "").emit();
                 self.bump();
             }
         }
@@ -608,10 +628,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 _ => {
                     let span = self.span();
-                    self.diag
-                        .error("syntax error (TODO)")
-                        .primary_label(span, "")
-                        .emit();
+                    self.diag.error("syntax error (TODO)").primary_label(span, "").emit();
                 }
             }
         }
@@ -661,9 +678,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         }
 
-        self.skip_ws();
-
         loop {
+            self.skip_ws();
             let op = match self.current() {
                 Some(
                     op @ T![+]
@@ -748,17 +764,7 @@ fn prefix_binding_power(op: SyntaxKind) -> u8 {
 
 fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
     match op {
-        T![=]
-        | T![+=]
-        | T![-=]
-        | T![*=]
-        | T![/=]
-        | T![%=]
-        | T![&=]
-        | T![|=]
-        | T![^=]
-        | T![<<=]
-        | T![>>=] => (2, 1),
+        T![=] | T![+=] | T![-=] | T![*=] | T![/=] | T![%=] | T![&=] | T![|=] | T![^=] | T![<<=] | T![>>=] => (2, 1),
         T![||] => (4, 5),
         T![&&] => (6, 7),
         T![==] | T![!=] | T![<=] | T![>=] | T![<] | T![>] => (8, 9),
@@ -877,9 +883,7 @@ fn expr_test() {
 "#
         ));
 
-        insta::assert_debug_snapshot!(expr(
-            "f(1, 10.0, f(10), test, 1 + 2, tests()[4], tests()[f(0)])"
-        ));
+        insta::assert_debug_snapshot!(expr("f(1, 10.0, f(10), test, 1 + 2, tests()[4], tests()[f(0)])"));
 
         insta::assert_debug_snapshot!(expr(
             "f(1, 10.0, f(10), (test, 1 + 2), (test,), tests()[4], tests()[f(0)])"
@@ -955,6 +959,30 @@ fn main() {
         let x;
         var x;
     }
+}
+"#
+        ));
+    }
+
+
+    #[test]
+    fn structs() {
+        insta::assert_debug_snapshot!(parse_source_text(
+            r#"
+struct EmptyStruct {}
+struct OneField {
+    a: f32
+}
+struct OneFieldTrailing {
+    a: f32,
+}
+struct TwoFields {
+    a: f32,
+    b: f32
+}
+struct TwoFieldsTrailing {
+    a: f32,
+    b: f32,
 }
 "#
         ));

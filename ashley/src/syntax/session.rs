@@ -1,11 +1,17 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use codespan_reporting::files::{Files, SimpleFiles};
-use codespan_reporting::term;
-use codespan_reporting::term::termcolor::WriteColor;
-use crate::diagnostic::Diagnostics;
-use crate::syntax;
-use crate::syntax::{AstNode, Module, SyntaxNode};
+use crate::{
+    diagnostic::Diagnostics,
+    syntax,
+    syntax::{
+        ast::{AstNode, Module},
+        SyntaxNode,
+    },
+};
+use codespan_reporting::{
+    files::{Files, SimpleFiles},
+    term,
+    term::termcolor::WriteColor,
+};
+use std::{collections::HashMap, sync::Arc};
 
 pub(crate) type FileId = usize;
 pub(crate) type SourceFiles = SimpleFiles<String, Arc<str>>;

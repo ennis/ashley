@@ -1,5 +1,3 @@
-use bumpalo::Bump;
-use fxhash::FxHasher64;
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
@@ -8,38 +6,74 @@ use std::{
     marker::PhantomData,
 };
 
-/// A trait similar to `Any` but with an added lifetime bound.
+/// A trait similar to `Any` but with an added lifetime bound, suitable for allocation of type-erased objects in
+/// an arena.
+///
+/// The `'a` lifetime bound represents the borrow of the memory arena in which the object is allocated.
+/// It can be safely implemented for types with at most one lifetime parameter.
+/// Use `impl_arena_any` or the `ArenaAny` derive macro to implement this trait safely.
 pub unsafe trait ArenaAny<'a>: 'a {
+    /// Static function to return the static TypeId of this type.
+    ///
+    /// See `ArenaAny::type_id`
     fn static_type_id() -> std::any::TypeId
-        where
-            Self: Sized;
+    where
+        Self: Sized;
+
+    /// Returns the static TypeId of the value.
+    ///
+    /// The "static TypeId" of a type is its TypeId with all lifetime parameters bound to `'static`.
+    /// E.g. `TypeId::of::<Foo>` for a type with no generics, and `TypeId::of::<Foo<'static>>` for `Foo<'a>` for all `'a`.
     fn type_id(&self) -> std::any::TypeId;
+
+    /// Returns a reference to self as a `dyn ArenaAny<'a>` trait object.
     fn as_any(&self) -> &dyn ArenaAny<'a>;
 }
 
 impl<'a> dyn ArenaAny<'a> {
-    pub fn cast<T>(&self) -> Option<&T> where T: ArenaAny<'a> {
+    /// Tries to downcast a reference to a `dyn ArenaAny` object to a reference to a concrete type `T`.
+    pub fn cast<T>(&self) -> Option<&T>
+    where
+        T: ArenaAny<'a>,
+    {
         if self.type_id() == T::static_type_id() {
-            unsafe {
-                Some(&*(self as *const dyn ArenaAny as *const T))
-            }
+            unsafe { Some(&*(self as *const dyn ArenaAny as *const T)) }
         } else {
             None
         }
     }
 }
 
+/// Utility trait for downcasting `&dyn ArenaAny` values.
 pub trait DowncastExt<'a> {
-    fn cast<'b, U>(&'b self) -> Option<&'b U> where U: ArenaAny<'a>, 'a: 'b;
+    /// Tries to downcast `self` to a reference to a concrete type `U`.
+    ///
+    /// Returns `None` if the object is not of the correct type.
+    fn cast<'b, U>(&'b self) -> Option<&'b U>
+    where
+        U: ArenaAny<'a>,
+        'a: 'b;
 }
 
-impl<'a, T> DowncastExt<'a> for T where T: ?Sized + ArenaAny<'a> {
-    fn cast<'b, U>(&'b self) -> Option<&'b U> where U: ArenaAny<'a>, 'a: 'b {
+impl<'a, T> DowncastExt<'a> for T
+where
+    T: ?Sized + ArenaAny<'a>,
+{
+    fn cast<'b, U>(&'b self) -> Option<&'b U>
+    where
+        U: ArenaAny<'a>,
+        'a: 'b,
+    {
         self.as_any().cast()
     }
 }
 
-
+/// Macro to implement `ArenaAny` safely on a type.
+///
+/// It expects inputs of the form `Foo`, for types with no generics, or `Foo<'a>`, for a type with one lifetime.
+/// Only types with at most one lifetime and no type- or const-generics are supported.
+///
+/// Alternatively, you can also use the `ArenaAny` proc-macro derive, which supports type and const generics.
 #[macro_export]
 macro_rules! impl_arena_any {
     // single lifetime: OK
@@ -78,13 +112,11 @@ macro_rules! impl_arena_any {
 
 pub use impl_arena_any;
 
-
 #[cfg(test)]
 mod tests {
-    use std::{any::TypeId, cell::Cell, sync::Arc};
-    use std::fmt::Debug;
-    use bumpalo::Bump;
     use crate::utils::{ArenaAny, DowncastExt};
+    use bumpalo::Bump;
+    use std::{any::TypeId, cell::Cell, fmt::Debug, sync::Arc};
 
     trait Type<'a>: ArenaAny<'a> + Debug {}
 
@@ -112,15 +144,14 @@ mod tests {
     fn test_arena() {
         let arena = Bump::new();
 
-
         let opaque_ty = arena.alloc(OpaqueType("sampler")) as &dyn Type;
         let i16_ty = arena.alloc(IntegerType(16)) as &dyn Type;
         let i32_ty = arena.alloc(IntegerType(32)) as &dyn Type;
         let mat4x4_ty = arena.alloc(MatrixType(1, 4, 4)) as &dyn Type;
         let i32_array_ty = arena.alloc(ArrayType(i32_ty, 64)) as &dyn Type;
 
-        let _  = opaque_ty.cast::<OpaqueType>().unwrap();
-        let _  = i32_array_ty.cast::<ArrayType>().unwrap();
+        let _ = opaque_ty.cast::<OpaqueType>().unwrap();
+        let _ = i32_array_ty.cast::<ArrayType>().unwrap();
     }
 
     /*#[test]

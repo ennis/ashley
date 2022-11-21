@@ -4,11 +4,9 @@ extern crate proc_macro;
 use proc_macro2::Span;
 use quote::{ToTokens, TokenStreamExt};
 
-mod composable;
-mod widget_wrapper;
+mod arena_any;
 
-use composable::generate_composable;
-use widget_wrapper::derive_widget_wrapper_impl;
+use crate::arena_any::derive_arena_any_impl;
 
 //--------------------------------------------------------------------------------------------------
 struct CrateName;
@@ -16,17 +14,11 @@ const CRATE: CrateName = CrateName;
 
 impl ToTokens for CrateName {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        tokens.append(syn::Ident::new("kyute", Span::call_site()))
+        tokens.append(syn::Ident::new("ashley", Span::call_site()))
     }
 }
 
-//--------------------------------------------------------------------------------------------------
-#[proc_macro_attribute]
-pub fn composable(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    generate_composable(attr, item)
-}
-
-#[proc_macro_derive(Widget, attributes(inner))]
-pub fn widget_wrapper_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    derive_widget_wrapper_impl(input)
+#[proc_macro_derive(ArenaAny)]
+pub fn derive_arena_any(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    derive_arena_any_impl(input)
 }

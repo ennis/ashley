@@ -1,11 +1,97 @@
-use indexmap::IndexSet;
-use std::cmp::Ordering;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use std::num::NonZeroU32;
-use std::ops::{Index, IndexMut};
+/*use indexmap::IndexSet;
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    num::NonZeroU32,
+    ops::{Index, IndexMut},
+};*/
 
+/*
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Vector with strongly-typed indices.
+#[derive(Debug)]
+pub struct IdVec<I,T> {
+    pub items: Vec<T>,
+}
+
+impl<T> IdVec<T> {
+    pub fn new() -> IdVec<T> {
+        IdVec { items: vec![] }
+    }
+
+    pub fn push(&mut self, item: T) -> Id<T> {
+        let id = self.next_id();
+        self.items.push(item);
+        id
+    }
+
+    pub fn last(&self) -> Option<&T> {
+        self.items.last()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
+        self.items.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn next_id(&self) -> Id<T> {
+        unsafe {
+            Id(
+                NonZeroU32::new_unchecked(self.items.len() as u32 + 1),
+                PhantomData,
+            )
+        }
+    }
+}
+
+impl<T> Index<Id<T>> for IdVec<T> {
+    type Output = T;
+
+    fn index(&self, index: Id<T>) -> &Self::Output {
+        &self.items[(index.0.get() - 1) as usize]
+    }
+}
+
+impl<T> IndexMut<Id<T>> for IdVec<T> {
+    fn index_mut(&mut self, index: Id<T>) -> &mut Self::Output {
+        &mut self.items[(index.0.get() - 1) as usize]
+    }
+}
+
+#[derive(Debug)]
+pub struct UniqueIdVec<T> {
+    set: IndexSet<T>,
+}
+
+impl<T: Hash + Eq> UniqueIdVec<T> {
+    pub fn new() -> UniqueIdVec<T> {
+        UniqueIdVec {
+            set: IndexSet::new(),
+        }
+    }
+
+    pub fn add(&mut self, item: T) -> Id<T> {
+        let index = self.set.insert_full(item).0;
+        unsafe { Id(NonZeroU32::new_unchecked((index + 1) as u32), PhantomData) }
+    }
+}
+
+impl<T> Index<Id<T>> for UniqueIdVec<T> {
+    type Output = T;
+
+    fn index(&self, index: Id<T>) -> &Self::Output {
+        &self.set[(index.0.get() - 1) as usize]
+    }
+}
+
+
+/*
 #[repr(transparent)]
 pub struct Id<T>(NonZeroU32, PhantomData<fn() -> T>);
 
@@ -57,7 +143,7 @@ impl<T> Hash for Id<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state)
     }
-}
+}*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -110,77 +196,4 @@ impl<T> Hash for IdRange<T> {
         self.1.hash(state);
     }
 }*/
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(Debug)]
-pub struct IdVec<T> {
-    pub items: Vec<T>,
-}
-
-impl<T> IdVec<T> {
-    pub fn new() -> IdVec<T> {
-        IdVec { items: vec![] }
-    }
-
-    pub fn push(&mut self, item: T) -> Id<T> {
-        self.items.push(item);
-        unsafe {
-            Id(
-                NonZeroU32::new_unchecked(self.items.len() as u32),
-                PhantomData,
-            )
-        }
-    }
-
-    pub fn last(&self) -> Option<&T> {
-        self.items.last()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
-        self.items.iter()
-    }
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-}
-
-impl<T> Index<Id<T>> for IdVec<T> {
-    type Output = T;
-
-    fn index(&self, index: Id<T>) -> &Self::Output {
-        &self.items[(index.0.get() - 1) as usize]
-    }
-}
-
-impl<T> IndexMut<Id<T>> for IdVec<T> {
-    fn index_mut(&mut self, index: Id<T>) -> &mut Self::Output {
-        &mut self.items[(index.0.get() - 1) as usize]
-    }
-}
-
-#[derive(Debug)]
-pub struct UniqueIdVec<T> {
-    set: IndexSet<T>,
-}
-
-impl<T: Hash + Eq> UniqueIdVec<T> {
-    pub fn new() -> UniqueIdVec<T> {
-        UniqueIdVec {
-            set: IndexSet::new(),
-        }
-    }
-
-    pub fn add(&mut self, item: T) -> Id<T> {
-        let index = self.set.insert_full(item).0;
-        unsafe { Id(NonZeroU32::new_unchecked((index + 1) as u32), PhantomData) }
-    }
-}
-
-impl<T> Index<Id<T>> for UniqueIdVec<T> {
-    type Output = T;
-
-    fn index(&self, index: Id<T>) -> &Self::Output {
-        &self.set[(index.0.get() - 1) as usize]
-    }
-}
+*/

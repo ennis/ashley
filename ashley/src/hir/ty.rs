@@ -45,6 +45,15 @@ impl<'hir> Hash for Type<'hir> {
 }
 
 impl<'hir> Type<'hir> {
+
+    /// Returns whether the type is of the specified concrete type.
+    pub fn is<T>(&self) -> bool
+        where
+            T: TypeBase<'hir>,
+    {
+        self.0.cast::<T>().is_some()
+    }
+
     /// Casts to a concrete type.
     pub fn cast<T>(&self) -> Option<&'hir T>
     where

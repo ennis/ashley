@@ -1,10 +1,16 @@
-use crate::hir::{Attribute, HirCtxt, Operand, Operation, OperationId, RegionId, Type, TypeOrAttr, ValueId};
+use crate::{
+    diagnostic::{SourceId, SourceLocation},
+    hir::{Attribute, HirCtxt, Operand, Operation, OperationId, RegionId, Type, TypeOrAttr, ValueId},
+};
+use codespan_reporting::files::Files;
 use indexmap::IndexSet;
 use std::{
     collections::HashMap,
     fmt,
     fmt::{Formatter, Write},
+    fs::File,
     mem,
+    path::Path,
 };
 
 /// Trait for HIR entities that can be printed to an `OperationPrinter`
@@ -31,12 +37,15 @@ macro_rules! write_ir {
         ])
     };
 }
+use crate::{diagnostic::SourceFileProvider, hir::Location};
 pub use write_ir;
 
 pub enum IRSyntaxElem<'a, 'hir> {
     Token(&'a str),
     UInt(u32),
     Int(i32),
+    SourceId(SourceId),
+    SourceLocation(SourceLocation),
     Type(Type<'hir>),
     TypeDef(Type<'hir>),
     Attribute(Attribute<'hir>),
@@ -50,19 +59,26 @@ impl<'a, 'hir> From<Type<'hir>> for IRSyntaxElem<'a, 'hir> {
         IRSyntaxElem::Type(value)
     }
 }
-
 impl<'a, 'hir> From<Attribute<'hir>> for IRSyntaxElem<'a, 'hir> {
     fn from(value: Attribute<'hir>) -> Self {
         IRSyntaxElem::Attribute(value)
     }
 }
-
 impl<'a, 'hir> From<&'a str> for IRSyntaxElem<'a, 'hir> {
     fn from(value: &'a str) -> Self {
         IRSyntaxElem::Token(value)
     }
 }
-
+impl<'a, 'hir> From<SourceId> for IRSyntaxElem<'a, 'hir> {
+    fn from(value: SourceId) -> Self {
+        IRSyntaxElem::SourceId(value)
+    }
+}
+impl<'a, 'hir> From<SourceLocation> for IRSyntaxElem<'a, 'hir> {
+    fn from(value: SourceLocation) -> Self {
+        IRSyntaxElem::SourceLocation(value)
+    }
+}
 impl<'a, 'hir> From<u8> for IRSyntaxElem<'a, 'hir> {
     fn from(value: u8) -> Self {
         IRSyntaxElem::UInt(value as u32)
@@ -118,19 +134,25 @@ pub trait IRPrinter<'hir> {
 struct HirHtmlPrintCtxt<'a, 'hir> {
     hir: &'a HirCtxt<'hir>,
     indent: u32,
+    source_files: SourceFileProvider,
     w: &'a mut dyn Write,
     // Map TypeOrAttr -> Index
     types_and_attrs: HashMap<TypeOrAttr<'hir>, usize>,
 }
 
 impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
-    fn new(hir: &'a HirCtxt<'hir>, w: &'a mut dyn Write) -> HirHtmlPrintCtxt<'a, 'hir> {
+    fn new(
+        hir: &'a HirCtxt<'hir>,
+        source_files: SourceFileProvider,
+        w: &'a mut dyn Write,
+    ) -> HirHtmlPrintCtxt<'a, 'hir> {
         let mut types_and_attrs = HashMap::new();
         for (i, ty_or_attr) in hir.types_and_attributes.iter().enumerate() {
             types_and_attrs.insert(*ty_or_attr, i);
         }
         HirHtmlPrintCtxt {
             hir,
+            source_files,
             indent: 0,
             w,
             types_and_attrs,
@@ -195,6 +217,8 @@ impl<'a, 'hir> IRPrinter<'hir> for HirHtmlPrintCtxt<'a, 'hir> {
                     let index = r.index();
                     write!(self.w, "<a class=\"region\" href=\"#r{index}\">r{index}</a>").unwrap();
                 }
+                IRSyntaxElem::SourceId(_) => {}
+                IRSyntaxElem::SourceLocation(_) => {}
             }
         }
     }
@@ -280,6 +304,24 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
         });
         write!(self.w, "</span>")?;
 
+        if let Location::Source(src_loc) = op.location {
+            let name = self.source_files.name(src_loc.file).unwrap_or_else(|_| "???".to_string());
+            let start_line = self
+                .source_files
+                .line_index(src_loc.file, src_loc.range.start().into())
+                .unwrap_or(1);
+            let start_col = self
+                .source_files
+                .column_number(src_loc.file, start_line, src_loc.range.start().into())
+                .unwrap_or(1);
+            //let end_line = self.source_files.line_index(src_loc.file, src_loc.range.end().into()).unwrap_or(1);
+            //let end_col = self.source_files.line_index(src_loc.file, end_line, src_loc.range.end().into()).unwrap_or(1);
+            write!(
+                self.w,
+                "<a class=\"loc\" href=\"file://{name}\">{name}:{start_line}:{start_col}</a>"
+            )?;
+        }
+
         let mut region = op.regions.first();
         while let Some(r) = region {
             let i = r.index();
@@ -296,10 +338,16 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
 }
 
 /// Prints a region as an a HTML-formatted document.
-pub fn print_region_as_html(hir: &HirCtxt, title: &str, region: RegionId, out: &mut dyn Write) -> fmt::Result {
+pub fn print_hir_region_html(
+    hir: &HirCtxt,
+    title: &str,
+    region: RegionId,
+    source_files: SourceFileProvider,
+    out: &mut dyn Write,
+) -> fmt::Result {
     // write the HTML body
     let mut output = String::new();
-    let mut html = HirHtmlPrintCtxt::new(hir, &mut output);
+    let mut html = HirHtmlPrintCtxt::new(hir, source_files, &mut output);
     html.print_attribute_and_type_definitions()?;
     html.print_region(region)?;
 
@@ -323,6 +371,9 @@ body {{
 .value {{
     color: #AA1100;
 }}
+.loc {{
+    color: #AAAAAA;
+}}
 </style>
 <head>
     <title>{title}</title>
@@ -333,4 +384,20 @@ body {{
     out.write_str(&output)?;
     write!(out, "</body></html>")?;
     Ok(())
+}
+
+/// Writes HIR to the specified HTML file
+pub fn write_hir_html_file(ctxt: &HirCtxt, path: &str, region: RegionId, source_files: SourceFileProvider) {
+    let mut s = String::new();
+    print_hir_region_html(
+        ctxt,
+        Path::new(path).file_name().unwrap().to_str().unwrap(),
+        region,
+        source_files,
+        &mut s,
+    ).unwrap();
+
+    let mut file = File::create(path).unwrap();
+    use std::io::Write as IoWrite;
+    file.write(s.as_bytes()).unwrap();
 }

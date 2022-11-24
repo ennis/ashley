@@ -599,3 +599,13 @@ The workflow will probably go something like this:
 * location propagation
 * define the base dialect
 * unify FileId/SourceId
+
+# Full-fat pointers for attributes may be wasteful
+Especially if just storing a boolean constant -> 128 bits
+
+Instead of storing `&[&dyn Attribute]` in instructions, how about just `&dyn InstructionData`? 
+
+
+# Loss of pattern matching
+
+The loss of pattern matching on attributes & types hits hard

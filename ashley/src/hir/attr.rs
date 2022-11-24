@@ -1,5 +1,6 @@
 //! IR attributes
 use crate::{
+    diagnostic::SourceLocation,
     hir::{IRPrintable, Type},
     utils::{ArenaAny, DowncastExt},
     write_ir,
@@ -12,20 +13,34 @@ use std::{
     ops::Range,
     ptr,
 };
+use std::ffi::c_void;
 
 /// Trait implemented by types.
 pub trait AttributeBase<'hir>: fmt::Debug + ArenaAny<'hir> + IRPrintable<'hir> {}
 
 /// Represents an interned attribute.
-#[derive(Copy, Clone, Debug)]
-pub struct Attribute<'hir>(pub(crate) &'hir dyn AttributeBase<'hir>);
+#[derive(Debug)]
+pub struct Attribute<'hir, T: ?Sized + AttributeBase<'hir> = dyn AttributeBase<'hir>>(pub(crate) &'hir T);
+
+impl<'hir, T: AttributeBase<'hir>> Attribute<'hir,T> {
+    pub fn upcast(&self) -> Attribute<'hir> {
+        Attribute(self.0)
+    }
+}
+
+impl<'hir, T: ?Sized + AttributeBase<'hir>> Copy for Attribute<'hir,T> {}
+
+impl<'hir, T: ?Sized + AttributeBase<'hir>> Clone for Attribute<'hir,T> {
+    fn clone(&self) -> Self {
+        Attribute(self.0)
+    }
+}
 
 impl<'hir> PartialEq for Attribute<'hir> {
     fn eq(&self, other: &Self) -> bool {
         // `Type` instances are interned, so we can compare equality by comparing the pointers.
-        // However, do so via `as_any` because the pointer metadata (vtable for `Type`) might be different
-        // even for the same objects (see docs of `std::ptr::eq`).
-        ptr::eq(self.0.as_any(), other.0.as_any())
+        // Cast it to `*const c_void` first so that we don't compare the vtable (it may be different across instances).
+        ptr::eq(self.0 as *const _ as *const c_void, other.0 as *const _ as *const c_void)
     }
 }
 
@@ -76,12 +91,43 @@ impl<'hir> AttributeBase<'hir> for TypeAttr<'hir> {}
 pub struct StringAttr<'hir>(pub &'hir str);
 impl<'hir> IRPrintable<'hir> for StringAttr<'hir> {
     fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
-        todo!()
+        write_ir!(printer, self.0);
     }
 }
 impl<'hir> AttributeBase<'hir> for StringAttr<'hir> {}
 
-/// Source location attribute.
+
+/// Integer attribute.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct IntegerAttr<'hir>(pub i128);
+impl<'hir> IRPrintable<'hir> for IntegerAttr<'hir> {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+        write_ir!(printer, format!("{}", self.0));
+    }
+}
+impl<'hir> AttributeBase<'hir> for IntegerAttr<'hir> {}
+
+/// Floating-point value.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct FloatAttr<'hir>(pub f64);
+impl<'hir> IRPrintable<'hir> for FloatAttr<'hir> {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+        write_ir!(printer, format!("{}", self.0));
+    }
+}
+impl<'hir> AttributeBase<'hir> for FloatAttr<'hir> {}
+
+/// Boolean value.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct BooleanAttr<'hir>(pub bool);
+impl<'hir> IRPrintable<'hir> for BooleanAttr<'hir> {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+        write_ir!(printer, format!("{}", self.0));
+    }
+}
+impl<'hir> AttributeBase<'hir> for BooleanAttr<'hir> {}
+
+/*/// Source location attribute.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct LineColumnLocationAttr<'hir> {
     /// Path to the source file. Not necessarily a filesystem path.
@@ -103,25 +149,43 @@ impl<'hir> IRPrintable<'hir> for LineColumnLocationAttr<'hir> {
         );
     }
 }
-impl<'hir> AttributeBase<'hir> for LineColumnLocationAttr<'hir> {}
+impl<'hir> AttributeBase<'hir> for LineColumnLocationAttr<'hir> {}*/
 
 /// Byte-span source location attribute.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct ByteSpanLocationAttr<'hir> {
-    pub file: &'hir StringAttr<'hir>,
-    pub byte_range: Range<u32>,
+// TODO: right now all attributes are interned, but it's a bit wasteful for locations since they're probably all gonna be different
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub enum Location {
+    /// An actual location in source code.
+    Source(SourceLocation),
+    Unknown,
 }
-impl<'hir> IRPrintable<'hir> for ByteSpanLocationAttr<'hir> {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
-        write_ir!(
-            printer,
-            "byteloc(",
-            Attribute(self.file),
-            "@",
-            self.byte_range.start,
-            "..",
-            self.byte_range.end
-        );
+
+impl Location {
+    pub fn to_source_location(&self) -> Option<SourceLocation> {
+        match self {
+            Location::Source(loc) => {Some(*loc)}
+            Location::Unknown => {None}
+        }
     }
 }
-impl<'hir> AttributeBase<'hir> for ByteSpanLocationAttr<'hir> {}
+
+impl Default for Location {
+    fn default() -> Self {
+        Location::Unknown
+    }
+}
+
+impl<'hir> IRPrintable<'hir> for Location {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+        match self {
+            Location::Source(src_loc) => {
+                write_ir!(printer, "loc(", *src_loc, ")");
+            }
+            Location::Unknown => {
+                write_ir!(printer, "loc(?)");
+            }
+        }
+    }
+}
+impl<'hir> AttributeBase<'hir> for Location {}
+

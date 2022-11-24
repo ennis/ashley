@@ -154,27 +154,27 @@ impl_ast_node!(FnDef<FN_DEF>
                 node block: Block,
                 token name: Ident]);
 
-impl_ast_node!(RetType    <RET_TYPE>    [node ty: Type]);
-impl_ast_node!(ExprStmt   <EXPR_STMT>   [node expr: Expr]);
-impl_ast_node!(ReturnStmt <RETURN_STMT> [node expr: Expr]);
-impl_ast_node!(BreakStmt <BREAK_STMT> []);
-impl_ast_node!(ContinueStmt <CONTINUE_STMT> []);
-impl_ast_node!(DiscardStmt <DISCARD_STMT> []);
-impl_ast_node!(IfStmt     <IF_STMT>     [node condition: Expr, node block: Block, node else_branch: ElseBranch]);
-impl_ast_node!(WhileStmt  <WHILE_STMT>  [node condition: Expr, node block: Block]);
-impl_ast_node!(ElseBranch <ELSE_BRANCH> [token else_: Else, node block: Block]);
-impl_ast_node!(BinExpr    <BIN_EXPR>    []);
-impl_ast_node!(IndexExpr  <INDEX_EXPR>  []);
-impl_ast_node!(ParenExpr  <PAREN_EXPR>  []);
-impl_ast_node!(CallExpr   <CALL_EXPR>   []);
-impl_ast_node!(PrefixExpr <PREFIX_EXPR> []);
-impl_ast_node!(FieldExpr  <FIELD_EXPR>  []);
-impl_ast_node!(LitExpr    <LIT_EXPR>    []);
-impl_ast_node!(PathExpr   <PATH_EXPR>   []);
-impl_ast_node!(TupleExpr  <TUPLE_EXPR>   [nodes fields: Expr]);
-impl_ast_node!(ArrayExpr  <ARRAY_EXPR>   [nodes elements: Expr]);
-impl_ast_node!(Initializer <INITIALIZER> [token eq_: Eq, node expr: Expr]);
-impl_ast_node!(Global     <GLOBAL>       [token name: Ident, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(RetType       <RET_TYPE>    [node ty: Type]);
+impl_ast_node!(ExprStmt      <EXPR_STMT>   [node expr: Expr]);
+impl_ast_node!(ReturnStmt    <RETURN_STMT> [node expr: Expr]);
+impl_ast_node!(BreakStmt     <BREAK_STMT> []);
+impl_ast_node!(ContinueStmt  <CONTINUE_STMT> []);
+impl_ast_node!(DiscardStmt   <DISCARD_STMT> []);
+impl_ast_node!(IfStmt        <IF_STMT>     [node condition: Expr, node block: Block, node else_branch: ElseBranch]);
+impl_ast_node!(WhileStmt     <WHILE_STMT>  [node condition: Expr, node block: Block]);
+impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node block: Block]);
+impl_ast_node!(BinExpr       <BIN_EXPR>    []);
+impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
+impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
+impl_ast_node!(CallExpr      <CALL_EXPR>   []);
+impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
+impl_ast_node!(FieldExpr     <FIELD_EXPR>  []);
+impl_ast_node!(LitExpr       <LIT_EXPR>    []);
+impl_ast_node!(PathExpr      <PATH_EXPR>   []);
+impl_ast_node!(TupleExpr     <TUPLE_EXPR>   [nodes fields: Expr]);
+impl_ast_node!(ArrayExpr     <ARRAY_EXPR>   [nodes elements: Expr]);
+impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
+impl_ast_node!(Global        <GLOBAL>       [token name: Ident, node ty: Type, node initializer: Initializer ]);
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType ]);
@@ -276,7 +276,12 @@ impl IntNumber {
     }
 }
 
-impl FloatNumber {}
+impl FloatNumber {
+    pub fn value(&self) -> Option<f64> {
+        // TODO hex floats
+        self.text().parse::<f64>().ok()
+    }
+}
 
 //--------------------------------------------------------------------------------------------------
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -388,14 +393,15 @@ impl IndexExpr {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::{ast::AstNode, ast::Item, ast::Module, Session};
+    use crate::syntax::{ast::AstNode, ast::Item, ast::Module, session};
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+    use crate::diagnostic::SourceFileProvider;
 
     fn parse_module(text: &str) -> Option<Module> {
-        let mut sess = Session::new();
+        let mut sources = SourceFileProvider::new();
         let src_id = sess.register_source("<input>", text);
         let mut writer = StandardStream::stderr(ColorChoice::Always);
-        Module::cast(dbg!(sess.parse(src_id, &mut writer)))
+        Module::cast(dbg!(session::parse(text, src_id, sources, &mut writer)))
     }
 
     #[test]

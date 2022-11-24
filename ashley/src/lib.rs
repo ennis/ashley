@@ -5,7 +5,7 @@ pub mod dialect;
 pub mod syntax;
 pub mod hir;
 mod id_vec;
-mod lower;
+pub mod lower;
 mod utils;
 
 // High-level workflow:

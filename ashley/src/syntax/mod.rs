@@ -3,37 +3,17 @@ mod operators;
 mod session;
 mod syntax_kind;
 
-pub use self::{
-    operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp},
-    session::{Session, SourceId},
-};
+pub use self::operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp};
 
-pub(crate) use self::{
-    session::{FileId, SourceFiles},
-    syntax_kind::SyntaxKind,
-};
-
+pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::{Lexer, SyntaxKind::*};
-use crate::{diagnostic::Diagnostics, T};
-use rowan::{GreenNode, GreenNodeBuilder};
+use crate::{
+    diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation},
+    T,
+};
+use codespan_reporting::{term, term::termcolor::WriteColor};
+use rowan::{GreenNode, GreenNodeBuilder, TextRange, TextSize};
 use std::ops::Range;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct Span {
-    pub file_id: FileId,
-    pub start: usize,
-    pub end: usize,
-}
-
-impl Default for Span {
-    fn default() -> Self {
-        Span {
-            file_id: usize::MAX,
-            start: 0,
-            end: 0,
-        }
-    }
-}
 
 //--------------------------------------------------------------------------------------------------
 
@@ -53,12 +33,22 @@ impl rowan::Language for Lang {
 pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 
-pub(crate) fn parse(text: &str, file_id: FileId, diag: Diagnostics) -> SyntaxNode {
+pub fn parse(
+    text: &str,
+    file: SourceId,
+    source_provider: SourceFileProvider,
+    diag_writer: &mut dyn WriteColor,
+) -> SyntaxNode {
+    let diag = Diagnostics::new(source_provider, diag_writer, term::Config::default());
+    parse_inner(text, file, diag)
+}
+
+pub(crate) fn parse_inner(text: &str, source_id: SourceId, diag: Diagnostics) -> SyntaxNode {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let current = lex.next();
     let mut parser = Parser {
-        file_id,
+        source_id,
         text,
         current,
         lex,
@@ -70,7 +60,7 @@ pub(crate) fn parse(text: &str, file_id: FileId, diag: Diagnostics) -> SyntaxNod
 
 struct Parser<'a, 'b> {
     text: &'a str,
-    file_id: FileId,
+    source_id: SourceId,
     /// Current token & span
     current: Option<(SyntaxKind, Range<usize>)>,
     /// lexer for the input text
@@ -115,12 +105,11 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     /// Returns the `Span` of the current token.
-    fn span(&self) -> Option<Span> {
+    fn span(&self) -> Option<SourceLocation> {
         if let Some((_, span)) = self.current.clone() {
-            Some(Span {
-                file_id: self.file_id,
-                start: span.start,
-                end: span.end,
+            Some(SourceLocation {
+                file: self.source_id,
+                range: TextRange::new(TextSize::from(span.start as u32), TextSize::from(span.end as u32)),
             })
         } else {
             None
@@ -212,7 +201,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.expect(T!['{']);
         self.parse_separated_list(T![,], T!['}'], true, false, Self::parse_struct_field);
         self.expect(T!['}']);
-        self.finish_node();     // STRUCT_DEF
+        self.finish_node(); // STRUCT_DEF
     }
 
     fn parse_struct_field(&mut self) {
@@ -307,6 +296,28 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.finish_node();
     }
 
+    fn parse_type_parameter(&mut self) {
+        match self.current() {
+            Some(INT_NUMBER | FLOAT_NUMBER | STRING) => {
+                self.start_node(LIT_EXPR);
+                self.bump();
+                self.finish_node();
+            }
+            Some(T!['{']) => {
+                self.start_node(CONST_EXPR);
+                self.bump();
+                self.skip_ws();
+                self.parse_expr();
+                self.skip_ws();
+                self.expect(T!['}']);
+                self.finish_node();
+            }
+            _ => {
+                self.parse_type()
+            }
+        }
+    }
+
     fn parse_type(&mut self) {
         // for now, only ident
         match self.current() {
@@ -316,6 +327,14 @@ impl<'a, 'b> Parser<'a, 'b> {
             Some(IDENT) => {
                 self.start_node(TYPE_REF);
                 self.bump();
+                // optional type parameter list
+                if self.current() == Some(T![<]) {
+                    self.bump();
+                    self.skip_ws();
+                    self.parse_separated_list(T![,], T![>], true, false, Self::parse_type_parameter);
+                    self.skip_ws();
+                    self.expect(T![>]);
+                }
                 self.finish_node();
             }
             None => {
@@ -787,15 +806,18 @@ fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::{parse, Diagnostics, Lang, Session, SyntaxNode};
+    use crate::{
+        diagnostic::SourceFileProvider,
+        syntax::{parse_inner, session, Diagnostics, Lang, SyntaxNode},
+    };
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
     use rowan::GreenNode;
 
     fn parse_source_text(text: &str) -> SyntaxNode {
-        let mut sess = Session::new();
-        let src_id = sess.register_source("<input>", text);
+        let mut sources = SourceFileProvider::new();
+        let src_id = sources.register_source("<input>", text);
         let mut writer = StandardStream::stderr(ColorChoice::Always);
-        sess.parse(src_id, &mut writer)
+        session::parse(text, src_id, sources, &mut writer)
     }
 
     fn expr(expr: &str) -> SyntaxNode {
@@ -963,7 +985,6 @@ fn main() {
 "#
         ));
     }
-
 
     #[test]
     fn structs() {

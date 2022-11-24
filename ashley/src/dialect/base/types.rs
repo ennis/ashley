@@ -1,9 +1,10 @@
 use crate::{
-    hir::{Type, TypeBase},
+    hir::{Attribute},
     utils::ArenaAny,
     write_ir,
 };
 use ashley::hir::{IRPrintable, IRSyntaxElem, IRPrinter, IRVisitable};
+use crate::hir::AttributeBase;
 
 /// Unknown type.
 ///
@@ -18,7 +19,9 @@ impl<'hir> IRPrintable<'hir> for UnknownType {
         write_ir!(printer, "unknown");
     }
 }
-impl<'hir> TypeBase<'hir> for UnknownType {}
+impl<'hir> AttributeBase<'hir> for UnknownType {}
+
+
 
 /// Unit type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
@@ -31,9 +34,11 @@ impl<'hir> IRPrintable<'hir> for UnitType {
         write_ir!(printer, "()");
     }
 }
-impl<'hir> TypeBase<'hir> for UnitType {}
+impl<'hir> AttributeBase<'hir> for UnitType {}
 
-/// Scalar type.
+
+
+/// Scalar type kind.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ScalarTypeKind {
     Int,
@@ -74,7 +79,10 @@ impl<'hir> IRPrintable<'hir> for ScalarType {
     }
 }
 
-impl<'hir> TypeBase<'hir> for ScalarType {}
+impl<'hir> AttributeBase<'hir> for ScalarType {}
+
+
+
 
 /// Vector type (element type + size).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
@@ -95,11 +103,14 @@ impl<'hir> IRPrintable<'hir> for VectorType {
         }
     }
 }
-impl<'hir> TypeBase<'hir> for VectorType {}
+impl<'hir> AttributeBase<'hir> for VectorType {}
+
+
+
 
 /// Array type (element type + size).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct ArrayType<'hir>(Type<'hir>, u32);
+pub struct ArrayType<'hir>(Attribute<'hir>, u32);
 impl<'hir> IRPrintable<'hir> for ArrayType<'hir> {
     fn is_inline(&self) -> bool {
         true
@@ -109,12 +120,14 @@ impl<'hir> IRPrintable<'hir> for ArrayType<'hir> {
         write_ir!(printer, "array<", self.0, ",", self.1, ">");
     }
 }
-impl<'hir> TypeBase<'hir> for ArrayType<'hir> {}
+impl<'hir> AttributeBase<'hir> for ArrayType<'hir> {}
+
+
 
 /// Field of a struct type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct Field<'hir> {
-    pub ty: Type<'hir>,
+    pub ty: Attribute<'hir>,
     pub name: &'hir str,
 }
 
@@ -133,7 +146,10 @@ impl<'hir> IRPrintable<'hir> for StructType<'hir> {
         write_ir!(printer, ">");
     }
 }
-impl<'hir> TypeBase<'hir> for StructType<'hir> {}
+impl<'hir> AttributeBase<'hir> for StructType<'hir> {}
+
+
+
 
 impl<'hir> StructType<'hir> {
     /// Finds a field by name.
@@ -149,7 +165,7 @@ impl<'hir> StructType<'hir> {
 
 /// Tuple type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct TupleType<'hir>(pub &'hir [Type<'hir>]);
+pub struct TupleType<'hir>(pub &'hir [Attribute<'hir>]);
 impl<'hir> IRPrintable<'hir> for TupleType<'hir> {
     fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
         write_ir!(printer, "tuple<");
@@ -159,7 +175,9 @@ impl<'hir> IRPrintable<'hir> for TupleType<'hir> {
         write_ir!(printer, ">");
     }
 }
-impl<'hir> TypeBase<'hir> for TupleType<'hir> {}
+impl<'hir> AttributeBase<'hir> for TupleType<'hir> {}
+
+
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ImageDimension {
@@ -182,18 +200,6 @@ impl ImageDimension {
             ImageDimension::Dim2DArray => "2D array",
         }
     }
-
-    /*// TODO move this out of ast
-    pub fn display_glsl_image_suffix(&self) -> &'static str {
-        match self {
-            ImageDimension::Dim1D => "1D",
-            ImageDimension::Dim2D => "2D",
-            ImageDimension::Dim3D => "3D",
-            ImageDimension::DimCube => "Cube",
-            ImageDimension::Dim1DArray => "1DArray",
-            ImageDimension::Dim2DArray => "2DArray",
-        }
-    }*/
 }
 
 /// Sampled image type
@@ -210,30 +216,6 @@ impl<'hir> IRPrintable<'hir> for SampledImageType {
     }
 }
 impl<'hir> TypeBase<'hir> for SampledImageType {}
-
-/*
-impl SampledImageType {
-    pub fn display_glsl(&self) -> impl fmt::Display + '_ {
-        SampledImageTypeDisplayGlsl(self)
-    }
-}
-
-struct SampledImageTypeDisplayGlsl<'a>(&'a SampledImageType);
-
-impl<'a> fmt::Display for SampledImageTypeDisplayGlsl<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}texture{}",
-            self.0.sampled_ty.display_glsl_prefix(),
-            self.0.dim.display_glsl_image_suffix()
-        )?;
-        if self.0.ms {
-            write!(f, "MS")?
-        }
-        Ok(())
-    }
-}*/
 
 /// Unsampled image type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
@@ -271,3 +253,4 @@ impl<'hir> IRPrintable<'hir> for FunctionType<'hir> {
     }
 }
 impl<'hir> TypeBase<'hir> for FunctionType<'hir> {}
+

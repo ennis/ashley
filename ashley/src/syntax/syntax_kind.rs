@@ -175,6 +175,7 @@ pub enum SyntaxKind {
     FN_PARAM,
     BLOCK,
     LIT_EXPR,
+    CONST_EXPR,
     BIN_EXPR,
     PREFIX_EXPR,
     INDEX_EXPR,

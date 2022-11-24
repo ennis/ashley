@@ -4,18 +4,21 @@ mod list;
 mod print;
 mod ty;
 mod visit;
+mod ctxt;
+mod matchers;
 
 use self::{
     intern::Interner,
     list::{List, ListNode},
 };
-use crate::syntax::Span;
 use bumpalo::Bump;
 use std::{collections::HashMap, fmt, hash::Hash, num::NonZeroU32};
+use ashley::diagnostic::SourceLocation;
 
 pub use self::{
-    attr::{Attribute, AttributeBase, ByteSpanLocationAttr, LineColumnLocationAttr, StringAttr, TypeAttr},
-    print::{print_region_as_html, write_ir, IRPrintable, IRPrinter, IRSyntaxElem},
+    ctxt::{HirCtxt, HirArena, Cursor},
+    attr::{Attribute, Location, AttributeBase, IntegerAttr, FloatAttr, StringAttr, TypeAttr},
+    print::{print_hir_region_html, write_hir_html_file, write_ir, IRPrintable, IRPrinter, IRSyntaxElem},
     ty::{Type, TypeBase},
     visit::{IRVisitable, Visit},
 };
@@ -40,7 +43,6 @@ impl OperationDef {
 inventory::collect!(OperationDef);
 
 //--------------------------------------------------------------------------------------------------
-
 macro_rules! id_types {
     ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
         $(
@@ -91,204 +93,6 @@ id_types! {
 
     /// Value index.
     pub struct ValueId;
-}
-
-/// Arena allocator used by `HirCtxt`s.
-///
-/// The same allocator can be shared by multiple `HirCtxt`s, but usually one is created for each `HirCtxt`.
-/// It is not owned by `HirCtxt`s themselves because it would lead to self-referential lifetimes.
-pub struct HirArena(Bump);
-
-impl HirArena {
-    /// Creates a new `HirArena`.
-    pub fn new() -> HirArena {
-        HirArena(Bump::new())
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum TypeOrAttr<'hir> {
-    Type(Type<'hir>),
-    Attribute(Attribute<'hir>),
-}
-
-/// Container for HIR entities.
-///
-/// It holds regions, values, operations, types and attributes.
-pub struct HirCtxt<'hir> {
-    arena: &'hir HirArena,
-    /// Map opcode -> OperationDef.
-    op_def_map: HashMap<Opcode, &'static OperationDef>,
-    interner: Interner<'hir>,
-    types_and_attributes: Vec<TypeOrAttr<'hir>>,
-    pub values: id_arena::Arena<Value, ValueId>,
-    pub regions: id_arena::Arena<Region<'hir>, RegionId>,
-    pub ops: id_arena::Arena<Operation<'hir>, OperationId>,
-}
-
-impl<'hir> fmt::Debug for HirCtxt<'hir> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("HirCtxt")
-            .field("values", &self.values)
-            .field("regions", &self.regions)
-            .field("ops", &self.ops)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<'hir> HirCtxt<'hir> {
-    /// Creates a new HirCtxt, that uses the specified arena allocator.
-    pub fn new(arena: &'hir HirArena) -> HirCtxt<'hir> {
-        let mut op_def_map = HashMap::new();
-        for op_def in inventory::iter::<OperationDef> {
-            op_def_map.insert(op_def.opcode, op_def);
-        }
-
-        HirCtxt {
-            arena,
-            op_def_map,
-            interner: Interner::new(),
-            types_and_attributes: vec![],
-            values: id_arena::Arena::new(),
-            regions: id_arena::Arena::new(),
-            ops: id_arena::Arena::new(),
-        }
-    }
-
-    /// Allocates data into the HIR arena.
-    pub fn alloc<T>(&mut self, src: T) -> &'hir T {
-        self.arena.0.alloc(src)
-    }
-
-    /// Allocates a string into the HIR arena.
-    pub fn alloc_str(&mut self, str: &str) -> &'hir str {
-        self.arena.0.alloc_str(str)
-    }
-
-    /// Allocates data into the HIR arena.
-    pub fn alloc_slice_copy<T: Copy>(&mut self, src: &[T]) -> &'hir [T] {
-        self.arena.0.alloc_slice_copy(src)
-    }
-
-    /*/// Returns a constant operand of undefined type.
-    pub fn undef(&self, ) -> Operand {
-        //let ty = self.intern_type()
-    }*/
-
-    /// Interns a type.
-    fn intern_type_inner<T>(&mut self, ty: T) -> &'hir T
-    where
-        T: TypeBase<'hir> + Eq + Hash,
-    {
-        let (ty, inserted) = self.interner.intern(self.arena, ty);
-        if inserted {
-            self.types_and_attributes.push(TypeOrAttr::Type(Type(ty)));
-        }
-        ty
-    }
-
-    /// Interns an type.
-    fn intern_attr_inner<T>(&mut self, attr: T) -> &'hir T
-    where
-        T: AttributeBase<'hir> + Eq + Hash,
-    {
-        let (attr, inserted) = self.interner.intern(self.arena, attr);
-        if inserted {
-            self.types_and_attributes.push(TypeOrAttr::Attribute(Attribute(attr)));
-        }
-        attr
-    }
-
-    /// Interns a type.
-    pub fn intern_type(&mut self, ty: impl TypeBase<'hir> + Eq + Hash) -> Type<'hir> {
-        Type(self.intern_type_inner(ty))
-    }
-
-    /// Interns an attribute.
-    pub fn intern_attr(&mut self, attr: impl AttributeBase<'hir> + Eq + Hash) -> Attribute<'hir> {
-        Attribute(self.intern_attr_inner(attr))
-    }
-
-    /// Creates a string attribute.
-    pub fn string_attr(&mut self, str: &str) -> &'hir StringAttr<'hir> {
-        let str = self.alloc_str(str);
-        self.intern_attr_inner(StringAttr(str))
-    }
-
-    /// Creates a location attribute.
-    pub fn location_attr(&mut self, str: &str) -> &'hir StringAttr<'hir> {
-        let str = self.alloc_str(str);
-        self.intern_attr_inner(StringAttr(str))
-    }
-
-    /// Creates a new region.
-    pub fn create_region(&mut self) -> RegionId {
-        let region = self.regions.alloc(Region::new(RegionData {
-            arguments: &[],
-            ops: Default::default(),
-        }));
-        region
-    }
-
-
-    /// A short-hand method to build an operation.
-    pub fn create_operation<Operands, Attributes>(
-        &mut self,
-        at: Cursor,
-        opcode: Opcode,
-        result_count: usize,
-        attrs: Attributes,
-        operands: Operands,
-    ) -> (OperationId, &'hir [ValueId])
-        where
-            Operands: IntoIterator<Item = ValueId>,
-            Operands::IntoIter: ExactSizeIterator,
-            Attributes: IntoIterator<Item = Attribute<'hir>>,
-            Attributes::IntoIter: ExactSizeIterator,
-    {
-        let id = self.ops.next_id();
-        let attributes = self.arena.0.alloc_slice_fill_iter(attrs);
-        let operands = self.arena.0.alloc_slice_fill_iter(operands);
-        let results = self.arena.0.alloc_slice_fill_copy(result_count, ValueId::from_index(0));
-        for i in 0..result_count {
-            results[i] = self.values.alloc(Value::OpResult(id, i as u32));
-        }
-        let data = OperationData {
-            opcode,
-            attributes,
-            operands,
-            results,
-            regions: Default::default(),
-            location: Default::default(),
-        };
-        let op = self.ops.alloc(Operation::new(data));
-        match at {
-            Cursor::End(region) => {
-                self.regions[region].data.ops.append(op, &mut self.ops);
-            }
-            Cursor::Before(region, next) => {
-                self.regions[region].data.ops.insert_before(op, next, &mut self.ops);
-            }
-        }
-        (op, results)
-    }
-
-    /// Creates and appends a new subregion under the specified operation.
-    pub fn create_subregion(&mut self, parent_op: OperationId, arg_count: usize) -> (RegionId, &'hir [ValueId]) {
-        // Allocate values for the subregion
-        let region_id = self.regions.next_id();
-        let mut arguments = vec![];
-        for i in 0..arg_count {
-            arguments.push(self.values.alloc(Value::RegionArg(region_id, i as u32)));
-        }
-        let arguments = self.alloc_slice_copy(&arguments);
-        let region = self.regions.alloc(Region::new(RegionData {
-            arguments,
-            ops: Default::default(),
-        }));
-        self.ops[parent_op].data.regions.append(region, &mut self.regions);
-        (region, arguments)
-    }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -347,8 +151,7 @@ pub struct OperationData<'hir> {
     pub results: &'hir [ValueId],
     /// Child regions.
     pub regions: List<RegionId, RegionData<'hir>>,
-    /// Location in the original source code.
-    pub location: Span,
+    pub location: Location,
 }
 
 impl<'hir> Default for OperationData<'hir> {
@@ -359,7 +162,7 @@ impl<'hir> Default for OperationData<'hir> {
             operands: &[],
             results: &[],
             regions: List::default(),
-            location: Default::default(),
+            location: Location::default(),
         }
     }
 }
@@ -449,83 +252,6 @@ impl<'a, 'hir> OperationBuilder<'a, 'hir> {
     }
 }*/
 
-#[derive(Copy, Clone)]
-pub enum Cursor {
-    /// Insert at the end.
-    End(RegionId),
-    /// Insert before the specified operation.
-    Before(RegionId, OperationId),
-}
-
-pub struct RegionBuilder<'a, 'hir> {
-    ctxt: &'a mut HirCtxt<'hir>,
-    cursor: Cursor,
-}
-
-impl<'a, 'hir> RegionBuilder<'a, 'hir> {
-    /// Returns a reference to the HIR context.
-    pub fn ctxt<'b>(&'b mut self) -> &'b mut HirCtxt<'hir> {
-        self.ctxt
-    }
-
-    /*/// Interns a type.
-    pub fn intern_type(&mut self) -> Type<'hir> {
-        self.ctxt.
-    }*/
-
-    /// Creates a new builder that appends instructions at the end of the specified region.
-    pub fn new(ctxt: &'a mut HirCtxt<'hir>, region: RegionId) -> RegionBuilder<'a, 'hir> {
-        RegionBuilder {
-            ctxt,
-            cursor: Cursor::End(region),
-        }
-    }
-
-    /// Creates an operation from scratch.
-    pub fn insert_operation<Operands, Attributes>(
-        &mut self,
-        opcode: Opcode,
-        result_count: usize,
-        attrs: Attributes,
-        operands: Operands,
-    ) -> (OperationId, &'hir [ValueId])
-    where
-        Operands: IntoIterator<Item = ValueId>,
-        Operands::IntoIter: ExactSizeIterator,
-        Attributes: IntoIterator<Item = Attribute<'hir>>,
-        Attributes::IntoIter: ExactSizeIterator,
-    {
-        self.ctxt
-            .create_operation(self.cursor, opcode, result_count, attrs, operands)
-    }
-
-    /// Returns a value of type undef.
-    pub fn undef(&mut self) -> ValueId {
-        let (_, r) = self.ctxt.create_operation(self.cursor, Opcode(0, 0), 1, [], []);
-        r[0]
-    }
-
-    /// Returns the current region.
-    pub fn region(&self) -> RegionId {
-        match self.cursor {
-            Cursor::End(r) => r,
-            Cursor::Before(r, _) => r,
-        }
-    }
-
-    /// Creates a subregion of the specified operation.
-    pub fn create_subregion(&mut self, op: OperationId, arg_count: usize) -> (RegionId, &'hir [ValueId]) {
-        self.ctxt.create_subregion(op, arg_count)
-    }
-
-    /// Creates a region builder that appends to the specified region.
-    pub fn subregion<'b>(&'b mut self, region: RegionId) -> RegionBuilder<'b, 'hir> {
-        RegionBuilder {
-            ctxt: self.ctxt,
-            cursor: Cursor::End(region),
-        }
-    }
-}
 
 //--------------------------------------------------------------------------------------------------
 
@@ -605,29 +331,13 @@ macro_rules! dialect {
 
 pub use dialect;
 
-/*dialect! {
-    pub dialect(Base, "base", 0x0014);
-
-    operation(Fn, "fn",
-        results=1,
-        attrs=(0 => ty: TypeAttr),
-        operands=()
-    );
-
-    operation(Add, "add",
-        results=1,
-        attrs=(),
-        operands=(0 => rhs, 1 => lhs)
-    );
-}*/
-
 //--------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use crate::{
         dialect::base::{FunctionType, ScalarType, ScalarTypeKind},
-        hir::{print_region_as_html, HirArena, HirCtxt, Operand, TypeAttr},
+        hir::{print_hir_region_html, HirArena, HirCtxt, Operand, TypeAttr},
     };
     use std::{fs::File, io::Write, path::PathBuf};
 
@@ -713,7 +423,7 @@ mod tests {
         }
 
         let mut html = String::new();
-        print_region_as_html(ctxt, "basic_hir", root_region, &mut html).unwrap();
+        print_hir_region_html(ctxt, "basic_hir", root_region, &mut html).unwrap();
 
         let mut file = File::create(html_output_file_path("basic_hir")).unwrap();
         file.write(html.as_bytes()).unwrap();

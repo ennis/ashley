@@ -1,7 +1,7 @@
 ---
 source: ashley/tests/syntax.rs
-assertion_line: 13
-expression: "sess.parse(src_id, &mut writer)"
+assertion_line: 12
+expression: "ashley::syntax::parse(&source, src_id, sources, &mut writer)"
 ---
 MODULE@0..899
   GLOBAL@0..27

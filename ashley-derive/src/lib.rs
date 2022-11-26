@@ -5,8 +5,10 @@ use proc_macro2::Span;
 use quote::{ToTokens, TokenStreamExt};
 
 mod arena_any;
+//mod operation_pattern;
 
 use crate::arena_any::derive_arena_any_impl;
+//use crate::operation_pattern::derive_operation_pattern_impl;
 
 //--------------------------------------------------------------------------------------------------
 struct CrateName;
@@ -22,3 +24,8 @@ impl ToTokens for CrateName {
 pub fn derive_arena_any(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     derive_arena_any_impl(input)
 }
+
+/*#[proc_macro_derive(OperationPattern)]
+pub fn derive_operation_pattern(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    derive_operation_pattern_impl(input)
+}*/

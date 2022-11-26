@@ -609,3 +609,41 @@ Instead of storing `&[&dyn Attribute]` in instructions, how about just `&dyn Ins
 # Loss of pattern matching
 
 The loss of pattern matching on attributes & types hits hard
+
+# Issue: ArenaAny cannot work with generics at all 
+
+(except with a static bound)
+We need generics inside attributes for our dynamic pattern matching
+
+Alternatives:
+* separate arena types and matcher types, e.g. `FunctionTypeAttr<'hir>` vs `FunctionTypeAttrM`
+  * Will need that anyway
+* no custom Attribute types (only constructions from base types)
+  * easier to serialize, in a way
+* Arc<Attribute>
+  * will need separate matcher types anyway
+  * pay overhead of atomic refcounting
+
+Arena allocation VS arcs?
+Q: Does it matter?
+A: not sure
+
+
+Short version:
+safely downcasting dyn trait objects with a lifetime is too sketchy
+
+Alternatives:
+* use Arcs
+* make all Attributes `'static` (and thus `: Any`), store Attribute ID instead
+  * can then downcast safely with `Any`
+  * but what about arrays in attribute types? (e.g. Fields of a StructType)
+    * can't do `&'hir [Field]`
+    * store inline? this makes the type ?Sized and thus can't use Any
+* no generics?
+  * that's what is done right now, seems to work OK
+
+Decision: use Arcs
+* we get the ability to store objects with drop impls in them
+* we lose a lot of complexity related to lifetimes
+* we pay the cost of refcounting, but not sure that's a lot
+* we lose `Copy`-able attributes

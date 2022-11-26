@@ -3,8 +3,8 @@ use crate::{
     utils::ArenaAny,
     write_ir,
 };
-use ashley::hir::{IRPrintable, IRSyntaxElem, IRPrinter, IRVisitable};
-use crate::hir::AttributeBase;
+use ashley::hir::{IRPrintable, IRSyntaxElem, IRPrinter, IRVisitable, HirCtxt};
+use crate::hir::{AttributeBase, AttributePattern};
 
 /// Unknown type.
 ///
@@ -81,7 +81,12 @@ impl<'hir> IRPrintable<'hir> for ScalarType {
 
 impl<'hir> AttributeBase<'hir> for ScalarType {}
 
-
+impl<'hir> AttributePattern<'hir> for ScalarType {
+    fn match_attr(_ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
+        attr.cast().cloned()
+    }
+}
+pub type ScalarTypeM = ScalarType;
 
 
 /// Vector type (element type + size).
@@ -104,13 +109,18 @@ impl<'hir> IRPrintable<'hir> for VectorType {
     }
 }
 impl<'hir> AttributeBase<'hir> for VectorType {}
-
+impl<'hir> AttributePattern<'hir> for VectorType {
+    fn match_attr(_ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
+        attr.cast().cloned()
+    }
+}
+pub type VectorTypeM = VectorType;
 
 
 
 /// Array type (element type + size).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct ArrayType<'hir>(Attribute<'hir>, u32);
+pub struct ArrayType<Elem>(pub Elem, pub u32);
 impl<'hir> IRPrintable<'hir> for ArrayType<'hir> {
     fn is_inline(&self) -> bool {
         true
@@ -120,7 +130,15 @@ impl<'hir> IRPrintable<'hir> for ArrayType<'hir> {
         write_ir!(printer, "array<", self.0, ",", self.1, ">");
     }
 }
-impl<'hir> AttributeBase<'hir> for ArrayType<'hir> {}
+impl<'hir> AttributeBase<'hir> for ArrayType<Attribute<'hir>> {}
+
+pub struct ArrayTypeM<Elem>(pub Elem, pub u32);
+
+impl<'hir> AttributePattern<'hir> for VectorType {
+    fn match_attr(_ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
+        attr.cast().cloned()
+    }
+}
 
 
 
@@ -133,10 +151,11 @@ pub struct Field<'hir> {
 
 /// Structure type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct StructType<'hir> {
-    pub name: &'hir str,
-    pub fields: &'hir [Field<'hir>],
+pub struct StructType<'a> {
+    pub name: &'a str,
+    pub fields: &'a [Field<'a>],
 }
+
 impl<'hir> IRPrintable<'hir> for StructType<'hir> {
     fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
         write_ir!(printer, "struct<", self.name);
@@ -147,7 +166,6 @@ impl<'hir> IRPrintable<'hir> for StructType<'hir> {
     }
 }
 impl<'hir> AttributeBase<'hir> for StructType<'hir> {}
-
 
 
 
@@ -215,7 +233,7 @@ impl<'hir> IRPrintable<'hir> for SampledImageType {
         todo!()
     }
 }
-impl<'hir> TypeBase<'hir> for SampledImageType {}
+impl<'hir> AttributeBase<'hir> for SampledImageType {}
 
 /// Unsampled image type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
@@ -229,13 +247,15 @@ impl<'hir> IRPrintable<'hir> for ImageType {
         todo!()
     }
 }
-impl<'hir> TypeBase<'hir> for ImageType {}
+impl<'hir> AttributeBase<'hir> for ImageType {}
 
+
+//--------------------------------------------------------------------------------------------------
 /// Function type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct FunctionType<'hir> {
-    pub return_ty: Type<'hir>,
-    pub arg_types: &'hir [Type<'hir>],
+    pub return_ty: Attribute<'hir>,
+    pub arg_types: &'hir [Attribute<'hir>],
 }
 
 impl<'hir> IRPrintable<'hir> for FunctionType<'hir> {
@@ -252,5 +272,12 @@ impl<'hir> IRPrintable<'hir> for FunctionType<'hir> {
         write_ir!(printer, ") -> ", self.return_ty, ">");
     }
 }
-impl<'hir> TypeBase<'hir> for FunctionType<'hir> {}
+impl<'hir> AttributeBase<'hir> for FunctionType<'hir> {}
+impl<'hir> AttributePattern<'hir> for FunctionType<'hir> {
+    fn match_attr(ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
+        *attr.cast()
+    }
+}
 
+// Function type matcher
+//pub struct FunctionTypeM<ReturnTy, >

@@ -1,7 +1,7 @@
 //! IR attributes
 use crate::{
     diagnostic::SourceLocation,
-    hir::{IRPrintable, Type},
+    hir::{IRPrintable},
     utils::{ArenaAny, DowncastExt},
     write_ir,
 };
@@ -75,6 +75,7 @@ impl<'hir> Attribute<'hir> {
     }
 }
 
+/*
 /// Attribute containing a type reference.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct TypeAttr<'hir>(pub Type<'hir>);
@@ -85,6 +86,7 @@ impl<'hir> IRPrintable<'hir> for TypeAttr<'hir> {
 }
 
 impl<'hir> AttributeBase<'hir> for TypeAttr<'hir> {}
+*/
 
 /// String attribute.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
@@ -99,7 +101,7 @@ impl<'hir> AttributeBase<'hir> for StringAttr<'hir> {}
 
 /// Integer attribute.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct IntegerAttr<'hir>(pub i128);
+pub struct IntegerAttr(pub i128);
 impl<'hir> IRPrintable<'hir> for IntegerAttr<'hir> {
     fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
         write_ir!(printer, format!("{}", self.0));
@@ -109,7 +111,7 @@ impl<'hir> AttributeBase<'hir> for IntegerAttr<'hir> {}
 
 /// Floating-point value.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct FloatAttr<'hir>(pub f64);
+pub struct FloatAttr(pub f64);
 impl<'hir> IRPrintable<'hir> for FloatAttr<'hir> {
     fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
         write_ir!(printer, format!("{}", self.0));
@@ -119,7 +121,7 @@ impl<'hir> AttributeBase<'hir> for FloatAttr<'hir> {}
 
 /// Boolean value.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct BooleanAttr<'hir>(pub bool);
+pub struct BooleanAttr(pub bool);
 impl<'hir> IRPrintable<'hir> for BooleanAttr<'hir> {
     fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
         write_ir!(printer, format!("{}", self.0));

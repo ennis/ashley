@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use bumpalo::Bump;
-use crate::hir::{Attribute, RegionData, StringAttr};
+use crate::hir::{Attribute, FloatAttr, IntegerAttr, Location, OperationData, RegionData, StringAttr};
 use crate::hir::intern::Interner;
 use crate::hir::{AttributeBase, Opcode, Operation, OperationDef, OperationId, Region, RegionId, Value, ValueId};
+use crate::hir::attr::BooleanAttr;
+use crate::hir::matchers::{OperationFormat};
 
 /// Arena allocator used by `HirCtxt`s.
 ///
@@ -28,15 +30,70 @@ pub enum Cursor {
     Before(RegionId, OperationId),
 }
 
+pub struct OperationBuilder<'hir> {
+    opcode: Opcode,
+    attributes: Vec<Attribute<'hir>>,
+    operands: Vec<ValueId>,
+    regions: Vec<RegionId>,
+    result_count: usize,
+    location: Location,
+}
+
+impl<'hir> OperationBuilder<'hir> {
+    pub(crate) fn new() -> OperationBuilder<'hir> {
+        OperationBuilder {
+            opcode: Opcode(0,0),
+            attributes: vec![],
+            operands: vec![],
+            regions: vec![],
+            result_count: 0,
+            location: Location::Unknown,
+        }
+    }
+
+    pub fn positional_attribute(&mut self, index: usize, attr: Attribute<'hir>) {
+        todo!()
+    }
+
+    pub fn push_attribute(&mut self, attr: Attribute<'hir>) {
+        self.attributes.push(attr)
+    }
+
+    pub fn positional_operand(&mut self, index: usize, value: ValueId) {
+        todo!()
+    }
+
+    pub fn push_operand(&mut self, value: ValueId) {
+        todo!()
+    }
+
+    pub fn opcode(&mut self, opcode: Opcode) {
+        self.opcode = opcode;
+    }
+
+    pub fn result_count(&mut self, count: usize) {
+        self.result_count = count;
+    }
+
+    pub fn location(&mut self, location: Location) {
+        self.location = location;
+    }
+
+    pub fn finish(self, ctxt: &mut HirCtxt<'hir>) -> OperationId {
+        todo!()
+    }
+}
+
+
 /// Container for HIR entities.
 ///
 /// It holds regions, values, operations, types and attributes.
 pub struct HirCtxt<'hir> {
     arena: &'hir HirArena,
     /// Map opcode -> OperationDef.
-    op_def_map: HashMap<Opcode, &'static OperationDef>,
+    pub(crate) op_def_map: HashMap<Opcode, &'static OperationDef>,
     interner: Interner<'hir>,
-    attributes: Vec<Attribute<'hir>>,
+    pub(crate) attributes: Vec<Attribute<'hir>>,
     pub values: id_arena::Arena<Value, ValueId>,
     pub regions: id_arena::Arena<Region<'hir>, RegionId>,
     pub ops: id_arena::Arena<Operation<'hir>, OperationId>,
@@ -108,7 +165,7 @@ impl<'hir> HirCtxt<'hir> {
     {
         let (attr, inserted) = self.interner.intern(self.arena, attr);
         if inserted {
-            self.types_and_attributes.push(TypeOrAttr::Attribute(Attribute(attr)));
+            self.attributes.push(Attribute(attr));
         }
         attr
     }
@@ -153,7 +210,7 @@ impl<'hir> HirCtxt<'hir> {
 
     /// Emits a boolean constant.
     pub fn bool_const(&mut self, value: bool) -> Attribute<'hir> {
-        let attr = self.intern_attr(IntegerAttr(value));
+        let attr = self.intern_attr(BooleanAttr(value));
         attr.upcast()
     }
 
@@ -198,6 +255,29 @@ impl<'hir> HirCtxt<'hir> {
             }
         }
         (op, results)
+    }
+
+    pub fn insert_operation<O>(&mut self, at: Cursor, op: O) -> (OperationId, &'hir [ValueId]) where O: OperationFormat<'hir> {
+        let mut builder = OperationBuilder::new();
+        op.build(self, &mut builder);
+
+        let id = self.ops.next_id();
+        let attributes = self.arena.0.alloc_slice_fill_iter(builder.attributes);
+        let operands = self.arena.0.alloc_slice_fill_iter(builder.operands);
+        let results = self.arena.0.alloc_slice_fill_copy(builder.result_count, ValueId::from_index(0));
+        for i in 0..builder.result_count {
+            results[i] = self.values.alloc(Value::OpResult(id, i as u32));
+        }
+
+        let data = OperationData {
+            opcode: builder.opcode,
+            attributes,
+            operands,
+            results,
+            regions: Default::default(),    // TODO
+            location: Default::default()
+        };
+
     }
 
     /// Creates and appends a new subregion under the specified operation.

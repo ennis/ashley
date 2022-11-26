@@ -3,7 +3,7 @@ use crate::{
     diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation},
     dialect::{
         base,
-        base::{BaseDialectBuilder, FunctionType, ScalarType, ScalarTypeKind, TupleType, UnknownType, VectorType},
+        base::{FunctionType, ScalarType, ScalarTypeKind, TupleType, UnknownType, VectorType},
     },
     hir,
     hir::{Cursor, HirCtxt, Location, OperationId, RegionId, TypeOrAttr, ValueId},
@@ -11,6 +11,7 @@ use crate::{
 };
 use codespan_reporting::{term, term::termcolor::WriteColor};
 use std::{any::Any, cell::Cell, collections::HashMap};
+use crate::hir::Attribute;
 
 // Lowering global decls:
 // -> process syntax nodes as they arrive
@@ -97,34 +98,34 @@ pub trait Scope<'hir> {
 
 /// Root scope containing primitive types & constants.
 struct BuiltinScope<'hir> {
-    ty_f32: hir::Type<'hir>,
-    ty_f64: hir::Type<'hir>,
-    ty_u8: hir::Type<'hir>,
-    ty_u16: hir::Type<'hir>,
-    ty_u32: hir::Type<'hir>,
-    ty_i8: hir::Type<'hir>,
-    ty_i16: hir::Type<'hir>,
-    ty_i32: hir::Type<'hir>,
+    ty_f32: hir::Attribute<'hir>,
+    ty_f64: hir::Attribute<'hir>,
+    ty_u8: hir::Attribute<'hir>,
+    ty_u16: hir::Attribute<'hir>,
+    ty_u32: hir::Attribute<'hir>,
+    ty_i8: hir::Attribute<'hir>,
+    ty_i16: hir::Attribute<'hir>,
+    ty_i32: hir::Attribute<'hir>,
 }
 
 struct LowerCtxt<'a, 'hir, 'diag> {
     ctxt: &'a mut HirCtxt<'hir>,
     current_file: SourceId,
     diag: Diagnostics<'diag>,
-    ty_unknown: hir::Type<'hir>,
-    ty_f32: hir::Type<'hir>,
-    ty_i32: hir::Type<'hir>,
-    ty_u32: hir::Type<'hir>,
+    ty_unknown: hir::Attribute<'hir>,
+    ty_f32: hir::Attribute<'hir>,
+    ty_i32: hir::Attribute<'hir>,
+    ty_u32: hir::Attribute<'hir>,
 }
 
 type HirBuilder<'a, 'hir> = hir::RegionBuilder<'a, 'hir>;
 
 impl<'a, 'ir, 'd> LowerCtxt<'a, 'ir, 'd> {
     fn new(ctxt: &'a mut HirCtxt<'ir>, file: SourceId, diag: Diagnostics<'d>) -> LowerCtxt<'a, 'ir, 'd> {
-        let ty_unknown = ctxt.intern_type(UnknownType);
-        let ty_f32 = ctxt.intern_type(ScalarType(ScalarTypeKind::Float));
-        let ty_i32 = ctxt.intern_type(ScalarType(ScalarTypeKind::Int));
-        let ty_u32 = ctxt.intern_type(ScalarType(ScalarTypeKind::UnsignedInt));
+        let ty_unknown = ctxt.intern_attr(UnknownType);
+        let ty_f32 = ctxt.intern_attr(ScalarType(ScalarTypeKind::Float));
+        let ty_i32 = ctxt.intern_attr(ScalarType(ScalarTypeKind::Int));
+        let ty_u32 = ctxt.intern_attr(ScalarType(ScalarTypeKind::UnsignedInt));
 
         LowerCtxt {
             current_file: file,
@@ -145,7 +146,7 @@ impl<'a, 'ir, 'd> LowerCtxt<'a, 'ir, 'd> {
     fn instantiate_builtin_type(
         &mut self,
         kind: BuiltinTypeKind,
-        args: &[(TypeOrAttr, Location)],
+        args: &[(Attribute, Location)],
         instantiation_loc: Location,
     ) -> Option<hir::Type<'ir>> {
         if matches!(
@@ -189,6 +190,17 @@ impl<'a, 'ir, 'd> LowerCtxt<'a, 'ir, 'd> {
             },
             BuiltinTypeKind::Vector => {
                 // element type & len
+
+                let scalar_type = if let Some(ScalarTypeM(scalar_type)) = args.get(0).unwrap().pmatch() {
+                    scalar_type
+                } else {
+                    self.diag
+                        .error("invalid vector element type")
+                        .primary_label(loc.to_source_location(), "")
+                        .emit();
+                    return None;
+                };
+
                 let scalar_type = match args.get(0) {
                     Some((TypeOrAttr::Type(ty), loc)) => {
                         if let Some(scalar_type) = ty.cast::<base::ScalarType>() {

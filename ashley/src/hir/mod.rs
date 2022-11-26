@@ -5,7 +5,7 @@ mod print;
 mod ty;
 mod visit;
 mod ctxt;
-mod matchers;
+pub mod matchers;
 
 use self::{
     intern::Interner,
@@ -16,11 +16,10 @@ use std::{collections::HashMap, fmt, hash::Hash, num::NonZeroU32};
 use ashley::diagnostic::SourceLocation;
 
 pub use self::{
-    ctxt::{HirCtxt, HirArena, Cursor},
+    ctxt::{HirCtxt, HirArena, Cursor, OperationBuilder},
     attr::{Attribute, Location, AttributeBase, IntegerAttr, FloatAttr, StringAttr, TypeAttr},
     print::{print_hir_region_html, write_hir_html_file, write_ir, IRPrintable, IRPrinter, IRSyntaxElem},
-    ty::{Type, TypeBase},
-    visit::{IRVisitable, Visit},
+    matchers::{AttributePattern, OperationPattern, ValuePattern, ValueFormat, OperationArgument}
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -252,12 +251,6 @@ impl<'a, 'hir> OperationBuilder<'a, 'hir> {
     }
 }*/
 
-
-//--------------------------------------------------------------------------------------------------
-
-pub trait OperationFormat {
-    const DEFINITION: OperationDef;
-}
 
 //--------------------------------------------------------------------------------------------------
 

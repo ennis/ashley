@@ -30,6 +30,31 @@ pub unsafe trait ArenaAny<'a>: 'a {
     fn as_any(&self) -> &dyn ArenaAny<'a>;
 }
 
+// XXX what about generics? given a type Attr<T>, and Inner<'a>(Cell<&'a i32>)
+//
+// Attr<Inner<'a>> where Inner<'a>: 'hir
+// thus we can insert a Inner<'a>, with 'a: 'hir, cast it to Inner<'static>
+//
+// Attr<T> does not impl ArenaAny<'a> for all a
+// impl<'a, T: 'a> ArenaAny<'a> for Attr<T> ?
+// -> no: we have impl ArenaAny<'static> for Attr<T> where T: 'static, so
+//
+// U = Attr<Inner<'static>>: ArenaAny<'a>, because Inner<'static>: 'a for all 'a
+// -> unsound
+// -> can downcast to &Attr<Inner<'static>>, and get a &'static reference to something that is not static at all
+//
+// => Wouldn't be able to extract a static type anyway
+// BUT: could add the ArenaAny<'a> bound on all types
+//
+// Idea: ArenaAny<'a> for Attr<T> where T: ArenaAny<'a> + WithoutLifetime, T::Static: <T bounds>
+// problem: generating a static typeid for that
+// may be an associated type T::Static
+//
+// Refactor:
+// -> use Attribute IDs instead? But then can't store &str and such in the arena
+// -> Arc<dyn Attribute>?
+
+
 impl<'a> dyn ArenaAny<'a> {
     /// Tries to downcast a reference to a `dyn ArenaAny` object to a reference to a concrete type `T`.
     pub fn cast<T>(&self) -> Option<&T>

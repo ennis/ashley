@@ -1,6 +1,6 @@
 use crate::{
     diagnostic::{SourceId, SourceLocation},
-    hir::{Attribute, HirCtxt, Operand, Operation, OperationId, RegionId, Type, TypeOrAttr, ValueId},
+    hir::{Attribute, HirCtxt, Operand, Operation, OperationId, RegionId, ValueId},
 };
 use codespan_reporting::files::Files;
 use indexmap::IndexSet;
@@ -14,11 +14,7 @@ use std::{
 };
 
 /// Trait for HIR entities that can be printed to an `OperationPrinter`
-pub trait IRPrintable<'hir> {
-    // Option: given a Type
-    // 1. print it inline
-    // 2. define
-
+pub trait IRPrintable {
     /// Whether the type or attribute that this entity represents should be printed inline, instead
     /// of creating an alias for it in the textual representation.
     fn is_inline(&self) -> bool {
@@ -26,7 +22,7 @@ pub trait IRPrintable<'hir> {
     }
 
     /// Prints this value to the specified `OperationPrinter`.
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>);
+    fn print_hir(&self, printer: &mut dyn IRPrinter);
 }
 
 #[macro_export]
@@ -46,19 +42,19 @@ pub enum IRSyntaxElem<'a, 'hir> {
     Int(i32),
     SourceId(SourceId),
     SourceLocation(SourceLocation),
-    Type(Type<'hir>),
-    TypeDef(Type<'hir>),
+    Type(Attribute<'hir>),
+    TypeDef(Attribute<'hir>),
     Attribute(Attribute<'hir>),
     AttributeDef(Attribute<'hir>),
     Value(ValueId),
     Region(RegionId),
 }
 
-impl<'a, 'hir> From<Type<'hir>> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: Type<'hir>) -> Self {
+/*impl<'a, 'hir> From<Type<'hir>> for IRSyntaxElem<'a, 'hir> {
+    fn from(value: Attribute<'hir>) -> Self {
         IRSyntaxElem::Type(value)
     }
-}
+}*/
 impl<'a, 'hir> From<Attribute<'hir>> for IRSyntaxElem<'a, 'hir> {
     fn from(value: Attribute<'hir>) -> Self {
         IRSyntaxElem::Attribute(value)
@@ -115,9 +111,9 @@ pub trait IRPrinter<'hir> {
     fn token(&mut self, token: &str) {
         self.emit(&[IRSyntaxElem::Token(token)])
     }
-    fn ty(&mut self, ty: Type<'hir>) {
+    /*fn ty(&mut self, ty: Type<'hir>) {
         self.emit(&[IRSyntaxElem::Type(ty)])
-    }
+    }*/
     fn attr(&mut self, attr: Attribute<'hir>) {
         self.emit(&[IRSyntaxElem::Attribute(attr)])
     }
@@ -137,7 +133,7 @@ struct HirHtmlPrintCtxt<'a, 'hir> {
     source_files: SourceFileProvider,
     w: &'a mut dyn Write,
     // Map TypeOrAttr -> Index
-    types_and_attrs: HashMap<TypeOrAttr<'hir>, usize>,
+    attrs: HashMap<Attribute<'hir>, usize>,
 }
 
 impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
@@ -146,16 +142,16 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
         source_files: SourceFileProvider,
         w: &'a mut dyn Write,
     ) -> HirHtmlPrintCtxt<'a, 'hir> {
-        let mut types_and_attrs = HashMap::new();
-        for (i, ty_or_attr) in hir.types_and_attributes.iter().enumerate() {
-            types_and_attrs.insert(*ty_or_attr, i);
+        let mut attrs = HashMap::new();
+        for (i, attr) in hir.attributes.iter().enumerate() {
+            attrs.insert(*attr, i);
         }
         HirHtmlPrintCtxt {
             hir,
             source_files,
             indent: 0,
             w,
-            types_and_attrs,
+            attrs,
         }
     }
 }
@@ -191,7 +187,7 @@ impl<'a, 'hir> IRPrinter<'hir> for HirHtmlPrintCtxt<'a, 'hir> {
                     if ty.0.is_inline() {
                         ty.0.print_hir(self);
                     } else {
-                        let i = self.types_and_attrs[&TypeOrAttr::Type(*ty)];
+                        let i = self.attrs[ty];
                         write!(self.w, "<a class=\"val\" href=\"#t{i}\">t<sub>{i}</sub></a>").unwrap();
                     }
                 }
@@ -202,7 +198,7 @@ impl<'a, 'hir> IRPrinter<'hir> for HirHtmlPrintCtxt<'a, 'hir> {
                     if attr.0.is_inline() {
                         attr.0.print_hir(self);
                     } else {
-                        let i = self.types_and_attrs[&TypeOrAttr::Attribute(*attr)];
+                        let i = self.attrs[attr];
                         write!(self.w, "<a class=\"attr\" href=\"#a{i}\">#{i}</a>").unwrap();
                     }
                 }
@@ -235,21 +231,11 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
     /// NOTE: must be called first to setup type_and_attrs
     fn print_attribute_and_type_definitions(&mut self) -> fmt::Result {
         write!(self.w, "<p class=\"attrs-and-types\">")?;
-        for (i, ty_or_attr) in self.hir.types_and_attributes.iter().enumerate() {
-            match ty_or_attr {
-                TypeOrAttr::Type(ty) => {
-                    write!(self.w, "<span class=\"deftype\">")?;
-                    write!(self.w, "<span class=\"type\" id=\"t{i}\">t<sub>{i}</sub></span> = ")?;
-                    ty.0.print_hir(self);
-                    write!(self.w, "</span><br>")?;
-                }
-                TypeOrAttr::Attribute(attr) => {
-                    write!(self.w, "<span class=\"defattr\">")?;
-                    write!(self.w, "<span class=\"attr\" id=\"a{i}\">#{i}</span> = ")?;
-                    attr.0.print_hir(self);
-                    write!(self.w, "</span><br>")?;
-                }
-            }
+        for (i, attr) in self.hir.types_and_attributes.iter().enumerate() {
+            write!(self.w, "<span class=\"defattr\">")?;
+            write!(self.w, "<span class=\"attr\" id=\"a{i}\">#{i}</span> = ")?;
+            attr.0.print_hir(self);
+            write!(self.w, "</span><br>")?;
         }
         write!(self.w, "</p>")?;
         Ok(())

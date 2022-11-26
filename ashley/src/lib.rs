@@ -7,6 +7,7 @@ pub mod hir;
 mod id_vec;
 pub mod lower;
 mod utils;
+//mod lower;
 
 // High-level workflow:
 // - register source code into the session object

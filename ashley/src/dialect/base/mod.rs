@@ -1,18 +1,20 @@
 //! Base dialect.
 mod types;
 
+use ashley::hir::matchers::OpResultCountM;
 use ashley::hir::Value;
 use crate::{
     diagnostic::SourceLocation,
     hir::{
-        dialect, Attribute, Cursor, HirCtxt, Location, Operand, Operation, OperationData, OperationFormat, OperationId,
-        RegionBuilder, RegionId, Type, TypeAttr, ValueId,
+        dialect, Attribute, Cursor, HirCtxt, Location, Operand, Operation, OperationData, OperationId,
+        RegionId, TypeAttr, ValueId,
     },
 };
 pub use types::{
     ArrayType, Field, FunctionType, ImageDimension, ImageType, SampledImageType, ScalarType, ScalarTypeKind,
     StructType, TupleType, UnitType, UnknownType, VectorType,
 };
+use crate::hir::matchers::{OpcodeM, OperandIndex};
 
 
 
@@ -51,70 +53,44 @@ dialect! {
     operation(Call, OP_BASE_CALL, "call");
 }
 
+//#[derive(OperationFormat, OperationMatcher)]
+//#[operation(opcode="func")]
+pub struct OpBaseFunc<'hir> {
+    pub _opcode: OpcodeM<0x0001,0x0001>,
+    pub ty: FunctionType<'hir>,
+    pub body: RegionId,
+    pub _result: OpResultCountM<1>,
+}
 
-#[derive(OperationFormat)]  // Also derives OperationMatcher
-#[operation(opcode="mod")]
+//#[derive(OperationFormat, OperationMatcher)]
+//#[operation(opcode="loop")]
+pub struct OpBaseLoop<const N: usize> {
+    pub _opcode: OpcodeM<0x0001,0x0001>,
+    pub iter_args: [ValueId; N],
+    pub body: RegionId,
+    pub _result: OpResultCountM<N>,
+}
+
+//#[derive(OperationFormat, OperationMatcher)]
+//#[operation(opcode="call")]
+pub struct OpBaseCall<const N: usize> {
+    pub _opcode: OpcodeM<0x0001,0x0001>,
+    pub args: [ValueId; N],
+    pub _result: OpResultCountM<N>,
+}
+
+//#[derive(OperationFormat, OperationMatcher)]
+//#[operation(opcode="mod")]
 pub struct OpBaseModulo<T=ValueId, U=ValueId> {
+    pub _opcode: OpcodeM<0x0001,0x0001>,
     pub lhs: OperandIndex<T, 0>,
     pub rhs: OperandIndex<U, 1>,
-    pub _result: OpResultCount<1>,
+    pub _result: OpResultCountM<1>,
 }
 
-// automatically generated
-impl<'hir, T, U> OperationMatcher<'hir> for OpBaseModulo<T, U>
-    where T: ValueMatcher, U: ValueMatcher
-{
-    fn match_op<'hir>(ctxt: &HirCtxt<'hir>, op: OperationId) -> Option<OpBaseModulo<T,U>> {
-        let op = &ctxt.ops[op];
-        let lhs = *op.data.operands.get(0)?;
-        let rhs = *op.data.operands.get(1)?;
-        match (T::match_value(ctxt, lhs), T::match_value(ctxt, rhs)) {
-            Some((lhs, rhs)) => {
-                OpBaseModulo {lhs, rhs}
-            }
-        }
+// OpBaseModulo::new(lhs, rhs).build(ctxt), or ctxt.insert_op(at, OpBaseModulo::new(lhs, rhs)
 
-        if let Some(OpResultOf(OpBaseModulo { lhs, rhs, _ }))
-
-        if let Some(OpFunction { ty: PositionalAttr(FunctionType {return_ty: Type(t) }), })
-
-
-    }
-
-
-}
-
-#[derive(Copy, Clone)]
-pub struct FunctionType<R, As> {
-    return_ty: R,
-    arguments: As
-}
-
-#[derive(OperationDefinition)]
-#[operation(opcode="func")]
-pub struct OpFunction<'hir, RetTy, ArgTys> {
-    pub ty: PositionalAttr<FunctionType<RetTy, ArgTys>, 1>,
-    pub body: RegionId,
-}
-
-
-#[derive(Copy, Clone, Debug)]
-pub struct LoopOperation<'hir> {
-    pub op: OperationId,
-    pub results: &'hir [ValueId],
-    pub body: RegionId,
-    pub iter_vars: &'hir [ValueId],
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct FunctionDefinition<'hir> {
-    pub op: OperationId,
-    pub result: ValueId,
-    pub body: RegionId,
-    pub arguments: &'hir [ValueId],
-}
-
-pub trait BaseDialectBuilder<'hir> {
+/*pub trait BaseDialectBuilder<'hir> {
     /// Inserts an operation that produces a constant value.
     ///
     /// # Arguments
@@ -219,4 +195,4 @@ impl<'hir> BaseDialectBuilder<'hir> for HirCtxt<'hir> {
         todo!()
         //let (_op, _results) = self.create_operation(cur, OP_BASE_CALL, 0, [], args.iter().cloned(), loc);
     }
-}
+}*/

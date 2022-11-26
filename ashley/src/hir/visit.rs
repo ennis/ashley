@@ -1,7 +1,6 @@
-use crate::hir::{Attribute, Type};
+use crate::hir::{Attribute};
 
 pub trait Visit<'hir> {
-    fn visit_type(&self, ty: Type<'hir>);
     fn visit_attribute(&self, attr: Attribute<'hir>);
 }
 

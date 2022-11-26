@@ -5,12 +5,11 @@ use std::{
     hash::{Hash, Hasher},
     ptr,
 };
-use crate::hir::{IRPrintable, IRVisitable};
 
-/// Trait implemented by types.
-pub trait TypeBase<'hir>: fmt::Debug + ArenaAny<'hir> + IRPrintable<'hir> {}
+// Trait implemented by types.
+//pub trait TypeBase<'hir>: fmt::Debug + ArenaAny<'hir> + IRPrintable<'hir> {}
 
-/// Represents an interned type.
+/*/// Represents an interned type.
 #[derive(Copy, Clone, Debug)]
 pub struct Type<'hir>(pub(crate) &'hir dyn TypeBase<'hir>);
 
@@ -65,3 +64,4 @@ impl<'hir> Type<'hir> {
 
 #[cfg(test)]
 mod tests {}
+*/

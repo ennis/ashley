@@ -2,11 +2,12 @@ extern crate self as ashley;
 
 pub mod diagnostic;
 pub mod dialect;
-pub mod syntax;
 pub mod hir;
 mod id_vec;
 pub mod lower;
+pub mod syntax;
 mod utils;
+//mod lower;
 //mod lower;
 
 // High-level workflow:

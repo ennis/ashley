@@ -2,7 +2,6 @@ use crate::{
     syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken},
     T,
 };
-use rowan::SyntaxText;
 
 pub trait AstNode {
     fn cast(syntax: SyntaxNode) -> Option<Self>
@@ -154,6 +153,7 @@ impl_ast_node!(FnDef<FN_DEF>
                 node block: Block,
                 token name: Ident]);
 
+impl_ast_node!(ArgList       <ARG_LIST>    [nodes arguments: Expr]);
 impl_ast_node!(RetType       <RET_TYPE>    [node ty: Type]);
 impl_ast_node!(ExprStmt      <EXPR_STMT>   [node expr: Expr]);
 impl_ast_node!(ReturnStmt    <RETURN_STMT> [node expr: Expr]);
@@ -166,11 +166,11 @@ impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node block: Block
 impl_ast_node!(BinExpr       <BIN_EXPR>    []);
 impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
 impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
-impl_ast_node!(CallExpr      <CALL_EXPR>   []);
+impl_ast_node!(CallExpr      <CALL_EXPR>   [node func: Expr, node arg_list: ArgList]);
 impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
 impl_ast_node!(FieldExpr     <FIELD_EXPR>  []);
 impl_ast_node!(LitExpr       <LIT_EXPR>    []);
-impl_ast_node!(PathExpr      <PATH_EXPR>   []);
+impl_ast_node!(PathExpr      <PATH_EXPR>   [token ident: Ident]);
 impl_ast_node!(TupleExpr     <TUPLE_EXPR>   [nodes fields: Expr]);
 impl_ast_node!(ArrayExpr     <ARRAY_EXPR>   [nodes elements: Expr]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
@@ -393,15 +393,16 @@ impl IndexExpr {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::{ast::AstNode, ast::Item, ast::Module, session};
+    use crate::syntax::{ast::AstNode, ast::Item, ast::Module};
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
     use crate::diagnostic::SourceFileProvider;
+    use crate::syntax;
 
     fn parse_module(text: &str) -> Option<Module> {
         let mut sources = SourceFileProvider::new();
-        let src_id = sess.register_source("<input>", text);
+        let src_id = sources.register_source("<input>", text);
         let mut writer = StandardStream::stderr(ColorChoice::Always);
-        Module::cast(dbg!(session::parse(text, src_id, sources, &mut writer)))
+        Module::cast(dbg!(syntax::parse(text, src_id, sources, writer)))
     }
 
     #[test]

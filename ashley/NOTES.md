@@ -647,3 +647,309 @@ Decision: use Arcs
 * we lose a lot of complexity related to lifetimes
 * we pay the cost of refcounting, but not sure that's a lot
 * we lose `Copy`-able attributes
+
+
+# Validation rules for attributes / attribute constructors
+
+Should be able to construct types / attributes from a list of other attribs
+
+
+# Operation definition
+Why are operations not trait objects? 
+
+## Option A:
+Operation is a non-generic struct, specific ops are wrappers over a reference to an op, like `syntax::SyntaxNode`.
+
+## Option B: `&dyn Operation`
+Need methods to traverse operands & results.Generic
+Traversal and storage more costly (additional indirection)
+
+
+
+# Operation patterns
+
+An operation pattern is used:
+* to extract relevant elements from a generic operation
+* to build a new instance of the operation
+
+It describes:
+* the results (their types)
+* the operands
+* the attributes
+* constraints between all of those
+
+e.g.
+
+    let 
+      !fty = FunctionType(_, arguments)
+    in
+      result = "base.func" @body { arguments } : !fty 
+     
+      
+
+* `fty` is a builder input, which has to match `FunctionType(_,_)`
+* `arguments` is bound to the pattern output of `FunctionType`
+* `@body` is a declared region at index 0, with arguments given by `arguments`
+* `result` is bound to the result of the operation
+* additional constraints can be bound in a subsequent `where` clause
+
+For matching this pattern:
+* `result` is the first result of the operation
+* `body` is the first region
+* `arguments` are the arguments of the first region
+* `fty` is the result type
+
+https://grosser.science/static/0c315060e8f3d8454de831910fbb6dd6/fehr-2022-irdl.pdf
+
+Another simpler example:
+
+    // Basic arithmetic operations
+    let ty : IsArithmeticType;
+    let lhs: ValueOfType(ty);
+    let rhs: ValueOfType(ty);
+
+    "base.add"(lhs, rhs) -> result:ty;
+    "base.sub"(lhs, rhs) -> result:ty;
+    "base.mul"(lhs, rhs) -> result:ty;
+    "base.div"(lhs, rhs) -> result:ty;    
+
+Builder:
+
+```rust
+fn build(lhs: ValueId, rhs: ValueId) {
+   let Some(ValueOfType(ty)) = b.match_value(lhs) else { return None };
+   let Some(ValueOfType(ty__0)) = b.match_value(rhs) else { return None };
+   if ty != ty__0 { return None };
+   let Some(IsArithmeticType) = ty else { return None };
+    
+   let mut op = OperationBuilder::new();
+   op.add_operand(lhs);
+   op.add_operand(rhs);
+   op.add_result_type(ty);   
+}
+```
+
+Function:
+
+    let arguments;
+    let function_type: IsFunctionType(_, arguments);
+    "base.func"<function_type> @body(arguments) -> result:function_type;
+
+```rust
+fn build(function_type: Attr) {
+  let arguments;
+  let Some(IsFunctionType(_, arguments__0)) = ty else { return None };
+  arguments = arguments__0;
+  // ...
+}
+```
+
+Some variables are builder inputs.
+Some variables are local to the pattern.
+Some variables are pattern outputs.
+
+
+# Patterns-only syntax (no builders)
+
+They should just be functions returning optional values
+  
+    // matches the first & second operands, respectively
+    // LHS is a function over an operand
+
+    let root : Operation; // matches any operation
+    
+    lhs := LHS(root);
+    rhs := RHS(root);
+    
+    IsArithmetic(ty);
+    ty := TypeOf(lhs);
+    ty := TypeOf(rhs);
+
+    result := SingleResult(root);
+    ty := TypeOf(result);
+
+    // function call
+    let op : Operation;
+    let function_type = FunctionType(Operand(op,0)); 
+    let arg_types = Types(OperandRange(op,1..));
+    let result_ty = Type(SingleResult(op));
+
+    Callable(function, 
+
+    let (ret_ty, arg_types) = FunctionType(Type(function)); 
+    let call_site_arg_types = Types(arguments);
+
+    Types(arguments) == arg_types;
+    ret_ty == result_ty;
+
+Definition in rust:
+
+    
+  pub fn callable(b: &Builder, value: ValueId) -> Option<()>;
+  pub fn function_type(b: &Builder, ty: Type) -> Option<(...)>;
+  // same for lhs, rhs
+
+```rust
+fn test() {
+  |b, root| -> Option<_> {
+    let lhs = lhs(b, root)?;
+    let rhs = rhs(b, root)?;
+    let ty;
+    ty = type_of(b, lhs)?;
+    let ty__0 = type_of(b, rhs)?;
+    if ty != ty__0 {
+        b.diag().error("failed equality constraint").emit();
+        return None;
+    }
+    
+    let Some(_) = is_arithmetic_type(b, root) else {
+        b.diag().error("failed constraint").emit();
+        return None;
+    };
+    
+    let result = single_result(b, root)?;
+    let ty__0 = type_of(result);
+    
+    (lhs, rhs)
+  }
+}
+```
+
+=> separate pattern matching part and constraint matching part
+
+    
+# Error reporting in constraints
+
+Unlike other error paths, the error path in a constraint must be cheap, because searches with patterns naturally result in a lot of match failures.
+-> it shouldn't allocate
+-> failure can happen in a nested pattern
+
+
+# GPU dialect
+
+* `gpu_dispatch_screen_rect(viewport:Rect2D) -> fragCoords:vec2@fragment`: generates fragment coordinates over a 2D rectangle
+* `gpu_collect(fragStream...) -> image...`: collects fragment stream outputs into one or more render target images
+  * all fragment streams must originate from the same rasterizing operation
+    
+
+## General form of GPU programs
+
+It starts with a dispatch operation producing a varying value (a _stream_).
+It ends with a _collection_ operation that terminates processing and writes the result into a resource.
+
+Rasterization is an operation on vertex streams that converts a vertex stream into a fragment stream (interpolation).
+
+```glsl
+#version 450
+
+layout(location=0) in vec2 a_position;
+layout(location=0) out vec2 v_position;
+
+void main() {
+  gl_Position = vec4(a_position, 1.0, 1.0);
+  v_position = a_position;
+}
+
+/////////////////////////
+
+#version 450
+
+layout(set=0,binding=0,std140) uniform Globals {
+  vec2 u_resolution;
+  vec2 u_scroll_offset;
+  float u_zoom;
+};
+
+layout(location=0) in vec2 v_position;
+layout(location=0) out vec4 out_color;
+
+void main() {
+  vec2 px_position = v_position * vec2(1.0, -1.0) * u_resolution * 0.5;
+  // #005fa4
+  float vignette = clamp(0.7 * length(v_position), 0.0, 1.0);
+  out_color = mix(
+  vec4(0.0, 0.47, 0.9, 1.0),
+  vec4(0.0, 0.1, 0.64, 1.0),
+  vignette
+  );
+  // TODO: properly adapt the grid while zooming in and out.
+  float grid_scale = 5.0;
+  if (u_zoom < 2.5) {
+    grid_scale = 1.0;
+  }
+  vec2 pos = px_position + u_scroll_offset * u_zoom;
+  if (mod(pos.x, 20.0 / grid_scale * u_zoom) <= 1.0 ||
+  mod(pos.y, 20.0 / grid_scale * u_zoom) <= 1.0) {
+    out_color *= 1.2;
+  }
+  if (mod(pos.x, 100.0 / grid_scale * u_zoom) <= 2.0 ||
+  mod(pos.y, 100.0 / grid_scale * u_zoom) <= 2.0) {
+    out_color *= 1.2;
+  }
+}
+```
+
+
+```
+(vertex_buffer: gpu.buffer)
+
+              a_position = gpu.vtxin   <vec2,8>                           // ty, stride
+                     p_0 = base.vcons  <vec4>       a_position,1.0,1.0
+(frag_coord, v_position) = gpu.raster  <#rsstate0>  p_0                   // vec2
+...
+               out_color = ...
+              prev_color = gpu.texel   img, frag_coord 
+                   color = ....
+                   image = gpu.wrt     color              // collect operation
+```
+
+## Features & optimizations
+* Many-channel images (arbitrary, not limited to 3)
+* Intermediate image elimination
+* Iterative filters (downscaling, pyramids, etc.)
+
+## Design choices
+* domain-specific variables live in separate scopes (don't mix unrelated fragment shader invocations together)
+
+### Intermediate image elimination / pass fusion
+If an image has only one use, and it is a read, and it is not a sampling operation:
+
+- we have a single fetch op `texelFetch(image, coordinate, lod)`
+- check that lod=0, otherwise abort
+- check that coordinate is a fragCoord stream (or an offset thereof)
+- determine the bounds of fragCoord from the viewport size, if they are not the same, continue
+- otherwise: replace the read operation by a reference to the fragment-domain value
+
+Problem:
+- pass P1 produces I1 and I2
+- pass P2 reads from I1 but samples from I2
+- image elimination will replace the I1 read by a reference to the value in pass P1, effectively fusing P2 and P1 together
+- but there's still the I2 sample, dependent on the fragCoords from P2
+
+
+Solution:
+* each image value has an associated pass variable
+
+Is it really useful to interleave values from different passes in the same blocks?
+-> they can't interact with each other anyway
+-> makes fusion easier though
+
+
+
+- detect whether each pixel is read only once: if not, abort elision
+  - some kind of loop analysis?
+  - use high-level constructs in the source code to simplify analysis!
+- replace the read operation with a reference to
+
+
+
+Validation rules:
+* can't mix streams that originate from different GPU sources:
+  * e.g. can't mix vertex streams originating from different vertex buffers
+  * or fragment streams from different `interp` operations
+    * would be useful though...
+
+
+
+Things to consider:
+- downscaling loops

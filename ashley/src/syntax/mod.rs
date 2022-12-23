@@ -1,6 +1,5 @@
 pub mod ast;
 mod operators;
-mod session;
 mod syntax_kind;
 
 pub use self::operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp};
@@ -37,13 +36,13 @@ pub fn parse(
     text: &str,
     file: SourceId,
     source_provider: SourceFileProvider,
-    diag_writer: &mut dyn WriteColor,
+    diag_writer: impl WriteColor + 'static,
 ) -> SyntaxNode {
     let diag = Diagnostics::new(source_provider, diag_writer, term::Config::default());
-    parse_inner(text, file, diag)
+    parse_inner(text, file, &diag)
 }
 
-pub(crate) fn parse_inner(text: &str, source_id: SourceId, diag: Diagnostics) -> SyntaxNode {
+pub(crate) fn parse_inner(text: &str, source_id: SourceId, diag: &Diagnostics) -> SyntaxNode {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let current = lex.next();
@@ -58,7 +57,7 @@ pub(crate) fn parse_inner(text: &str, source_id: SourceId, diag: Diagnostics) ->
     parser.parse()
 }
 
-struct Parser<'a, 'b> {
+struct Parser<'a> {
     text: &'a str,
     source_id: SourceId,
     /// Current token & span
@@ -69,10 +68,10 @@ struct Parser<'a, 'b> {
     b: GreenNodeBuilder<'static>,
     /// The list of syntax errors we've accumulated
     /// so far. They are reported all at once when parsing is complete.
-    diag: Diagnostics<'b>,
+    diag: &'a Diagnostics,
 }
 
-impl<'a, 'b> Parser<'a, 'b> {
+impl<'a> Parser<'a> {
     fn parse(mut self) -> SyntaxNode {
         self.start_node(MODULE);
         while self.current().is_some() {
@@ -806,10 +805,7 @@ fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        diagnostic::SourceFileProvider,
-        syntax::{parse_inner, session, Diagnostics, Lang, SyntaxNode},
-    };
+    use crate::{diagnostic::SourceFileProvider, syntax::{parse_inner, Diagnostics, Lang, SyntaxNode}, syntax};
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
     use rowan::GreenNode;
 
@@ -817,7 +813,7 @@ mod tests {
         let mut sources = SourceFileProvider::new();
         let src_id = sources.register_source("<input>", text);
         let mut writer = StandardStream::stderr(ColorChoice::Always);
-        session::parse(text, src_id, sources, &mut writer)
+        syntax::parse(text, src_id, sources, writer)
     }
 
     fn expr(expr: &str) -> SyntaxNode {

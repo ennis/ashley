@@ -1,42 +1,36 @@
+use ashley::hir::MatchCtxt;
 use crate::{
-    hir::{Attribute},
+    hir::{Attr, AttributeBase, HirCtxt, IRPrintable, IRPrinter, IRSyntaxElem, IRVisitable},
     utils::ArenaAny,
     write_ir,
 };
-use ashley::hir::{IRPrintable, IRSyntaxElem, IRPrinter, IRVisitable, HirCtxt};
-use crate::hir::{AttributeBase, AttributePattern};
+use crate::hir::AttrConstraint;
 
 /// Unknown type.
 ///
 /// Used in places where the type is not known, not yet inferred, or invalid.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct UnknownType;
-impl<'hir> IRPrintable<'hir> for UnknownType {
+impl<'a> IRPrintable<'a> for UnknownType {
     fn is_inline(&self) -> bool {
         true
     }
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         write_ir!(printer, "unknown");
     }
 }
-impl<'hir> AttributeBase<'hir> for UnknownType {}
-
-
 
 /// Unit type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct UnitType;
-impl<'hir> IRPrintable<'hir> for UnitType {
+impl<'a> IRPrintable<'a> for UnitType {
     fn is_inline(&self) -> bool {
         true
     }
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         write_ir!(printer, "()");
     }
 }
-impl<'hir> AttributeBase<'hir> for UnitType {}
-
-
 
 /// Scalar type kind.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -63,12 +57,12 @@ impl ScalarTypeKind {
 /// Scalar type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct ScalarType(pub ScalarTypeKind);
-impl<'hir> IRPrintable<'hir> for ScalarType {
+impl<'a> IRPrintable<'a> for ScalarType {
     fn is_inline(&self) -> bool {
         true
     }
 
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         match self.0 {
             ScalarTypeKind::Int => printer.token("int"),
             ScalarTypeKind::UnsignedInt => printer.token("uint"),
@@ -79,25 +73,15 @@ impl<'hir> IRPrintable<'hir> for ScalarType {
     }
 }
 
-impl<'hir> AttributeBase<'hir> for ScalarType {}
-
-impl<'hir> AttributePattern<'hir> for ScalarType {
-    fn match_attr(_ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
-        attr.cast().cloned()
-    }
-}
-pub type ScalarTypeM = ScalarType;
-
-
 /// Vector type (element type + size).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct VectorType(pub ScalarTypeKind, u8);
-impl<'hir> IRPrintable<'hir> for VectorType {
+pub struct VectorType(pub ScalarTypeKind, pub u8);
+impl<'a> IRPrintable<'a> for VectorType {
     fn is_inline(&self) -> bool {
         true
     }
 
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         let n = self.1;
         match self.0 {
             ScalarTypeKind::Int => printer.token(&format!("ivec{n}")),
@@ -108,45 +92,45 @@ impl<'hir> IRPrintable<'hir> for VectorType {
         }
     }
 }
-impl<'hir> AttributeBase<'hir> for VectorType {}
-impl<'hir> AttributePattern<'hir> for VectorType {
-    fn match_attr(_ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
-        attr.cast().cloned()
-    }
-}
-pub type VectorTypeM = VectorType;
 
-
-
-/// Array type (element type + size).
+/// Matrix type (element type + row count + column count).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct ArrayType<Elem>(pub Elem, pub u32);
-impl<'hir> IRPrintable<'hir> for ArrayType<'hir> {
+pub struct MatrixType(pub ScalarTypeKind, pub u8, pub u8);
+impl<'a> IRPrintable<'a> for MatrixType {
     fn is_inline(&self) -> bool {
         true
     }
 
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
+        let (r, c) = (self.1, self.2);
+        match self.0 {
+            ScalarTypeKind::Int => printer.token(&format!("imat{r}x{c}")),
+            ScalarTypeKind::UnsignedInt => printer.token(&format!("umat{r}x{c}")),
+            ScalarTypeKind::Float => printer.token(&format!("mat{r}x{c}")),
+            ScalarTypeKind::Double => printer.token(&format!("dmat{r}x{c}")),
+            ScalarTypeKind::Bool => printer.token(&format!("bmat{r}x{c}")),
+        }
+    }
+}
+
+/// Array type (element type + size).
+#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct ArrayType<'a>(pub Attr<'a>, pub u32);
+impl<'a> IRPrintable<'a> for ArrayType<'a> {
+    fn is_inline(&self) -> bool {
+        true
+    }
+
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         write_ir!(printer, "array<", self.0, ",", self.1, ">");
     }
 }
-impl<'hir> AttributeBase<'hir> for ArrayType<Attribute<'hir>> {}
-
-pub struct ArrayTypeM<Elem>(pub Elem, pub u32);
-
-impl<'hir> AttributePattern<'hir> for VectorType {
-    fn match_attr(_ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
-        attr.cast().cloned()
-    }
-}
-
-
 
 /// Field of a struct type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct Field<'hir> {
-    pub ty: Attribute<'hir>,
-    pub name: &'hir str,
+pub struct Field<'a> {
+    pub ty: Attr<'a>,
+    pub name: &'a str,
 }
 
 /// Structure type.
@@ -156,8 +140,8 @@ pub struct StructType<'a> {
     pub fields: &'a [Field<'a>],
 }
 
-impl<'hir> IRPrintable<'hir> for StructType<'hir> {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+impl<'a> IRPrintable<'a> for StructType<'a> {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         write_ir!(printer, "struct<", self.name);
         for f in self.fields {
             write_ir!(printer, f.name, ":", f.ty, ",");
@@ -165,27 +149,24 @@ impl<'hir> IRPrintable<'hir> for StructType<'hir> {
         write_ir!(printer, ">");
     }
 }
-impl<'hir> AttributeBase<'hir> for StructType<'hir> {}
 
-
-
-impl<'hir> StructType<'hir> {
+impl<'a> StructType<'a> {
     /// Finds a field by name.
     pub fn field_index(&self, name: &str) -> Option<usize> {
         self.fields.iter().position(|f| f.name == name)
     }
 
     /// Finds a field by name.
-    pub fn field(&self, name: &str) -> Option<&Field<'hir>> {
+    pub fn field(&self, name: &str) -> Option<&Field<'a>> {
         self.fields.iter().find(|f| f.name == name)
     }
 }
 
 /// Tuple type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct TupleType<'hir>(pub &'hir [Attribute<'hir>]);
-impl<'hir> IRPrintable<'hir> for TupleType<'hir> {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+pub struct TupleType<'a>(pub &'a [Attr<'a>]);
+impl<'a> IRPrintable<'a> for TupleType<'a> {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         write_ir!(printer, "tuple<");
         for ty in self.0 {
             write_ir!(printer, *ty, ",");
@@ -193,9 +174,6 @@ impl<'hir> IRPrintable<'hir> for TupleType<'hir> {
         write_ir!(printer, ">");
     }
 }
-impl<'hir> AttributeBase<'hir> for TupleType<'hir> {}
-
-
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ImageDimension {
@@ -228,12 +206,11 @@ pub struct SampledImageType {
     pub ms: bool,
 }
 
-impl<'hir> IRPrintable<'hir> for SampledImageType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+impl<'a> IRPrintable<'a> for SampledImageType {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         todo!()
     }
 }
-impl<'hir> AttributeBase<'hir> for SampledImageType {}
 
 /// Unsampled image type
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
@@ -242,24 +219,22 @@ pub struct ImageType {
     pub dim: ImageDimension,
     pub ms: bool,
 }
-impl<'hir> IRPrintable<'hir> for ImageType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+impl<'a> IRPrintable<'a> for ImageType {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         todo!()
     }
 }
-impl<'hir> AttributeBase<'hir> for ImageType {}
-
 
 //--------------------------------------------------------------------------------------------------
 /// Function type
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct FunctionType<'hir> {
-    pub return_ty: Attribute<'hir>,
-    pub arg_types: &'hir [Attribute<'hir>],
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct FunctionType<'a> {
+    pub return_ty: Attr<'a>,
+    pub arg_types: &'a [Attr<'a>],
 }
 
-impl<'hir> IRPrintable<'hir> for FunctionType<'hir> {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'hir>) {
+impl<'a> IRPrintable<'a> for FunctionType<'a> {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
         write_ir!(printer, "fn<(");
         let mut first = true;
         for arg in self.arg_types {
@@ -272,12 +247,30 @@ impl<'hir> IRPrintable<'hir> for FunctionType<'hir> {
         write_ir!(printer, ") -> ", self.return_ty, ">");
     }
 }
-impl<'hir> AttributeBase<'hir> for FunctionType<'hir> {}
-impl<'hir> AttributePattern<'hir> for FunctionType<'hir> {
-    fn match_attr(ctxt: &HirCtxt<'hir>, attr: Attribute<'hir>) -> Option<Self> {
-        *attr.cast()
-    }
+
+//--------------------------------------------------------------------------------------------------
+// Extension methods on attributes
+pub trait BaseDialectAttrExt {
+    fn is_scalar_type(&self) -> bool;
+    fn is_unit_type(&self) -> bool;
+    fn is_vector_type(&self) -> bool;
+    fn is_bool(&self) -> bool;
 }
 
-// Function type matcher
-//pub struct FunctionTypeM<ReturnTy, >
+impl<'a> BaseDialectAttrExt for Attr<'a> {
+    fn is_scalar_type(&self) -> bool {
+        self.cast::<ScalarType>().is_some()
+    }
+
+    fn is_unit_type(&self) -> bool {
+        self.cast::<UnitType>().is_some()
+    }
+
+    fn is_vector_type(&self) -> bool {
+        self.cast::<VectorType>().is_some()
+    }
+
+    fn is_bool(&self) -> bool {
+        self.cast::<ScalarType>() == Some(&ScalarType(ScalarTypeKind::Bool))
+    }
+}

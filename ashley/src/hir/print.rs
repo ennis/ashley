@@ -1,6 +1,6 @@
 use crate::{
-    diagnostic::{SourceId, SourceLocation},
-    hir::{Attribute, HirCtxt, Operand, Operation, OperationId, RegionId, ValueId},
+    diagnostic::{SourceFileProvider, SourceId, SourceLocation},
+    hir::{Attr, HirCtxt, Location, Operation, OperationId, RegionId, ValueId},
 };
 use codespan_reporting::files::Files;
 use indexmap::IndexSet;
@@ -14,7 +14,7 @@ use std::{
 };
 
 /// Trait for HIR entities that can be printed to an `OperationPrinter`
-pub trait IRPrintable {
+pub trait IRPrintable<'a> {
     /// Whether the type or attribute that this entity represents should be printed inline, instead
     /// of creating an alias for it in the textual representation.
     fn is_inline(&self) -> bool {
@@ -22,87 +22,106 @@ pub trait IRPrintable {
     }
 
     /// Prints this value to the specified `OperationPrinter`.
-    fn print_hir(&self, printer: &mut dyn IRPrinter);
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>);
 }
 
 #[macro_export]
 macro_rules! write_ir {
     ($printer:expr, $($t:expr),*) => {
         $printer.emit(&[
-            $($crate::hir::IRSyntaxElem::from($t),)*
+            $($crate::hir::ToIRSyntax::to_ir_syntax(&$t),)*
         ])
     };
 }
-use crate::{diagnostic::SourceFileProvider, hir::Location};
 pub use write_ir;
 
 pub enum IRSyntaxElem<'a, 'hir> {
     Token(&'a str),
-    UInt(u32),
-    Int(i32),
+    UInt(u64),
+    Int(i64),
     SourceId(SourceId),
     SourceLocation(SourceLocation),
-    Type(Attribute<'hir>),
-    TypeDef(Attribute<'hir>),
-    Attribute(Attribute<'hir>),
-    AttributeDef(Attribute<'hir>),
+    Type(Attr<'hir>),
+    TypeDef(Attr<'hir>),
+    Attribute(Attr<'hir>),
+    AttributeDef(Attr<'hir>),
     Value(ValueId),
     Region(RegionId),
 }
 
-/*impl<'a, 'hir> From<Type<'hir>> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: Attribute<'hir>) -> Self {
-        IRSyntaxElem::Type(value)
-    }
-}*/
-impl<'a, 'hir> From<Attribute<'hir>> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: Attribute<'hir>) -> Self {
-        IRSyntaxElem::Attribute(value)
+pub trait ToIRSyntax<'hir> {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir>;
+}
+
+impl<'hir> ToIRSyntax<'hir> for Attr<'hir> {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Attribute(self.clone())
     }
 }
-impl<'a, 'hir> From<&'a str> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: &'a str) -> Self {
-        IRSyntaxElem::Token(value)
+impl<'hir> ToIRSyntax<'hir> for str {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Token(self)
     }
 }
-impl<'a, 'hir> From<SourceId> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: SourceId) -> Self {
-        IRSyntaxElem::SourceId(value)
+impl<'hir> ToIRSyntax<'hir> for SourceId {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::SourceId(*self)
     }
 }
-impl<'a, 'hir> From<SourceLocation> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: SourceLocation) -> Self {
-        IRSyntaxElem::SourceLocation(value)
+impl<'hir> ToIRSyntax<'hir> for SourceLocation {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::SourceLocation(*self)
     }
 }
-impl<'a, 'hir> From<u8> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: u8) -> Self {
-        IRSyntaxElem::UInt(value as u32)
+impl<'hir> ToIRSyntax<'hir> for u8 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::UInt(*self as u64)
     }
 }
-impl<'a, 'hir> From<u16> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: u16) -> Self {
-        IRSyntaxElem::UInt(value as u32)
+impl<'hir> ToIRSyntax<'hir> for u16 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::UInt(*self as u64)
     }
 }
-impl<'a, 'hir> From<u32> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: u32) -> Self {
-        IRSyntaxElem::UInt(value)
+impl<'hir> ToIRSyntax<'hir> for u32 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::UInt(*self as u64)
     }
 }
-impl<'a, 'hir> From<i8> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: i8) -> Self {
-        IRSyntaxElem::Int(value as i32)
+impl<'hir> ToIRSyntax<'hir> for u64 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::UInt(*self)
     }
 }
-impl<'a, 'hir> From<i16> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: i16) -> Self {
-        IRSyntaxElem::Int(value as i32)
+impl<'hir> ToIRSyntax<'hir> for i8 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Int(*self as i64)
     }
 }
-impl<'a, 'hir> From<i32> for IRSyntaxElem<'a, 'hir> {
-    fn from(value: i32) -> Self {
-        IRSyntaxElem::Int(value)
+impl<'hir> ToIRSyntax<'hir> for i16 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Int(*self as i64)
+    }
+}
+impl<'hir> ToIRSyntax<'hir> for i32 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Int(*self as i64)
+    }
+}
+impl<'hir> ToIRSyntax<'hir> for i64 {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Int(*self)
+    }
+}
+impl<'hir> ToIRSyntax<'hir> for String {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        IRSyntaxElem::Token(self)
+    }
+}
+
+impl<'hir, T> ToIRSyntax<'hir> for &T where T: ToIRSyntax<'hir> + ?Sized {
+    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
+        ToIRSyntax::to_ir_syntax(&**self)
     }
 }
 
@@ -114,7 +133,7 @@ pub trait IRPrinter<'hir> {
     /*fn ty(&mut self, ty: Type<'hir>) {
         self.emit(&[IRSyntaxElem::Type(ty)])
     }*/
-    fn attr(&mut self, attr: Attribute<'hir>) {
+    fn attr(&mut self, attr: Attr<'hir>) {
         self.emit(&[IRSyntaxElem::Attribute(attr)])
     }
 }
@@ -133,7 +152,7 @@ struct HirHtmlPrintCtxt<'a, 'hir> {
     source_files: SourceFileProvider,
     w: &'a mut dyn Write,
     // Map TypeOrAttr -> Index
-    attrs: HashMap<Attribute<'hir>, usize>,
+    attrs: HashMap<Attr<'hir>, usize>,
 }
 
 impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
@@ -231,7 +250,7 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
     /// NOTE: must be called first to setup type_and_attrs
     fn print_attribute_and_type_definitions(&mut self) -> fmt::Result {
         write!(self.w, "<p class=\"attrs-and-types\">")?;
-        for (i, attr) in self.hir.types_and_attributes.iter().enumerate() {
+        for (i, attr) in self.hir.attributes.iter().enumerate() {
             write!(self.w, "<span class=\"defattr\">")?;
             write!(self.w, "<span class=\"attr\" id=\"a{i}\">#{i}</span> = ")?;
             attr.0.print_hir(self);
@@ -243,7 +262,7 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
 
     fn print_region(&mut self, region: RegionId) -> fmt::Result {
         let i = region.index();
-        let region = &self.hir.regions[region].data;
+        let region = &self.hir.regions[region];
         if !region.arguments.is_empty() {
             write_list!(self.w, arg in region.arguments => {
                 let i = arg.index();
@@ -274,12 +293,12 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
             });
             write!(self.w, "</span> = ")?;
         }
-        let mnemonic = self.hir.op_def_map[&op.opcode].mnemonic;
+        let mnemonic = op.opcode;
         write!(self.w, "<span class=\"mnemonic\">{mnemonic}</span> ")?;
         if !op.attributes.is_empty() {
             write!(self.w, "<span class=\"attrs\">&lt;")?;
             write_list!(self.w, attr in op.attributes => {
-                self.emit(&[(*attr).into()]);
+                self.attr(*attr);
             });
             write!(self.w, "&gt;</span>")?;
         }
@@ -291,7 +310,10 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
         write!(self.w, "</span>")?;
 
         if let Location::Source(src_loc) = op.location {
-            let name = self.source_files.name(src_loc.file).unwrap_or_else(|_| "???".to_string());
+            let name = self
+                .source_files
+                .name(src_loc.file)
+                .unwrap_or_else(|_| "???".to_string());
             let start_line = self
                 .source_files
                 .line_index(src_loc.file, src_loc.range.start().into())
@@ -308,13 +330,11 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
             )?;
         }
 
-        let mut region = op.regions.first();
-        while let Some(r) = region {
+        for r in op.regions {
             let i = r.index();
             write!(self.w, " {{")?;
-            self.print_region(r)?;
+            self.print_region(*r)?;
             write!(self.w, "}}")?;
-            region = self.hir.regions[r].next;
         }
 
         write!(self.w, "</li>")?;
@@ -381,7 +401,8 @@ pub fn write_hir_html_file(ctxt: &HirCtxt, path: &str, region: RegionId, source_
         region,
         source_files,
         &mut s,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut file = File::create(path).unwrap();
     use std::io::Write as IoWrite;

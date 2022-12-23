@@ -1,5 +1,5 @@
 use codespan_reporting::{
-    diagnostic::{Diagnostic, Label, LabelStyle, Severity},
+    diagnostic::{Diagnostic as CsDiagnostic, Label, LabelStyle, Severity},
     files::{line_starts, Error, Files},
     term,
     term::termcolor::WriteColor,
@@ -158,66 +158,101 @@ impl SourceLocation {
     }
 }*/
 
-pub(crate) struct Diagnostics<'a> {
-    writer: &'a mut dyn WriteColor,
-    config: term::Config,
-    files: SourceFileProvider,
+struct DiagnosticsInner {
+    writer: Box<dyn WriteColor>,
     bug_count: usize,
     error_count: usize,
     warning_count: usize,
 }
 
-impl<'a> Diagnostics<'a> {
-    pub(crate) fn new(files: SourceFileProvider, writer: &'a mut dyn WriteColor, config: term::Config) -> Diagnostics {
+pub struct Diagnostics {
+    config: term::Config,
+    files: SourceFileProvider,
+    inner: parking_lot::Mutex<DiagnosticsInner>,
+}
+
+impl Diagnostics {
+    pub(crate) fn new(files: SourceFileProvider, writer: impl WriteColor + 'static, config: term::Config) -> Diagnostics {
         Diagnostics {
-            writer,
-            config,
             files,
-            bug_count: 0,
-            error_count: 0,
-            warning_count: 0,
+            config,
+            inner: parking_lot::Mutex::new(DiagnosticsInner {
+                writer: Box::new(writer),
+                bug_count: 0,
+                error_count: 0,
+                warning_count: 0,
+            }),
         }
     }
 
-    pub fn bug<'b>(&'b mut self, message: impl Into<String>) -> DiagnosticBuilder<'b, 'a> {
+    /// Creates a new diagnostic with `Bug` severity.
+    ///
+    /// Emit the diagnostic by calling `DiagnosticBuilder::emit`.
+    ///
+    /// # Example
+    /// ```
+    ///# fn main() {
+    ///diag.bug("Internal compiler error").emit();
+    ///# }
+    /// ```
+    ///
+    ///
+    pub fn bug(&self, message: impl Into<String>) -> DiagnosticBuilder {
         DiagnosticBuilder {
             sink: self,
-            diag: Diagnostic::new(Severity::Bug).with_message(message.into()),
+            diag: CsDiagnostic::new(Severity::Bug).with_message(message.into()),
         }
     }
 
-    pub fn error<'b>(&'b mut self, message: impl Into<String>) -> DiagnosticBuilder<'b, 'a> {
+    /// Creates a new diagnostic with `Warning` severity.
+    ///
+    /// Emit the diagnostic by calling `DiagnosticBuilder::emit`.
+    pub fn warn(&self, message: impl Into<String>) -> DiagnosticBuilder {
         DiagnosticBuilder {
             sink: self,
-            diag: Diagnostic::new(Severity::Error).with_message(message.into()),
+            diag: CsDiagnostic::new(Severity::Warning).with_message(message.into()),
         }
     }
 
+    /// Creates a new diagnostic with `Error` severity.
+    ///
+    /// Emit the diagnostic by calling `DiagnosticBuilder::emit`.
+    pub fn error(&self, message: impl Into<String>) -> DiagnosticBuilder {
+        DiagnosticBuilder {
+            sink: self,
+            diag: CsDiagnostic::new(Severity::Error).with_message(message.into()),
+        }
+    }
+
+    /// Returns the number of emitted error diagnostics.
     pub fn error_count(&self) -> usize {
-        self.error_count
+        self.inner.lock().error_count
     }
 
+    /// Returns the number of emitted warning diagnostics.
     pub fn warning_count(&self) -> usize {
-        self.warning_count
+        self.inner.lock().warning_count
     }
 
+    /// Returns the number of emitted bug diagnostics.
     pub fn bug_count(&self) -> usize {
-        self.bug_count
+        self.inner.lock().bug_count
     }
 }
 
-pub(crate) struct DiagnosticBuilder<'a, 'b> {
-    sink: &'a mut Diagnostics<'b>,
-    diag: Diagnostic<SourceId>,
+/// Used to build and emit diagnostic messages.
+pub struct DiagnosticBuilder<'a> {
+    sink: &'a Diagnostics,
+    diag: CsDiagnostic<SourceId>,
 }
 
-impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
+impl<'a> DiagnosticBuilder<'a> {
     fn label(
         mut self,
         span: impl Into<Option<SourceLocation>>,
         style: LabelStyle,
         message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a, 'b> {
+    ) -> DiagnosticBuilder<'a> {
         if let Some(span) = span.into() {
             self.diag.labels.push(Label {
                 style,
@@ -231,11 +266,12 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
         self
     }
 
+    /// Sets the primary label of the diagnostic.
     pub fn primary_label(
         self,
         span: impl Into<Option<SourceLocation>>,
         message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a, 'b> {
+    ) -> DiagnosticBuilder<'a> {
         self.label(span, LabelStyle::Primary, message)
     }
 
@@ -243,28 +279,37 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
         self,
         span: impl Into<Option<SourceLocation>>,
         message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a, 'b> {
+    ) -> DiagnosticBuilder<'a> {
         self.label(span, LabelStyle::Secondary, message)
     }
 
-    pub fn note(mut self, message: impl Into<String>) -> DiagnosticBuilder<'a, 'b> {
+    pub fn note(mut self, message: impl Into<String>) -> DiagnosticBuilder<'a> {
         self.diag.notes.push(message.into());
         self
     }
 
     pub fn emit(mut self) {
+        let mut inner = self.sink.inner.lock();
         match self.diag.severity {
             Severity::Bug => {
-                self.sink.bug_count += 1;
+                inner.bug_count += 1;
             }
             Severity::Error => {
-                self.sink.error_count += 1;
+                inner.error_count += 1;
             }
             Severity::Warning => {
-                self.sink.warning_count += 1;
+                inner.warning_count += 1;
             }
             _ => {}
         }
-        term::emit(self.sink.writer, &self.sink.config, &self.sink.files, &self.diag).expect("diagnostic output failed")
+        term::emit(&mut inner.writer, &self.sink.config, &self.sink.files, &self.diag)
+            .expect("diagnostic output failed")
     }
+}
+
+/// Diagnostic object in the process of being built.
+///
+/// It must be reported to a diagnostic sink (see `Diagnostics::emit`).
+pub struct Diagnostic {
+    diag: CsDiagnostic<SourceId>,
 }

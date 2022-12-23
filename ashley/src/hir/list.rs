@@ -29,6 +29,7 @@ impl<I, T> ListNode<I, T> {
     }
 }
 
+
 #[derive(Copy, Clone, Debug)]
 struct ListFirstLast<I> {
     first: I,
@@ -71,6 +72,11 @@ where
     pub fn last(&self) -> Option<I> {
         self.0.map(|x| x.last)
     }
+
+    /*/// Iterates over the list.
+    pub fn iter(&self, index: usize) -> impl Iterator {
+
+    }*/
 
     /// Inserts the specified element before `next`.
     pub fn insert_before(&mut self, this: I, next: I, storage: &mut id_arena::Arena<ListNode<I, T>, I>) {

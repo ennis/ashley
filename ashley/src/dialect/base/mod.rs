@@ -1,198 +1,369 @@
 //! Base dialect.
 mod types;
 
-use ashley::hir::matchers::OpResultCountM;
-use ashley::hir::Value;
 use crate::{
-    diagnostic::SourceLocation,
+    diagnostic::{DiagnosticBuilder, SourceLocation},
     hir::{
-        dialect, Attribute, Cursor, HirCtxt, Location, Operand, Operation, OperationData, OperationId,
-        RegionId, TypeAttr, ValueId,
+        build_operation,
+        constraint::{
+            FirstResult, OpResult, OpResults, Operands, Region,
+            ValueType,
+        },
+        operation_format, operation_formats, Attr, AttrConstraint, Builder, Cursor, HirCtxt, Location, Operation,
+        OperationConstraint, OperationCreateInfo, OperationData, OperationId, RegionId, ValueConstraint, ValueId,
     },
+    operation_constraint, operation_constraints,
 };
+use ashley::hir::constraint::MatchCtxt;
+use inventory::iter;
 pub use types::{
-    ArrayType, Field, FunctionType, ImageDimension, ImageType, SampledImageType, ScalarType, ScalarTypeKind,
-    StructType, TupleType, UnitType, UnknownType, VectorType,
+    ArrayType, BaseDialectAttrExt, Field, FunctionType, ImageDimension, ImageType, MatrixType, SampledImageType,
+    ScalarType, ScalarTypeKind, StructType, TupleType, UnitType, UnknownType, VectorType,
 };
-use crate::hir::matchers::{OpcodeM, OperandIndex};
 
-
-
-// Base dialect instructions
-dialect! {
-    pub dialect(BaseDialect, BaseDialectOpcodes, "base", 0x0002);
-
-    /// Function definition
-    operation(Func, OP_BASE_FUNC, "func");
-
-    /// Constant
-    operation(Constant, OP_BASE_CONST, "const");
-
-    /// Addition
-    operation(Add, OP_BASE_ADD, "add");
-
-    /// Subtraction
-    operation(Sub, OP_BASE_SUB, "sub");
-
-    /// Multiplication
-    operation(Mul, OP_BASE_MUL, "mul");
-
-    /// Division
-    operation(Div, OP_BASE_DIV, "div");
-
-    /// Conditionals
-    operation(Select, OP_BASE_SELECT, "select");
-
-    /// Loop.
-    operation(Loop, OP_BASE_LOOP, "loop");
-
-    /// Control-flow yield.
-    operation(Yield, OP_BASE_YIELD, "yield");
-
-    /// Call function.
-    operation(Call, OP_BASE_CALL, "call");
+/// Returns whether the specified type can be used as an operand of arithmetic operations.
+fn is_arithmetic_type(ty: Attr) -> bool {
+    if let Some(ScalarType(s)) = ty.cast() {
+        *s != ScalarTypeKind::Bool
+    } else if let Some(VectorType(s, len)) = ty.cast() {
+        *s != ScalarTypeKind::Bool
+    } else {
+        false
+    }
 }
 
-//#[derive(OperationFormat, OperationMatcher)]
-//#[operation(opcode="func")]
-pub struct OpBaseFunc<'hir> {
-    pub _opcode: OpcodeM<0x0001,0x0001>,
-    pub ty: FunctionType<'hir>,
-    pub body: RegionId,
-    pub _result: OpResultCountM<1>,
+/// Matches a value of boolean type.
+#[derive(Copy, Clone, Debug)]
+pub struct BooleanValue;
+
+impl<'ir> ValueConstraint<'ir> for BooleanValue {
+    fn try_match<'a>(b: &MatchCtxt<'a, 'ir>, value: ValueId) -> Option<Self> {
+        value.ty(b).is_bool().then_some(BooleanValue)
+    }
 }
 
-//#[derive(OperationFormat, OperationMatcher)]
-//#[operation(opcode="loop")]
-pub struct OpBaseLoop<const N: usize> {
-    pub _opcode: OpcodeM<0x0001,0x0001>,
-    pub iter_args: [ValueId; N],
-    pub body: RegionId,
-    pub _result: OpResultCountM<N>,
+/// Constrains an attribute to be an arithmetic type.
+#[derive(Copy, Clone, Debug)]
+pub struct ArithmeticType;
+
+impl<'ir> AttrConstraint<'ir> for ArithmeticType {
+    fn try_match<'a>(b: &MatchCtxt<'a, 'ir>, attr: Attr<'ir>) -> Option<Self> {
+        is_arithmetic_type(attr).then_some(ArithmeticType)
+    }
 }
 
-//#[derive(OperationFormat, OperationMatcher)]
-//#[operation(opcode="call")]
-pub struct OpBaseCall<const N: usize> {
-    pub _opcode: OpcodeM<0x0001,0x0001>,
-    pub args: [ValueId; N],
-    pub _result: OpResultCountM<N>,
-}
-
-//#[derive(OperationFormat, OperationMatcher)]
-//#[operation(opcode="mod")]
-pub struct OpBaseModulo<T=ValueId, U=ValueId> {
-    pub _opcode: OpcodeM<0x0001,0x0001>,
-    pub lhs: OperandIndex<T, 0>,
-    pub rhs: OperandIndex<U, 1>,
-    pub _result: OpResultCountM<1>,
-}
-
-// OpBaseModulo::new(lhs, rhs).build(ctxt), or ctxt.insert_op(at, OpBaseModulo::new(lhs, rhs)
-
-/*pub trait BaseDialectBuilder<'hir> {
-    /// Inserts an operation that produces a constant value.
-    ///
-    /// # Arguments
-    ///
-    /// * constant an attribute whose value represents the constant
-    fn base_constant(&mut self, cur: Cursor, constant: Attribute<'hir>, loc: Location) -> ValueId;
-
-    /// Inserts a function declaration.
-    ///
-    /// # Arguments
-    ///
-    /// * ty a TypeAttr specifying the function type
-    ///
-    /// # Return value
-    ///
-    /// returns the value ID corresponding to the function, and the body region
-    fn base_func(&mut self, cur: Cursor, ty: FunctionType<'hir>, loc: Location) -> FunctionDefinition<'hir>;
-
-    /// Inserts an addition operation.
-    fn base_add(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId;
-
-    /// Inserts a multiplication operation.
-    fn base_mul(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId;
-
-    /// Inserts a division operation.
-    fn base_div(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId;
-
-    /// Inserts a subtraction operation.
-    fn base_sub(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId;
-
-    /// Inserts a loop operation.
-    ///
-    /// # Arguments
-    /// * iter_args
-    fn base_loop(&mut self, cur: Cursor, iter_args: &[ValueId], loc: Location) -> LoopOperation<'hir>;
-
-    /// Yields values from a control-flow region.
-    fn base_yield(&mut self, cur: Cursor, iter_args: &[ValueId], loc: Location);
-
-    /// Calls a function.
-    fn base_call(&mut self, cur: Cursor, function: ValueId, args: &[ValueId], loc: Location);
-}
-
-impl<'hir> BaseDialectBuilder<'hir> for HirCtxt<'hir> {
-    fn base_constant(&mut self, cur: Cursor, constant: Attribute<'hir>, loc: Location) -> ValueId {
-        let (_, r) = self.create_operation(cur, OP_BASE_CONST, 1, [constant], [], loc);
-        r[0]
-    }
-
-    fn base_func(&mut self, cur: Cursor, ty: FunctionType<'hir>, loc: Location) -> FunctionDefinition<'hir> {
-        // TODO do something with the location
-        let num_args = ty.arg_types.len();
-        let ty = self.intern_type(ty);
-        let attr = self.intern_attr(TypeAttr(ty));
-        let (op, result) = self.create_operation(cur, OP_BASE_FUNC, 1, [attr.upcast()], [], loc);
-        let (body, arguments) = self.create_subregion(op, num_args);
-        FunctionDefinition {
-            op,
-            result: result[0],
-            body,
-            arguments,
-        }
-    }
-
-    fn base_add(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId {
-        let (_, r) = self.create_operation(cur, OP_BASE_ADD, 2, [], [lhs, rhs], loc);
-        r[0]
-    }
-
-    fn base_mul(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId {
-        let (_, r) = self.create_operation(cur, OP_BASE_MUL, 2, [], [lhs, rhs], loc);
-        r[0]
-    }
-
-    fn base_div(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId {
-        let (_, r) = self.create_operation(cur, OP_BASE_DIV, 2, [], [lhs, rhs], loc);
-        r[0]
-    }
-
-    fn base_sub(&mut self, cur: Cursor, lhs: ValueId, rhs: ValueId, loc: Location) -> ValueId {
-        let (_, r) = self.create_operation(cur, OP_BASE_SUB, 2, [], [lhs, rhs], loc);
-        r[0]
-    }
-
-    fn base_loop(&mut self, cur: Cursor, iter_args: &[ValueId], loc: Location) -> LoopOperation<'hir> {
-        let num_iter_args = iter_args.len();
-        let (op, results) = self.create_operation(cur, OP_BASE_LOOP, num_iter_args, [], iter_args.iter().cloned(), loc);
-        let (body, iter_vars) = self.create_subregion(op, num_iter_args);
-        LoopOperation {
-            op,
-            results,
-            body,
-            iter_vars,
-        }
-    }
-
-    fn base_yield(&mut self, cur: Cursor, values: &[ValueId], loc: Location) {
-        let (_op, _results) = self.create_operation(cur, OP_BASE_YIELD, 0, [], values.iter().cloned(), loc);
-    }
-
-    fn base_call(&mut self, cur: Cursor, function: ValueId, args: &[ValueId], loc: Location) {
-        todo!()
-        //let (_op, _results) = self.create_operation(cur, OP_BASE_CALL, 0, [], args.iter().cloned(), loc);
+/*/// Checks the validity of a function call operation.
+pub struct IsValidFunctionCall;
+impl<'a> OperationConstraint<'a> for IsValidFunctionCall {
+    fn try_match(b: &Builder<'_, 'a>, op: OperationId) -> Result<Self, DiagnosticBuilder<'a>> {
+        let &FunctionType { arg_types, return_ty } = op.operand(b, 0)?.ty(b).cast()?;
+        let call_site_result_ty = op.result(b, 0)?.ty(b);
+        let call_site_argument_types = op.operand_range(b, 1..).iter().map(|v| v.ty(b)).collect::<Vec<_>>();
+        (arg_types == call_site_argument_types && return_ty == call_site_result_ty)
+            .then(|| IsValidFunctionCall)
+            .ok_or(b.diagnostics().error("invalid function call"))
     }
 }*/
+
+fn check_arguments<'ir>(cx: &MatchCtxt<'_, 'ir>, args: &[ValueId], types: &[Attr<'ir>]) -> bool {
+    args.iter().map(|v| v.ty(cx)).eq(types.iter().cloned())
+}
+
+/// Predicate that checks that two value sequences have the same length and, for each value pair,
+/// the same type.
+fn same_types(cx: &MatchCtxt, a: &[ValueId], b: &[ValueId]) -> bool {
+    if a.len() != b.len() {
+        return false
+    } else {
+        a.iter().map(|v| v.ty(cx)).eq(b.iter().map(|v| v.ty(cx)))
+    }
+}
+
+
+/*operation_formats! {
+    pub Constant: FirstResult(result) => { result: ValueId };
+
+    /// Functions.
+    pub Function<'ir>: op, FirstResult(result), FirstRegion(body), FirstRegion(Region(arguments)) => {
+        op: OperationId,
+        result: ValueId,
+        body: RegionId,
+        arguments: &'ir [ValueId]
+    };
+
+    /// Function call
+    pub Call<'ir>: FirstResult(result), LHS(function), OperandRange::<1>(arguments), IsValidFunctionCall => { result: ValueId, function: ValueId, arguments: &'ir [ValueId] };
+
+    //----------------------------------------------------------------------------------------------
+    // ARITHMETIC
+
+    /// Arithmetic add operation.
+    ///
+    /// The two operands should have the same arithmetic type.
+    pub Add: FirstResult(result), LHS(lhs), RHS(rhs), ArithmeticOperands => { result: ValueId, lhs: ValueId, rhs: ValueId };
+
+    /// Subtraction operation.
+    ///
+    /// The two operands should have the same arithmetic type.
+    pub Sub: OpResult(result), LHS(lhs), RHS(rhs), ArithmeticOperands => { result: ValueId, lhs: ValueId, rhs: ValueId };
+
+    /// Multiplication operation.
+    ///
+    /// The two operands should have the same arithmetic type.
+    pub Mul: OpResult(result), LHS(lhs), RHS(rhs), ArithmeticOperands => { result: ValueId, lhs: ValueId, rhs: ValueId };
+
+    /// Division operation.
+    ///
+    /// The two operands should have the same arithmetic type.
+    pub Div: OpResult(result), LHS(lhs), RHS(rhs), ArithmeticOperands => { result: ValueId, lhs: ValueId, rhs: ValueId };
+
+    /// Modulo operation.
+    ///
+    /// The two operands should have the same arithmetic type.
+    pub Mod: OpResult(result), LHS(lhs), RHS(rhs), ArithmeticOperands => { result: ValueId, lhs: ValueId, rhs: ValueId };
+
+    /// Control-flow yield.
+    pub Yield<'ir>: Operands(values) => { values: &'ir [ValueId] };
+
+
+    //----------------------------------------------------------------------------------------------
+    // LOGICAL
+
+    // Logical and operation.
+    //pub And: Result(BooleanValue(result)), LHS(BooleanValue(lhs)), RHS(BooleanValue(rhs)) if |b| { lhs.ty(b).is_bool() &&  } =>
+
+
+    //----------------------------------------------------------------------------------------------
+    // CONTROL FLOW
+
+    /// Loops.
+    ///
+    /// Loops have one subregion corresponding to the loop body. The arguments of this region are the loop variables
+    /// that may change each iteration.
+    ///
+    /// The loop body should be terminated by either a `base.yield` operation or a `base.continue` operation.
+    pub Loop<'a>: op, OpResults(results), FirstRegion(body), FirstRegion(Region(iter_vars)) => {
+        op: OperationId,
+        results: &'a [ValueId],
+        body: RegionId,
+        iter_vars:&'a [ValueId]
+    };
+
+    /// Conditionals
+    pub Select<'a>: OpResults(results), LHS(BooleanValue(condition)), FirstRegion(then_branch), SecondRegion(else_branch) => {
+        condition: ValueId,
+        then_branch: RegionId,
+        else_branch: RegionId,
+        results: &'a [ValueId]
+    };
+
+}*/
+
+operation_constraints! {
+    /// Matches an operation with two operands.
+    pub BinaryOperation { lhs: ValueId, rhs: ValueId } = {
+        ""(lhs, rhs)
+    }
+
+    /// Loads a constant into a value.
+    pub Constant { result: ValueId } = {
+        "base.const"() {} -> (result)
+    }
+
+    /// Function definition
+    pub Function<'ir> {
+        op: OperationId,
+        arguments: &'ir [ValueId],
+        body: RegionId,
+        result: ValueId
+    } = {
+        op: "base.func" { body:Region(arguments) } -> (result:!fty:FunctionType { .. })
+    }
+
+    /// Function call
+    pub Call<'ir> { result: ValueId, function: ValueId, arguments: &'ir [ValueId] } = {
+        "base.call"(function, ..arguments) -> (result:!ret_ty) where
+            function: !_:FunctionType { return_ty = ret_ty, arg_types = arg_types },
+            |cx| check_arguments(cx, arguments, arg_types),
+    }
+
+    //----------------------------------------------------------------------------------------------
+    // ARITHMETIC
+
+    /// Addition
+    pub Add { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.add"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+
+    /// Subtraction
+    pub Sub { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.sub"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+
+    /// Multiplication
+    pub Mul { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.mul"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+
+    /// Division
+    pub Div { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.div"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+
+    /// Modulo
+    pub Mod { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.mod"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+
+    //----------------------------------------------------------------------------------------------
+    // CONTROL FLOW
+
+    /// Loops.
+    ///
+    /// Loops have one subregion corresponding to the loop body. The arguments of this region are the loop variables
+    /// that may change each iteration.
+    ///
+    /// The loop body should be terminated by either a `base.yield` operation or a `base.continue` operation.
+    pub Loop<'a> {
+        op: OperationId,
+        results: &'a [ValueId],
+        body: RegionId,
+        iter_vars:&'a [ValueId]
+    } = {
+        op: "base.loop"(..iter_vars_init) { body:Region(iter_vars) } -> (..results) where |cx| {
+            same_types(cx, iter_vars, results) && same_types(cx, iter_vars_init, results)
+        }
+    }
+
+    /// Conditionals
+    pub Select<'a> {
+        condition: ValueId,
+        then_branch: RegionId,
+        else_branch: RegionId,
+        results: &'a [ValueId]
+    } = {
+        "base.select"(condition:BooleanValue) { then_branch, else_branch } -> (..results)
+    }
+}
+
+impl<'hir> Loop<'hir> {
+    /// Constructs a loop operation.
+    ///
+    /// # Arguments
+    /// * iter_vars input iteration variables
+    fn build(b: &mut Builder<'_, 'hir>, iter_vars: &'hir [ValueId], loc: Location) -> Loop<'hir> {
+        let mut iter_var_types = vec![];
+        for &v in iter_vars {
+            iter_var_types.push(b.value_type(v));
+        }
+        build_operation!(b; "base.loop"(~iter_vars) { body(~&iter_var_types) } -> (~&iter_var_types) at loc)
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+macro_rules! impl_binop_builders {
+    ( $($(#[$m:meta])* $v:vis $name:ident [$mnemonic:literal]; )* )
+    =>
+    {
+        $(impl $name {
+            $(#[$m])*
+            $v fn build(b: &mut Builder, lhs: ValueId, rhs: ValueId, loc: Location) -> $name {
+                let lhs_ty = b.value_type(lhs);
+                build_operation!(b; $mnemonic(lhs, rhs) -> (lhs_ty) at loc)
+            }
+        })*
+    };
+}
+
+impl_binop_builders!(
+    /// Constructs an `add` operation.
+    pub Add["base.add"];
+    /// Constructs a `sub` operation.
+    pub Sub["base.sub"];
+    /// Constructs a `mul` operation.
+    pub Mul["base.mul"];
+    /// Constructs a `div` operation.
+    pub Div["base.div"];
+    /// Constructs a `mod` operation.
+    pub Mod["base.mod"];
+);
+
+
+impl<'hir> Function<'hir> {
+    /// Constructs a `func` operation
+    ///
+    /// # Arguments
+    ///
+    /// * function_type the type of the function, must be an instance of `FunctionType`
+    /// * loc source location
+    pub fn build(b: &mut Builder<'_, 'hir>, function_type: Attr<'hir>, loc: Location) -> Function<'hir> {
+        let &FunctionType { arg_types, .. } = function_type.cast().expect("invalid function type");
+        build_operation!(b; "base.func" { body(~arg_types) } -> (function_type) at loc)
+    }
+}
+
+impl Constant {
+    /// Constructs a constant.
+    pub fn build<'hir>(b: &mut Builder<'_, 'hir>, constant: Attr<'hir>, loc: Location) -> Constant {
+        let ty = b.unknown_type().upcast();
+        build_operation!(b; "base.const" [constant] -> (ty) at loc)
+    }
+}
+
+impl<'ir> Call<'ir> {
+    /// Constructs a function call.
+    ///
+    /// # Arguments
+    /// * function the function to call, must be of function type
+    /// * args the arguments to the function, must match the types of the function.
+    pub fn build(b: &mut Builder<'_, 'ir>, function: ValueId, args: &[ValueId], loc: Location) -> Call<'ir> {
+        let &FunctionType { return_ty, arg_types } = function.ty(b).cast().expect("invalid function value");
+        build_operation!(b; "base.call"(function, ~args) -> (return_ty) at loc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        diagnostic::{Diagnostics, SourceFileProvider},
+        dialect::{base, base::ArithmeticType},
+        hir,
+        hir::{
+            constraint,
+            constraint::{Region, ValueType},
+            HirArena, HirCtxt, ValueId,
+        },
+    };
+    use ashley::hir::Location;
+    use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+
+    fn hir_test(f: impl FnOnce(&mut hir::Builder)) {
+        let arena = HirArena::new();
+        let mut ctxt = HirCtxt::new(&arena);
+        let region = ctxt.create_region();
+        let files = SourceFileProvider::new();
+        let mut writer = StandardStream::stderr(ColorChoice::Always);
+        let diag = Diagnostics::new(files, writer, Default::default());
+        let mut builder = hir::Builder::new(&mut ctxt, &diag, region);
+        f(&mut builder)
+    }
+
+    #[test]
+    fn test_match() {
+        hir_test(|b| {
+            let loc = Location::Unknown;
+            let ty = b.f32_ty();
+            let u = b.undef_typed(ty.upcast());
+            let r = base::Add::build(b, u, u, loc).result;
+
+            if let Some(m) = r.pmatch(b) {
+                let m: ValueId = m;
+                // OK
+                eprintln!("matched any value")
+            }
+
+            if let Some(ValueType(IsArithmeticType)) = r.pmatch(b) {
+                eprintln!("value of arithmetic type");
+            } else {
+                panic!("expected arithmetic type");
+            };
+
+            let f = base::Function::build(b, ty.upcast(), loc);
+
+            /*if let Some(FirstRegion(Region(args))) = f.op.pmatch(b) {
+                let args: &[ValueId] = args;
+            }*/
+        })
+    }
+}

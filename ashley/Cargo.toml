@@ -17,12 +17,14 @@ smol_str = "0.1.23"
 thiserror = "1.0.37"
 tracing = "0.1.37"
 typed-arena = "2.0.1"
+parking_lot = "0.12.1"
 id-arena = "2.2.1"
 slotmap = "1.0.6"
 fxhash = "0.2.1"
 ashley-derive = { path = "../ashley-derive" }
 inventory = "0.3.2"
 html-escape = "0.2.12"
+ordered-float = "3.4.0"
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }

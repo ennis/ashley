@@ -1,0 +1,89 @@
+= High-level graphics operations
+
+== Scenes
+
+Scenes hold 3D _objects_, organized in a transform hierarchy. Each object has one or more _draw items_, which correspond to a part of the object drawn in a specific way.
+
+Draw items and objects have arbitrary parameter blocks attached to them. Typically they contain material parameters for the draw item or object.
+
+Each draw item is represented as an array of vertices, each vertex having at least a position, and optional attributes, including but not limited to normals, texcoords, tangents, colors. The set of available vertex attributes is the same for all vertices in a draw item.
+
+== Sharing
+
+Vertices in draw items and parameter blocks are immutable, and allow structural sharing (two parameter blocks can point to the same data if they are the equal).
+
+== Fetching scene data
+
+In short: you request a set of vertex attributes and specific parameter blocks, and you get a region with values that represent draw items and param blocks, which you can use like uniforms in a shader.
+
+[NOTE]
+.Separate value domains
+====
+As a guiding principle, it should be impossible in the HIR to have two variables in the same scope with incompatible domains (e.g. a vertex domain value and a fragment domain value in the same scope, or two vertex domain values from different draw calls). This means that separate domains (without an ordering between them) end up in separate, non-nested regions.
+====
+
+The structure of the HIR will look like this:
+
+[source]
+----
+scene_op<#filter> {
+	  // scene_op is a scene fetch operation, #filter defines the data to retrieve,
+    // like a DB query
+    |draw_item, transform, material_params| ->
+		// the region arguments correspond to the "columns" of the query
+    // it's possible to compute derived values from there
+}
+----
+
+=== Requesting vertex attributes
+
+It’s specified within the scene operation. In the textual representation, it may look like this: `position:vec3;normals:vec3;uvcoords:vec2`. The requested type is the one that will be seen by the shader, not necessarily the storage format (the storage representation of vertex data is decoupled from the representation used inside the shaders).
+There are predefined vertex attributes.
+
+UNSURE: Conceptually, even per-object or per-material values like the object transform appear as vertex attribute streams. This does not mean that they will be passed to the final shaders as vertex data.
+
+[NOTE.question]
+.What about fragment shaders? If all attributes are assimilated to vertex streams, then
+====
+====
+
+.Predefined vertex attributes
+|===
+|Name     |Type |Description
+
+|position |vec3 |Vertex position
+|normals  |vec3 |Vertex normals
+|tangents |vec3 |Tangents
+|texcoord |vec2 |Primary texture coordinates, normalized between 0 and 1
+|===
+
+.Fetching data from a scene
+----
+// (dummy notation)
+scene.fetch<
+    vertex_format=[position:vec3;normals:vec3;uvcoords:vec2],
+    >
+{
+    (draw_items : !DrawItemStream)
+}
+----
+
+== Vertex stage
+
+== Rasterization stage
+
+Rasterization stages take as input primitive streams output by a geometry stage, and produce an image as output. Multiple rasterization stages can be fed from the same primitive stream. Also, multiple primitive streams with the same attributes can be fused and fed to the same rasterization stage.
+
+When instantiating a rasterization stage, you specify GPU rasterization parameters, including:
+
+- depth buffer & depth testing state
+- rasterizer options
+- viewport
+
+Inside the rasterization stage instance lives the fragment stage, defined in a separate code region. It gets all the geometry attributes as arguments, and has access to fragment-specific operations: **interpolation,** for interpolating geometry attributes on primitives, **derivatives,** and blending / image output operations.
+
+The fragment program can read from, and write to, external resources that are visible in scope. These include:
+
+- images
+- texture arrays (implemented as descriptor arrays)
+- buffers

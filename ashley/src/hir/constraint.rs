@@ -39,6 +39,11 @@ impl<'a, 'ir> Deref for MatchCtxt<'a, 'ir> {
 //
 // Attribute constraints
 //
+
+/// Represents a constraint applied to an attribute.
+///
+/// `AttrConstraint`s are also `ValueConstraint`s: when applied to a value, the attribute constraint
+/// is matched on the _type_ of the value.
 pub trait AttrConstraint<'ir>: Sized {
     fn try_match<'a>(b: &MatchCtxt<'a, 'ir>, attr: Attr<'ir>) -> Option<Self>;
 }
@@ -65,6 +70,14 @@ pub trait AttrSequenceConstraint<'ir>: Sized {
 impl<'ir> AttrSequenceConstraint<'ir> for Vec<Attr<'ir>> {
     fn try_match<'a>(b: &MatchCtxt<'a, 'ir>, attrs: &[Attr<'ir>]) -> Option<Self> {
         Some(attrs.into())
+    }
+}
+
+// Attribute constraints are also value constraints that match all values with types that match the
+// attribute constraint.
+impl<'ir, A> ValueConstraint for A where A: AttrConstraint<'ir> {
+    fn try_match<'a>(b: &MatchCtxt<'a, 'ir>, value: ValueId) -> Option<Self> {
+        A::try_match(b, value.ty(b))
     }
 }
 

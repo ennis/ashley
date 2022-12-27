@@ -179,6 +179,19 @@ impl<'a> IRPrintable<'a> for BooleanAttr {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct NameAttrPair<'a>(pub &'a str, pub Attr<'a>);
+
+/// Dictionary of attributes.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+pub struct AttrDictionary<'a>(pub &'a [NameAttrPair<'a>]);
+
+impl<'a> AttrDictionary<'a> {
+    pub fn new(ctxt: HirCtxt<'a>, kv_pairs: impl Iterator<Item=NameAttrPair<'a>>) -> Attr<'a, AttrDictionary<'a>> {
+        todo!()
+    }
+}
+
 /*/// Source location attribute.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
 pub struct LineColumnLocationAttr<'a> {

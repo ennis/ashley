@@ -1,0 +1,31 @@
+= HIR primer
+
+== HIR structure
+
+=== Values
+Describe values, they have an associated type, etc.
+
+=== Operations
+Operands, results, attributes, regions.
+
+=== Attributes
+Some built-in types. Types are attributes.
+
+=== Regions
+
+== Rust API
+
+HIR context: HirCtxt; object IDs and arenas; Attribute interning; HIR builder;
+
+== Extending the HIR
+
+=== Defining new attributes
+Required traits, implementing IRPrintable.
+
+=== Defining constraints
+The constraint traits: ValueConstraint, OperationConstraint, AttrConstraint, etc.
+Pattern matching examples.
+
+=== Defining operations
+Operation pattern macro, builders
+

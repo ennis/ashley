@@ -1,0 +1,9 @@
+= Introduction
+
+Goals of the IR. Automatization/abstraction of tedious tasks when dealing with GPU APIs: pipeline configuration, resource bindings, etc. Lots of boilerplate, error-prone, often need to keep things in sync manually between shader and main program.
+Useful for early-stage exploration, when the graphics pipeline is not clear yet: need to quickly explore different strategies for using the GPU, but massive amount of boilerplate greatly increases iteration times and developer dissatisfaction.
+
+
+
+
+

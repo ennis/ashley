@@ -177,7 +177,7 @@ operation_constraints! {
         body: RegionId,
         result: ValueId
     } = {
-        op: "base.func" { body:Region(arguments) } -> (result:!fty:FunctionType { .. })
+        op: "base.func" { body @ Region(arguments) } -> (result @ !FunctionType { .. })
     }
 
     /// Function call
@@ -191,19 +191,19 @@ operation_constraints! {
     // ARITHMETIC
 
     /// Addition
-    pub Add { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.add"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+    pub Add { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.add"(lhs:T, rhs:T) -> (result:T) where T: ArithmeticType }
 
     /// Subtraction
-    pub Sub { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.sub"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+    pub Sub { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.sub"(lhs:T, rhs:T) -> (result:T) where T: ArithmeticType }
 
     /// Multiplication
-    pub Mul { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.mul"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+    pub Mul { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.mul"(lhs:T, rhs:T) -> (result:T) where T: ArithmeticType }
 
     /// Division
-    pub Div { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.div"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+    pub Div { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.div"(lhs:T, rhs:T) -> (result:T) where T: ArithmeticType }
 
     /// Modulo
-    pub Mod { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.mod"(lhs:!ty, rhs:!ty) -> (result:!ty) where ty: ArithmeticType }
+    pub Mod { result: ValueId, lhs: ValueId, rhs: ValueId } = { "base.mod"(lhs:T, rhs:T) -> (result:T) where T: ArithmeticType }
 
     //----------------------------------------------------------------------------------------------
     // CONTROL FLOW

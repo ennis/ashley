@@ -11,6 +11,56 @@ struct GenCtxt {
 
 //--------------------------------------------------------------------------------------------------
 
+enum AttributeConstraint {
+    Type(syn::Type),
+    Value(syn::Expr)
+}
+
+/// An attribute pattern.
+///
+/// Used to constrain the type of an attribute `attribute: Type`, or both its type and its value:
+/// `attribute = expr`
+struct AttributePattern {
+    name: Ident,
+    constraint: Option<AttributeConstraint>
+}
+
+impl Parse for AttributePattern {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        todo!()
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+
+/// A variable name or a placeholder.
+///
+/// # Examples
+/// `result`, `T`, `_`
+enum VariableOrPlaceholder {
+    Ident(Ident),
+    Placeholder(Token![_]),
+}
+
+impl ToTokens for VariableOrPlaceholder {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            VariableOrPlaceholder::Ident(ident) => ident.to_tokens(tokens),
+            VariableOrPlaceholder::Placeholder(wild) => wild.to_tokens(tokens),
+        }
+    }
+}
+
+/// A item in a slice pattern.
+///
+/// # Examples
+///
+/// * bind an element in the slice to a variable named `result`: `result`
+/// * same but also match a pattern: `result: Pattern`
+/// * match a pattern on one element w/o binding it to a variable: `_:Pattern`
+/// * bind the rest of the elements in the slice to a variable named `operands`: `..operands`
+/// * matches the rest of the elements in the slice: `..`
 enum SliceElementPattern {
     /// `ident:Pattern`
     Element(BoundPattern),
@@ -34,6 +84,7 @@ impl Parse for SliceElementPattern {
         }
     }
 }
+
 
 struct OperationPattern {
     mnemonic: syn::LitStr,
@@ -150,7 +201,7 @@ impl OperationPattern {
             .any(|op| matches!(op, SliceElementPattern::Rest(_)))
     }
 
-    fn generate(&self, ctxt: &mut GenCtxt, scrutinee: &Ident, bound_to: &IdentOrPlaceholder) -> TokenStream {
+    fn generate(&self, ctxt: &mut GenCtxt, scrutinee: &Ident, bound_to: &VariableOrPlaceholder) -> TokenStream {
         let mnemonic = self.mnemonic.value();
 
         let check_mnemonic = if mnemonic.is_empty() {
@@ -184,6 +235,9 @@ impl OperationPattern {
         let regions_section = generate_slice_patterns(ctxt, &self.regions, scrutinee, "regions");
         let results_section = generate_slice_patterns(ctxt, &self.results, scrutinee, "results");
 
+        // attributes are treated differently from operands and results:
+        // we don't match a pattern,
+
         quote! {
             #check_mnemonic
             #check_num_operands
@@ -197,6 +251,15 @@ impl OperationPattern {
 
 //--------------------------------------------------------------------------------------------------
 
+/// Struct-like patterns.
+///
+/// There are three kinds of struct-like patterns, similar to rust structs:
+/// * unit patterns: `Pattern`, `GenericPattern::<T>`
+/// * tuple patterns: `Pattern(a,b,c)`, `Pattern(_,x,_)`
+/// * named-field patterns: `Pattern { lhs = a, rhs = b, .. }`
+///
+/// # Example
+/// * named-field pattern with subpatterns: `BinaryOperation { lhs = lhs : Integer, rhs = rhs : Constant, result : Integer, .. }`
 struct StructLikePattern {
     path: Path,
     field_names: Vec<syn::Member>,
@@ -264,7 +327,7 @@ impl Parse for StructLikePattern {
 }
 
 impl StructLikePattern {
-    fn generate(&self, ctxt: &mut GenCtxt, scrutinee: &Ident, bound_to: &IdentOrPlaceholder) -> TokenStream {
+    fn generate(&self, ctxt: &mut GenCtxt, scrutinee: &Ident, bound_to: &VariableOrPlaceholder) -> TokenStream {
         let path = &self.path;
         let tmp_bindings = self
             .patterns
@@ -304,9 +367,16 @@ impl StructLikePattern {
 
 //--------------------------------------------------------------------------------------------------
 
+
+/// Patterns.
 enum Pattern {
+    /// An operation pattern.
+    ///
+    /// See `OperationPattern`.
     Operation(OperationPattern),
+    /// A struct-like pattern.
     StructLike(StructLikePattern),
+    /// A pattern of the form `!BoundPattern`, short-hand for `ValueType(BoundPattern)`
     ValueOfType(Box<BoundPattern>),
 }
 
@@ -331,7 +401,7 @@ impl Pattern {
     /// `bound_to` is for debugging purposes only, and should be the variable of the `BoundPattern` that owns this pattern.
     ///
     /// TODO: more debugging info on the scrutinee (path to the field in nested patterns)
-    fn generate(&self, ctxt: &mut GenCtxt, scrutinee: &Ident, bound_to: &IdentOrPlaceholder) -> TokenStream {
+    fn generate(&self, ctxt: &mut GenCtxt, scrutinee: &Ident, bound_to: &VariableOrPlaceholder) -> TokenStream {
         match self {
             Pattern::Operation(p) => p.generate(ctxt, scrutinee, bound_to),
             Pattern::ValueOfType(p) => {
@@ -348,22 +418,18 @@ impl Pattern {
     }
 }
 
-enum IdentOrPlaceholder {
-    Ident(Ident),
-    Placeholder(Token![_]),
-}
 
-impl ToTokens for IdentOrPlaceholder {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            IdentOrPlaceholder::Ident(ident) => ident.to_tokens(tokens),
-            IdentOrPlaceholder::Placeholder(wild) => wild.to_tokens(tokens),
-        }
-    }
-}
-
+/// Represents a variable bound to a pattern, generally of the form `variable : Pattern`.
+///
+/// The pattern is optional. If the scrutinee doesn't need to be bound to a variable,
+/// it's possible to use a placeholder instead (`_`).
+///
+/// # Examples
+/// * bind to a variable without a pattern: `result`
+/// * bind to a variable and match a pattern: `lhs : ArithmeticType`
+/// * with a placeholder instead: `_ : ArithmeticType`
 struct BoundPattern {
-    var: IdentOrPlaceholder,
+    var: VariableOrPlaceholder,
     pattern: Option<Pattern>,
 }
 
@@ -371,12 +437,12 @@ impl Parse for BoundPattern {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
         let var = if lookahead.peek(Token![_]) {
-            IdentOrPlaceholder::Placeholder(input.parse()?)
+            VariableOrPlaceholder::Placeholder(input.parse()?)
         } else if lookahead.peek(Ident) {
-            IdentOrPlaceholder::Ident(input.parse()?)
+            VariableOrPlaceholder::Ident(input.parse()?)
         } else if lookahead.peek(LitStr) {
             // unbound operation pattern
-            let var = IdentOrPlaceholder::Placeholder(parse_quote!(_));
+            let var = VariableOrPlaceholder::Placeholder(parse_quote!(_));
             let op_pattern = input.parse()?;
             return Ok(BoundPattern {
                 var,
@@ -405,7 +471,7 @@ impl BoundPattern {
             quote!()
         };
 
-        if let IdentOrPlaceholder::Ident(ref var) = self.var {
+        if let VariableOrPlaceholder::Ident(ref var) = self.var {
             if ctxt.bound_vars.contains(&var) {
                 quote! {
                     #pat_stmts
@@ -521,7 +587,7 @@ impl ConstraintBody {
             for where_pred in where_clause.predicates.iter() {
                 match where_pred {
                     WhereClauseItem::Pattern { var, pat } => {
-                        pat_tokens.push(pat.generate(&mut ctxt, var, &IdentOrPlaceholder::Ident(var.clone())));
+                        pat_tokens.push(pat.generate(&mut ctxt, var, &VariableOrPlaceholder::Ident(var.clone())));
                     }
                     WhereClauseItem::Predicate(closure) => {
                         pat_tokens.push(quote!{

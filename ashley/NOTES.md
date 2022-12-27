@@ -953,3 +953,83 @@ Validation rules:
 
 Things to consider:
 - downscaling loops
+
+TODO: separate struct definitions from operation patterns?
+
+# Operation patterns updates
+- differentiate patterns from type constraints
+  - type constraints applied to a variable actually specify the type of the pattern variable
+  - patterns don't change the type of the variable
+  - use '@' for patterns and ':' for type constraints
+- placeholder syntax '_' is annoying
+  - use variable sigils '%' instead to denote a variable name
+
+## Attribute patterns
+`name : Pattern`: tries to match `Pattern` against the attribute, and produces a variable `name` of type `Pattern`
+`binding @ name : Pattern`: name as above, but also binds the value of the attribute before downcasting (the scrutinee) to `binding`.
+`binding @ Pattern`: only binds the value of the attribute
+
+Examples:
+- `condition_code : ConditionCode`: matches an attribute value of type `ConditionCode` (implements `AttributeBase`).
+- `coefficient : f32`: matches a value of type `f32`, `coefficient` has type `f32`
+
+## Value type patterns
+`name : Type`: matches a value with the specified type, `name` is a variable of type `ValueId`
+
+## Value patterns
+`name = Pattern(...)`: pattern matching, `name` is a variable of type `ValueId`
+
+
+# Scaling down?
+
+Kinda lost track of the main application, artifice.
+There are a lot of unknowns for this project. 
+
+## Minimum viable product
+
+Scale back to a simple language replacing GLSL and a simple IR, with the following goals:
+- easy to merge shader snippets
+- supports closures
+
+
+Q: should we drop the extensible IR?
+A: maybe, but then:
+
+Q: what would be the advantages of having a fixed IR?
+
+- Fixed set of types to consider => straight `match` statements
+- Probably easier to define new operations => just add an enum variant
+- Probably easier to operate on the IR => straight `match` statements
+- easier serialization, since there's no need to register implementations at runtime
+
+Without extensibility, the set of all possible types would be a big enum:
+
+```rust 
+enum Type {
+    //--------------------
+    Scalar,
+    Vector,
+    Array,
+    
+    //--------------------
+    Image,
+    SampledImage, 
+    Buffer,
+
+    //--------------------
+    VertexStream,
+    FragmentStream,
+    PrimitiveStream,
+}
+
+```
+
+=> Drop extensibility for now (branch out). May reintroduce it later if necessary. It will be easier to design it when the use cases become clearer.
+And again, extensibility is only useful if:
+1. we need IRs for other things
+2. we want to reuse the same infrastructure for different IRs
+
+Again, MLIR is there, but it's such a pain to build something with it outside their tree.
+-> would need to write 90% of the logic in C++
+
+YAGNI: Don't write a reusable or extensible infrastructure until we have multiple IRs: it will probably be completely useless and need to be redesigned anyway

@@ -175,56 +175,6 @@ impl<'a> IRPrintable<'a> for TupleType<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ImageDimension {
-    Dim1D,
-    Dim2D,
-    Dim3D,
-    DimCube,
-    Dim1DArray,
-    Dim2DArray,
-}
-
-impl ImageDimension {
-    pub fn display(&self) -> &'static str {
-        match self {
-            ImageDimension::Dim1D => "1D",
-            ImageDimension::Dim2D => "2D",
-            ImageDimension::Dim3D => "3D",
-            ImageDimension::DimCube => "cube map",
-            ImageDimension::Dim1DArray => "1D array",
-            ImageDimension::Dim2DArray => "2D array",
-        }
-    }
-}
-
-/// Sampled image type
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct SampledImageType {
-    pub sampled_ty: ScalarType,
-    pub dim: ImageDimension,
-    pub ms: bool,
-}
-
-impl<'a> IRPrintable<'a> for SampledImageType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        todo!()
-    }
-}
-
-/// Unsampled image type
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct ImageType {
-    pub element_ty: ScalarType,
-    pub dim: ImageDimension,
-    pub ms: bool,
-}
-impl<'a> IRPrintable<'a> for ImageType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        todo!()
-    }
-}
-
 //--------------------------------------------------------------------------------------------------
 /// Function type
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]

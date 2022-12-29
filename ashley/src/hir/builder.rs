@@ -4,7 +4,6 @@ use crate::{
         base::{ScalarType, ScalarTypeKind, UnitType, UnknownType},
     },
     hir::{
-        attr::{AttrInterner, BooleanAttr},
         Attr, AttributeBase, Cursor, FloatAttr, HirCtxt, IntegerAttr, Location, Operation, OperationConstraint,
         OperationData, OperationId, RegionData, RegionId, StringAttr, Value, ValueId, ValueKind,
     },
@@ -286,3 +285,4 @@ macro_rules! build_operation {
 }
 use crate::{diagnostic::Diagnostics, hir::OperationCreateInfo};
 pub use build_operation;
+use crate::utils::interner::{AttrInterner, BooleanAttr};

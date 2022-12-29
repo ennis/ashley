@@ -4,6 +4,19 @@ Goals of the IR. Automatization/abstraction of tedious tasks when dealing with G
 Useful for early-stage exploration, when the graphics pipeline is not clear yet: need to quickly explore different strategies for using the GPU, but massive amount of boilerplate greatly increases iteration times and developer dissatisfaction.
 
 
+== Goals
 
-
+. *Abstract away resource binding and API boilerplate*
+. *Remove boilerplate in shaders*
+** Make it easy to do program transformations on the IR rather than on an AST
+. *Reduce iteration times by making more things editable at runtime*
+** like an effect system
+. *Things that affect the rendering should be closer together in the code*
+** don't want to go into application code to change the blending state for the shader I'm editing: it should be next to the shader, or even better, in the shader code.
+. *I don't want to deal with shader permutations for different kinds of geometry  (static objects, skinned objects, deformations, subdivision surfaces...)*
+** Geometry processing and fragment shading should be separate concerns
+** I should be able to mix-and-match different geometry types with different materials without having to handle a ton of #defines in code
+. *I want it to be able to generate optimized submission plans for complex scenes*
+** E.g. minimize state transitions, descriptor changes
+** A bit unclear for now
 

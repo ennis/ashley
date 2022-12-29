@@ -1,14 +1,14 @@
-mod attr;
 mod builder;
 pub mod constraint;
 mod list;
 mod print;
 mod visit;
+mod types;
+mod op;
 
 use crate::{
     diagnostic::{DiagnosticBuilder, Diagnostics},
     hir::{
-        attr::AttrInterner,
         list::{List, ListNode},
     },
 };
@@ -20,35 +20,62 @@ use std::{
     num::NonZeroU32,
     ops::{Bound, Deref, DerefMut, RangeBounds},
 };
+use crate::diagnostic::SourceLocation;
+use crate::hir::op::Op;
+use crate::hir::types::TypeImpl;
+pub use crate::utils::interner::{Attr, AttributeBase, BooleanAttr, FloatAttr, IntegerAttr, Location, StringAttr};
+use crate::utils::interner::{AttrInterner, Interner};
 
 pub use self::{
-    attr::{Attr, AttributeBase, BooleanAttr, FloatAttr, IntegerAttr, Location, StringAttr},
-    builder::{build_operation, operation_format, operation_formats, Builder},
-    constraint::{operation_constraint, AttrConstraint, OperationConstraint, RegionConstraint, ValueConstraint, MatchCtxt},
-    print::{print_hir_region_html, write_hir_html_file, write_ir, IRPrintable, IRPrinter, IRSyntaxElem, ToIRSyntax},
+    builder::{build_operation, Builder, operation_format, operation_formats},
+    constraint::{AttrConstraint, MatchCtxt, operation_constraint, OperationConstraint, RegionConstraint, ValueConstraint},
+    print::{IRPrintable, IRPrinter, IRSyntaxElem, print_hir_region_html, ToIRSyntax, write_hir_html_file, write_ir},
     visit::{IRVisitable, Visit},
 };
 
 //--------------------------------------------------------------------------------------------------
 
-/*/// Definition of an operation.
-///
-/// Describes the format of an operation, its opcode, and printing
-/// Those are statically registered with the TODO macro.
-pub struct OperationDef {
-    pub mnemonic: &'static str,
-    pub opcode: Opcode,
+/// Byte-span source location attribute.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Location {
+    /// An actual location in source code.
+    Source(SourceLocation),
+    /// Represents an unknown location.
+    Unknown,
 }
 
-impl OperationDef {
-    pub const fn new(opcode: Opcode, mnemonic: &'static str) -> OperationDef {
-        OperationDef { mnemonic, opcode }
+impl Location {
+    pub fn to_source_location(&self) -> Option<SourceLocation> {
+        match self {
+            Location::Source(loc) => Some(*loc),
+            Location::Unknown => None,
+        }
     }
 }
 
-inventory::collect!(OperationDef);*/
+impl Default for Location {
+    fn default() -> Self {
+        Location::Unknown
+    }
+}
+
+impl<'a> IRPrintable<'a> for Location {
+    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
+        match self {
+            Location::Source(src_loc) => {
+                write_ir!(printer, "loc(", *src_loc, ")");
+            }
+            Location::Unknown => {
+                write_ir!(printer, "loc(?)");
+            }
+        }
+    }
+}
+
 
 //--------------------------------------------------------------------------------------------------
+
+
 macro_rules! id_types {
     ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
         $(
@@ -90,15 +117,19 @@ macro_rules! id_types {
     };
 }
 
+// Define the handle types for elements in the context arrays
 id_types! {
-    /// Region index.
+    /// Handle to a HIR region.
     pub struct RegionId;
 
-    /// Operation index;
+    /// Handle to a HIR operation.
     pub struct OperationId;
 
-    /// Value index.
+    /// Handle to a HIR value.
     pub struct ValueId;
+
+    /// Interned handle to a HIR type.
+    pub struct Type;
 }
 
 impl ValueId {
@@ -127,44 +158,14 @@ impl OperationId {
         T::try_match(&mcx, *self)
     }
 
-    /// Returns the operation mnemonic string.
-    pub fn mnemonic(&self, ctxt: &HirCtxt) -> &'static str {
-        ctxt.ops[*self].data.opcode
+    /// Returns a pointer to the underlying op.
+    pub fn op(&self, ctxt: &HirCtxt) -> &Op {
+        &ctxt.ops[*self].data.op
     }
 
-    /// Returns the first operand.
-    pub fn lhs(&self, ctxt: &HirCtxt) -> Option<ValueId> {
-        self.operand(ctxt, 0)
-    }
-
-    /// Returns the second operand.
-    pub fn rhs(&self, ctxt: &HirCtxt) -> Option<ValueId> {
-        self.operand(ctxt, 1)
-    }
-
-    /// Returns an operand by index.
-    pub fn operand(&self, ctxt: &HirCtxt, index: usize) -> Option<ValueId> {
-        ctxt.ops[*self].data.operands.get(index).cloned()
-    }
-
-    /// Returns this operation's operands.
-    pub fn operands<'ir>(&self, ctxt: &HirCtxt<'ir>) -> &'ir [ValueId] {
-        ctxt.ops[*self].data.operands
-    }
-
-    /// Returns a result by index.
-    pub fn result(&self, ctxt: &HirCtxt, index: usize) -> Option<ValueId> {
-        ctxt.ops[*self].data.results.get(index).cloned()
-    }
-
-    /// Returns this operation's results.
-    pub fn results<'ir>(&self, ctxt: &HirCtxt<'ir>) -> &'ir [ValueId] {
-        ctxt.ops[*self].data.results
-    }
-
-    /// Returns this operation's first region
-    pub fn regions<'ir>(&self, ctxt: &HirCtxt<'ir>) -> &'ir [RegionId] {
-        ctxt.ops[*self].data.regions
+    /// Returns a mutable pointer to the underlying op.
+    pub fn op_mut<'a, 'ir>(&self, ctxt: &'a mut HirCtxt<'ir>) -> &'a mut Op<'ir> {
+        &mut ctxt.ops[*self].data.op
     }
 
     /// Returns a range of operands.
@@ -202,13 +203,31 @@ impl RegionId {
 
 //--------------------------------------------------------------------------------------------------
 
+/// Operation linked list nodes.
+pub type Operation<'ir> = ListNode<OperationId, OperationData<'ir>>;
+
+/// Data associated to an operation.
+#[derive(Copy, Clone, Debug)]
+pub struct OperationData<'ir> {
+    /// Operation kind
+    op: Op<'ir>,
+    /// Operands
+    operands: &'ir mut [ValueId],
+    /// Results:
+
+    /// Location
+    location: Location,
+    /// Parent region
+    region: RegionId,
+}
+
 /// Region definition.
 #[derive(Clone, Debug)]
-pub struct RegionData<'hir> {
+pub struct RegionData {
     /// Values representing the region arguments.
-    pub arguments: &'hir [ValueId],
+    pub arguments: Vec<ValueId>,
     /// Ordered list of operations in the region.
-    pub ops: List<OperationId, OperationData<'hir>>,
+    pub ops: List<OperationId, OperationData>,
 }
 
 /// The kind of value represented in a `Value`.
@@ -225,21 +244,21 @@ pub enum ValueKind {
 /// Represents an immutable value in the HIR.
 /// For now, there are two kinds of represented values: operation results (the most common), and region arguments.
 #[derive(Debug)]
-pub struct Value<'hir> {
+pub struct Value {
     /// The type of the value.
-    ty: Attr<'hir>,
+    ty: Type,
     /// Value kind.
     kind: ValueKind,
 }
 
-impl<'hir> Value<'hir> {
+impl Value {
     /// Creates a new value representing the result of an operation.
     ///
     /// # Arguments
     /// * op the operation producing the result
     /// * index the index of the result
     /// * ty value type
-    pub fn result(op: OperationId, index: u32, ty: Attr<'hir>) -> Value<'hir> {
+    pub fn result(op: OperationId, index: u32, ty: Type) -> Value {
         Value {
             ty,
             kind: ValueKind::OpResult(op, index),
@@ -252,7 +271,7 @@ impl<'hir> Value<'hir> {
     /// * region the region owning the argument
     /// * index the index of the region argument
     /// * ty value type
-    pub fn region_argument(reg: RegionId, index: u32, ty: Attr<'hir>) -> Value<'hir> {
+    pub fn region_argument(reg: RegionId, index: u32, ty: Type) -> Value {
         Value {
             ty,
             kind: ValueKind::RegionArg(reg, index),
@@ -339,9 +358,10 @@ impl<'hir> OperationCreateInfo<'hir> {
 /// It holds regions, values, operations, types and attributes.
 pub struct HirCtxt<'hir> {
     pub(crate) arena: &'hir HirArena,
-    pub(crate) interner: AttrInterner<'hir>,
-    pub(crate) attributes: Vec<Attr<'hir>>,
-    pub values: id_arena::Arena<Value<'hir>, ValueId>,
+
+    pub(crate) types_interner: Interner<TypeImpl, Type>,
+    pub types: id_arena::Arena<TypeImpl, Type>,
+    pub values: id_arena::Arena<Value, ValueId>,
     pub regions: id_arena::Arena<RegionData<'hir>, RegionId>,
     pub ops: id_arena::Arena<Operation<'hir>, OperationId>,
 }
@@ -501,44 +521,13 @@ impl<'hir> HirCtxt<'hir> {
     }
 }
 
-pub type Operation<'hir> = ListNode<OperationId, OperationData<'hir>>;
-
-/// Definition of an operation.
-#[derive(Copy, Clone, Debug)]
-pub struct OperationData<'hir> {
-    // 8 + 16 + 16 + 16 + 16 + 24 = 96 bytes per instruction + 8 bytes for links
-    pub opcode: &'static str,
-    /// Attributes.
-    pub attributes: &'hir [Attr<'hir>],
-    /// Operands.
-    pub operands: &'hir [ValueId],
-    /// Results of the operation.
-    pub results: &'hir [ValueId],
-    /// Child regions.
-    pub regions: &'hir [RegionId],
-    pub location: Location,
-}
-
-impl<'hir> Default for OperationData<'hir> {
-    fn default() -> Self {
-        OperationData {
-            opcode: "undef",
-            attributes: &[],
-            operands: &[],
-            results: &[],
-            regions: &[],
-            location: Location::default(),
-        }
-    }
-}
-
 //--------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use crate::{
         dialect::base::{FunctionType, ScalarType, ScalarTypeKind},
-        hir::{print_hir_region_html, HirArena, HirCtxt},
+        hir::{HirArena, HirCtxt, print_hir_region_html},
     };
     use std::{fs::File, io::Write, path::PathBuf};
 
@@ -550,166 +539,3 @@ mod tests {
 
     fn attr_lifetime_test() {}
 }
-
-// entry point:
-// gets ctxt: HitCtxt<'hir>, operation ID
-//
-// ctxt[op].data...
-// ctxt[r].data...
-// ctxt[v]
-// ctxt.remove(...)
-//
-//
-
-// e.g.
-//
-// scf.select  <condition>, <region arguments ...> { true_region } else { false_region }
-// scf.loop <condition>, <region arguments ...>
-//
-// scf.loop %v4 (%r1 <- %v0, %r2 <- %v1) {
-//
-// }
-//
-// scf.if %v74 (
-//      then { scf.yield v75 }
-//      else { (v77, v78) -> ... }
-// )
-//
-// Region inputs
-// Issue: given an SSA value id, go back to the instruction that produced it? (def-use)
-
-// Block == Control region
-// Inside blocks: operations that define a sub-control region:
-// * select (two subregions)
-// * loop (one subregion)
-//
-// RVSDG:
-// * regions have inputs (visible variables)
-//    * and outputs (made visible to parent region)
-// * theta regions (loops): have a set of loop variables -> region values
-//
-
-/*inst!{
-
-    %0 = 1
-    %1 = vec2(...)
-
-    (%18, %19) = loop (%2 = %0, %3 = %1)  {
-
-        break (%2, %3)
-
-        // specify new values for %2 and %3
-        continue (...)
-    } while
-
-}*/
-
-// checks when inserting an instruction
-// - check that SSA value ID is valid and accessible
-// -
-
-/*instruction!(
-    IAdd <0, "add"> {lhs, rhs} -> {0} attr {} region {}
-    Func<0, "func">
-);
-
-// turns into
-
-pub struct IAdd<'hir> {
-    instr: &'hir Instr<'hir>,
-}
-
-impl<'hir> IAdd<'hir> {
-    pub fn lhs(&self) -> ValueId {
-        self.instr.operands[0]
-    }
-
-    pub fn rhs(&self) -> ValueId {
-        self.instr.operands[1]
-    }
-}
-
-#[derive(Default)]
-pub struct IAddBuilder {
-    location: Span,
-    lhs: ValueId,
-    rhs: ValueId,
-}
-
-impl IAddBuilder {
-    pub fn lhs(mut self, value: ValueId) -> Self {
-    }
-
-    pub fn rhs(mut self, value: ValueId) -> Self {
-        let block_id = ...;
-        let instr = ...;
-        let lhs = ctx.const_val(0);
-        let rhs = ctx.const_val(1);
-        IAdd::build(&ctx).lhs(...).rhs(...).location().append(block_id);
-    }
-
-    pub fn append(mut self, block: BlockId) -> ValueId {
-    }
-}
-
-pub trait InstrDesc<'hir> {
-    const OPCODE: Opcode;
-    fn instr(&self) -> &'hir Instr<'hir>;
-}
-
-impl<'hir> InstrDesc<'hir> for IAdd<'hir> {
-    const OPCODE: Opcode = Opcode(0,0);
-
-    fn instr(&self) -> &'hir Instr<'hir> {
-        self.instr
-    }
-}
-*/
-
-// Goals:
-// * easy to modify / patch / transform functions
-// * examples of transformations:
-//      * lowering closures / monomorphization (patch function definitions? clone functions, patch call sites)
-//           * can also do the transformation in the backend
-//      * transform snippets into pure functions
-//      * inlining: insert blocks in the middle of functions
-//      * constant folding / uniform folding (replace expressions, remove statements?)
-//      * instrumentation (insert probes to dump the value of a variable in a shader) (insert statements, insert shader interfaces)
-//           -> HIR expressions have debugging info? markers? metadata?
-//
-// Take note of the execution contexts:
-// * compute shaders with access to shared memory in the workgroup
-// * subgroup "voting" operations
-//
-// Modules and individual functions can have execution contexts, e.g. run in compute, requesting a specific workgroup size.
-// In this case, it's up to the host "composer" to translate that to draws/dispatches.
-//
-// Eventually, individual *values* within a function may have different execution contexts/variabilities
-//  -> within a function, have both vertex & fragment values
-//
-// Can go even crazier and represent whole graphs (rendering pipelines) with this language.
-//  -> advantages?
-
-// Types:
-// - basic data types, usable inside and outside of shaders
-// - image types (float/int image 1D/2D/3D/Cube)
-//      - can be sampled inside shaders, or written to in some instances
-
-// Operations:
-// - "stages" shader stages w/ inputs and outputs as global variables
-//      - defines a scope
-//      - contain "function" ops
-//      - contain global variables only visible in scope
-//      - can access functions in the parent scope
-// - functions
-// - one function is the entry point
-//
-// - Fixed-function ops:
-//      - rasterizer config
-//      - gpu_rasterize (rasterizer cfg, vertex attrib cfg
-
-// Lowering passes:
-// -
-
-// Optimization passes:
-// Q:

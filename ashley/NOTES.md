@@ -1033,3 +1033,27 @@ Again, MLIR is there, but it's such a pain to build something with it outside th
 -> would need to write 90% of the logic in C++
 
 YAGNI: Don't write a reusable or extensible infrastructure until we have multiple IRs: it will probably be completely useless and need to be redesigned anyway
+
+
+# Non-extensible IR: storage of operations
+- No need for type-erased attributes anymore: drop ArenaAny
+- Interners per-type, as needed
+- Gap buffer for regions?
+
+Should we switch to Arcs instead of arena allocation?
+For types, yes.
+
+Operations in a SlotMap, organized in a linked list
+
+Value ID -> producing operation + containing region
+
+Operation storage:
+- linked-list + concrete structs allocated in Arena
+
+Keep a generic representation for Operations?
+Generic representations:
+- make generic operations easier, like traversing operands and results, traversing use chains, replacing values
+
+
+
+

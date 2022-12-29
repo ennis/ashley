@@ -4,7 +4,7 @@
 
 Scenes hold 3D _objects_, organized in a transform hierarchy. Each object has one or more _draw items_, which correspond to a part of the object drawn in a specific way.
 
-Draw items and objects have arbitrary parameter blocks attached to them. Typically they contain material parameters for the draw item or object.
+Draw items and objects have arbitrary parameter blocks attached to them. Typically, they contain material parameters for the draw item or object.
 
 Each draw item is represented as an array of vertices, each vertex having at least a position, and optional attributes, including but not limited to normals, texcoords, tangents, colors. The set of available vertex attributes is the same for all vertices in a draw item.
 
@@ -14,13 +14,167 @@ Vertices in draw items and parameter blocks are immutable, and allow structural 
 
 == Fetching scene data
 
-In short: you request a set of vertex attributes and specific parameter blocks, and you get a region with values that represent draw items and param blocks, which you can use like uniforms in a shader.
+There are two kinds of data to request from a scene: the _geometry_ and the _attributes_.
 
-[NOTE]
-.Separate value domains
-====
-As a guiding principle, it should be impossible in the HIR to have two variables in the same scope with incompatible domains (e.g. a vertex domain value and a fragment domain value in the same scope, or two vertex domain values from different draw calls). This means that separate domains (without an ordering between them) end up in separate, non-nested regions.
-====
+
+=== Geometry
+The geometry is defined by vertex positions and the topology (how the vertices are assembled into triangles). The topology is usually defined by the primitive mode (triangles, triangle strips, etc.) and an optional index buffer, but it can be more complex in case of tessellation.
+
+=== Attributes
+The attributes are all the other bits of data that are relevant for the rendering operation: additional vertex attributes, transform, material parameters, camera information. They are organized in a hierarchy of _domains_:
+
+* Vertex: attributes attached to vertices
+* Face: attributes attached to faces
+* Edges: attributes attached to edges
+* Surface: attributes attached to points on a surface
+* Fragment: attributes attached to a rasterized fragment of a primitive
+* Item: attributes attached to individual draw items
+* Object: attached to the object being drawn
+* TimeVarying: constant across all objects in the scene
+
+These domains are partially ordered, meaning that values of an _enclosing_ domain can be used in a _lower_ domain. For instance: TimeVarying values can be used everywhere an Item-domain value is expected (the same value will be used for all items), or Item-domain values can be used in place of a vertex-domain value.
+
+[mermaid]
+.Domain partial order
+....
+graph TD;
+    TimeVarying-->Object;
+    Object-->Item;
+    Item-->Surface & Vertex & Face & Edge & Fragment;
+....
+
+
+A rendering operation requests attributes from the scene, each in a specific domain. The system will then try to fulfill those requests using the data available from the scene, possibly by using data from a higher domain than the one requested.
+Here's an example, with a straw-man syntax:
+
+----
+fetch.vertex.vec3   "normal";     // request a vertex-varying normal
+fetch.vertex.vec3   "color";      // a vertex-varying color
+fetch.surface.float "roughness";  // a surface-varying roughness value
+fetch.item.float    "opacity";
+----
+
+The `color` attribute can be fulfilled by either a color attribute defined on the vertices of a mesh, while `opacity` can only be fulfilled by an Item-domain value or higher.
+
+Some of these domains correspond to specific stages of the rendering pipeline. For example, the Vertex domain corresponds to the vertex processing stage, and the Fragment domain corresponds to the fragment processing stage. Item, Object and TimeVarying domains can be seen as uniforms with different update frequencies.
+
+NOTE: The face, surface and edge domains are a bit more complicated, so we'll ignore them for now.
+
+
+|===
+|Domain  |Pipeline stage
+
+|Vertex  |Vertex processing
+|Fragment |Fragment processing
+|Item    |Uniform
+|Object  |Uniform
+|TimeVarying    |Uniform
+|Face |N/A
+|Edge |N/A
+|Surface |N/A
+|===
+
+
+== Graphics and compute pipelines
+
+They mimic the GPU pipeline.
+
+.Straw man syntax of a graphics pipeline definition
+----
+
+graphics_pipeline {
+    // ...
+    // omitted: data requests from the scene
+    // ...
+
+    // Declare interfaces between stages
+    %v_normal    = vertex.output.vec3
+    %v_texcoord  = vertex.output.vec2
+
+    // vertex shader
+    vertex {
+        // ...
+        %v_normal   = ...
+        %v_texcoord = ...
+    }
+
+    // rasterization state
+    rasterization_state {
+        // cull mode, conservative raster
+    }
+
+    viewport {
+        // x, y, w, h
+    }
+
+    // fragment shader
+    fragment {
+        %f_normal    = frag.interp %v_normal
+        %f_texcoord  = frag.interp %v_texcoord
+
+        // output to images
+    }
+}
+
+----
+
+Decision: a graphics pipeline section defines **one** unique graphics pipeline. Can't define combinations / permutations of stages. If this is necessary, then just create as many pipelines as necessary and copy the shader regions (or use functions). It's not something that is meant to be written by hand anyway.
+
+
+
+== Old stuff
+
+=== Computations
+
+It is possible to perform calculations on domain values, but they must happen in a region where the domain of the calculation is known (called a _domain region_).
+Within a domain region of domain D, only values within D or higher can be accessed. They can be seen as shader stages.
+
+NOTE: It might be possible to decompose a program into separate domain regions automatically. In this case, the input would be a _mixed-domain program_ manipulating values from different domains in the same region. A lowering pass would then convert it into separate programs.
+
+
+
+=== Rasterization
+
+Rasterization ops take one or more primitive streams (in clip space), rasterizes them into fragments and performs fragment processing on them. They define a region in which fragment-domain values can be processed (equivalent to a fragment shader).
+
+----
+// strawman syntax
+
+rasterize %primitive_stream {
+    // fragment processing region
+}
+----
+
+
+=== Fragment processing
+
+==== Interpolation
+A fragment processing region has access to the vertex-varying values in the enclosing rendering operation, and can perform interpolation on them to get values in the fragment domain.
+
+----
+// strawman syntax
+%v_texcoord = fetch.vertex.vec2  "texcoord";
+
+rasterize %primitive_stream {
+    %f_texcoord = interp.linear      %v_texcoord;
+}
+----
+
+Here `v_texcoord` is turned into a surface-domain value (`f_texcoord`) via linear interpolation on the primitive.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 The structure of the HIR will look like this:
 
@@ -43,7 +197,7 @@ There are predefined vertex attributes.
 UNSURE: Conceptually, even per-object or per-material values like the object transform appear as vertex attribute streams. This does not mean that they will be passed to the final shaders as vertex data.
 
 [NOTE.question]
-.What about fragment shaders? If all attributes are assimilated to vertex streams, then
+.What about fragment shaders? If all attributes are assimilated to vertex streams, then they can't be read in
 ====
 ====
 
@@ -87,3 +241,6 @@ The fragment program can read from, and write to, external resources that are vi
 - images
 - texture arrays (implemented as descriptor arrays)
 - buffers
+
+== Lowering
+

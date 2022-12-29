@@ -52,10 +52,11 @@ pub struct SelectOp {
 #[derive(Debug)]
 pub struct LoopOp<'a> {
     pub body: RegionId,
+    pub iter_args: &'a mut [ValueId],
 }
 
 pub struct CallOp<'a> {
-    pub function: ValueId,
+    pub function: FunctionId,
     pub arguments: &'a mut [ValueId],
     pub result: ValueId,
 }

@@ -1,6 +1,14 @@
-= HIR primer
+= HIR developer docs
 
-== HIR structure
+== HIR entities
+
+Here are the different entities described by the HIR:
+
+* *Regions*, blocks of operations with arguments
+* *Functions*
+* *Pipelines*, configuration information for GPU pipelines (graphics & compute)
+** Pipelines are an ordered collection of *programs*, that _require_ input values from earlier programs and _provide_ values for later programs
+** Each program is supposed to run in a particular shader stage, but this can be inferred from inputs and outputs
 
 === Values
 Describe values, they have an associated type, etc.
@@ -16,6 +24,10 @@ Some built-in types. Types are attributes.
 == Rust API
 
 HIR context: HirCtxt; object IDs and arenas; Attribute interning; HIR builder;
+
+
+HIR objects are stored in HirArena and HirCtxt. HirCtxt keeps track of all objects, although some are allocated in the HirArena arena allocator. The two must be separate so that there's no self-borrowing on HirCtxt.
+
 
 == Extending the HIR
 

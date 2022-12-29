@@ -128,6 +128,9 @@ id_types! {
     /// Handle to a HIR value.
     pub struct ValueId;
 
+    /// Handle to a HIR function.
+    pub struct FunctionId;
+
     /// Interned handle to a HIR type.
     pub struct Type;
 }
@@ -211,10 +214,6 @@ pub type Operation<'ir> = ListNode<OperationId, OperationData<'ir>>;
 pub struct OperationData<'ir> {
     /// Operation kind
     op: Op<'ir>,
-    /// Operands
-    operands: &'ir mut [ValueId],
-    /// Results:
-
     /// Location
     location: Location,
     /// Parent region
@@ -223,7 +222,7 @@ pub struct OperationData<'ir> {
 
 /// Region definition.
 #[derive(Clone, Debug)]
-pub struct RegionData {
+pub struct RegionData<'ir> {
     /// Values representing the region arguments.
     pub arguments: Vec<ValueId>,
     /// Ordered list of operations in the region.
@@ -301,56 +300,54 @@ pub enum Cursor {
     Before(RegionId, OperationId),
 }
 
-struct RegionCreateInfo<'hir> {
-    arguments: Vec<Attr<'hir>>,
+/// Function argument
+#[derive(Copy, Clone, Debug)]
+pub struct FunctionParameter<'a> {
+    /// Name of the parameter, for debugging purposes only
+    pub name: &'a str,
+    /// Type of the parameter
+    pub ty: Type,
 }
 
-/// Builder object used to initialize a new operation.
-pub struct OperationCreateInfo<'hir> {
-    opcode: &'static str,
-    attributes: Vec<Attr<'hir>>,
-    operands: Vec<ValueId>,
-    result_types: Vec<Attr<'hir>>,
-    regions: Vec<RegionCreateInfo<'hir>>,
-    location: Location,
+/// HIR functions.
+#[derive(Debug)]
+pub struct Function<'a> {
+    pub parameter: &'a mut [FunctionParameter<'a>],
+    pub return_ty: Type,
+    pub name: &'a str,
+    pub body: RegionId,
 }
 
-impl<'hir> OperationCreateInfo<'hir> {
-    /// Creates a new `OperationCreateInfo` object.
-    ///
-    /// The object initially has zero attributes, operands, results and regions.
-    pub fn new(opcode: &'static str, location: Location) -> OperationCreateInfo<'hir> {
-        OperationCreateInfo {
-            opcode,
-            attributes: vec![],
-            operands: vec![],
-            result_types: vec![],
-            regions: vec![],
-            location,
-        }
-    }
 
-    /// Adds attributes to the created operation.
-    pub fn add_attributes(&mut self, attrs: impl AsRef<[Attr<'hir>]>) {
-        self.attributes.extend_from_slice(attrs.as_ref())
-    }
+pub struct RequiredValue<'a> {
+    pub name: &'a str,
+    pub ty: Type,
+    pub fulfillment: Option<ValueId>,
+}
 
-    /// Adds operands to the created operation.
-    pub fn add_operands(&mut self, operands: impl AsRef<[ValueId]>) {
-        self.operands.extend_from_slice(operands.as_ref())
-    }
+pub struct ProvidedValue<'a> {
+    pub name: &'a str,
+    pub ty: Type,
+    pub value: ValueId,
+}
 
-    /// Adds operation result types.
-    ///
-    /// This will cause additional result values to be created for the operation.
-    pub fn add_result_types(&mut self, types: impl AsRef<[Attr<'hir>]>) {
-        self.result_types.extend_from_slice(types.as_ref());
-    }
+pub enum ProgramKind {
+    Generic(RegionId),
+    Vertex(RegionId),
+    Fragment(RegionId),
+    Compute(RegionId),
+    Rasterize,
+}
 
-    /// Adds a new region to the operation.
-    pub fn add_region(&mut self, arg_types: Vec<Attr<'hir>>) {
-        self.regions.push(RegionCreateInfo { arguments: arg_types })
-    }
+/// Pipeline program
+pub struct Program<'a> {
+    pub required: Vec<RequiredValue<'a>>,
+    pub provided: Vec<ProvidedValue<'a>>,
+    pub kind: ProgramKind,
+}
+
+pub struct Pipeline {
+    pub programs: Vec<ProgramId>,
 }
 
 /// Container for HIR entities.
@@ -361,6 +358,10 @@ pub struct HirCtxt<'hir> {
 
     pub(crate) types_interner: Interner<TypeImpl, Type>,
     pub types: id_arena::Arena<TypeImpl, Type>,
+    pub functions: id_arena::Arena<Function<'hir>, FunctionId>,
+    pub programs: id_arena::Arena<Program, ProgramId>,
+    pub pipelines: id_arena::Arena<Pipeline<'a>, PipelineId>,
+
     pub values: id_arena::Arena<Value, ValueId>,
     pub regions: id_arena::Arena<RegionData<'hir>, RegionId>,
     pub ops: id_arena::Arena<Operation<'hir>, OperationId>,

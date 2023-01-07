@@ -1,16 +1,9 @@
-use std::fmt;
-use std::num::NonZeroU32;
 use std::sync::Arc;
-//use crate::hir::MatchCtxt;
-use crate::{
-    hir::{HirCtxt, IRPrintable, IRPrinter, IRSyntaxElem, IRVisitable},
-    write_ir,
-};
-use crate::hir::{AttrConstraint, Type};
+use crate::hir::{Type};
 
 /// Scalar type kind.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ScalarTypeKind {
+pub enum ScalarType {
     Int,
     UnsignedInt,
     Float,
@@ -18,113 +11,31 @@ pub enum ScalarTypeKind {
     Bool,
 }
 
-impl ScalarTypeKind {
+impl ScalarType {
     pub fn display(&self) -> &'static str {
         match *self {
-            ScalarTypeKind::Int => "int",
-            ScalarTypeKind::UnsignedInt => "uint",
-            ScalarTypeKind::Float => "float",
-            ScalarTypeKind::Double => "double",
-            ScalarTypeKind::Bool => "bool",
+            ScalarType::Int => "int",
+            ScalarType::UnsignedInt => "uint",
+            ScalarType::Float => "float",
+            ScalarType::Double => "double",
+            ScalarType::Bool => "bool",
         }
     }
 }
 
-/// Scalar type.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ScalarType(pub ScalarTypeKind);
-impl<'a> IRPrintable<'a> for ScalarType {
-    fn is_inline(&self) -> bool {
-        true
-    }
-
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        match self.0 {
-            ScalarTypeKind::Int => printer.token("int"),
-            ScalarTypeKind::UnsignedInt => printer.token("uint"),
-            ScalarTypeKind::Float => printer.token("float"),
-            ScalarTypeKind::Double => printer.token("double"),
-            ScalarTypeKind::Bool => printer.token("bool"),
-        }
-    }
-}
-
-/// Vector type (element type + size).
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct VectorType(pub ScalarTypeKind, pub u8);
-impl<'a> IRPrintable<'a> for VectorType {
-    fn is_inline(&self) -> bool {
-        true
-    }
-
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        let n = self.1;
-        match self.0 {
-            ScalarTypeKind::Int => printer.token(&format!("ivec{n}")),
-            ScalarTypeKind::UnsignedInt => printer.token(&format!("uvec{n}")),
-            ScalarTypeKind::Float => printer.token(&format!("vec{n}")),
-            ScalarTypeKind::Double => printer.token(&format!("dvec{n}")),
-            ScalarTypeKind::Bool => printer.token(&format!("bvec{n}")),
-        }
-    }
-}
-
-/// Matrix type (element type + row count + column count).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct MatrixType(pub ScalarTypeKind, pub u8, pub u8);
-impl<'a> IRPrintable<'a> for MatrixType {
-    fn is_inline(&self) -> bool {
-        true
-    }
-
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        let (r, c) = (self.1, self.2);
-        match self.0 {
-            ScalarTypeKind::Int => printer.token(&format!("imat{r}x{c}")),
-            ScalarTypeKind::UnsignedInt => printer.token(&format!("umat{r}x{c}")),
-            ScalarTypeKind::Float => printer.token(&format!("mat{r}x{c}")),
-            ScalarTypeKind::Double => printer.token(&format!("dmat{r}x{c}")),
-            ScalarTypeKind::Bool => printer.token(&format!("bmat{r}x{c}")),
-        }
-    }
-}
-
-/// Array type (element type + size).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
-pub struct ArrayType(pub Type, pub u32);
-
-impl<'a> IRPrintable<'a> for ArrayType {
-    fn is_inline(&self) -> bool {
-        true
-    }
-
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        write_ir!(printer, "array<", self.0, ",", self.1, ">");
-    }
-}
 
 /// Field of a struct type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Field {
     pub ty: Type,
     pub name: String,
 }
 
 /// Structure type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, ArenaAny)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StructType {
     pub name: String,
     pub fields: Vec<Field>,
-}
-
-impl<'a> IRPrintable<'a> for StructType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        write_ir!(printer, "struct<", self.name);
-        for f in self.fields {
-            write_ir!(printer, f.name, ":", f.ty, ",");
-        }
-        write_ir!(printer, ">");
-    }
 }
 
 impl StructType {
@@ -142,39 +53,15 @@ impl StructType {
 /// Tuple type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TupleType(pub Vec<Type>);
-impl<'a> IRPrintable<'a> for TupleType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        write_ir!(printer, "tuple<");
-        for ty in self.0 {
-            write_ir!(printer, *ty, ",");
-        }
-        write_ir!(printer, ">");
-    }
-}
 
 //--------------------------------------------------------------------------------------------------
-/// Function type
+
+/// Function or closure type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FunctionType {
     pub return_ty: Type,
     pub arg_types: Vec<Type>,
 }
-
-impl<'a> IRPrintable<'a> for FunctionType {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        write_ir!(printer, "fn<(");
-        let mut first = true;
-        for arg in self.arg_types {
-            if !first {
-                write_ir!(printer, ",");
-            }
-            write_ir!(printer, *arg);
-            first = false;
-        }
-        write_ir!(printer, ") -> ", self.return_ty, ">");
-    }
-}
-
 
 /// Dimensions of an image.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -208,108 +95,35 @@ impl ImageDimension {
 
 
 /// Sampled image type
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SampledImageType {
     pub sampled_ty: ScalarType,
     pub dim: ImageDimension,
     pub ms: bool,
 }
 
-impl SampledImageType {
-    pub fn display_glsl(&self) -> impl fmt::Display + '_ {
-        SampledImageTypeDisplayGlsl(self)
-    }
-}
-
-struct SampledImageTypeDisplayGlsl<'a>(&'a SampledImageType);
-
-impl<'a> fmt::Display for SampledImageTypeDisplayGlsl<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.0.sampled_ty {
-            PrimitiveType::Int => write!(f, "i")?,
-            PrimitiveType::UnsignedInt => write!(f, "u")?,
-            PrimitiveType::Double => write!(f, "d")?,
-            PrimitiveType::Bool => write!(f, "b")?,
-            _ => {}
-        }
-
-        write!(f, "texture")?;
-
-        match self.0.dim {
-            ImageDimension::Dim1D => write!(f, "1D")?,
-            ImageDimension::Dim2D => write!(f, "2D")?,
-            ImageDimension::Dim3D => write!(f, "3D")?,
-            ImageDimension::DimCube => write!(f, "Cube")?,
-            ImageDimension::Dim1DArray => write!(f, "1DArray")?,
-            ImageDimension::Dim2DArray => write!(f, "2DArray")?,
-        }
-
-        if self.0.ms {
-            write!(f, "MS")?
-        }
-
-        Ok(())
-    }
-}
-
 /// Unsampled image type
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ImageType {
     pub element_ty: ScalarType,
     pub dim: ImageDimension,
     pub ms: bool,
 }
 
-struct ImageTypeDisplayGlsl<'a>(&'a ImageType);
-
-impl<'a> fmt::Display for ImageTypeDisplayGlsl<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.0.element_ty {
-            PrimitiveType::Int => write!(f, "i")?,
-            PrimitiveType::UnsignedInt => write!(f, "u")?,
-            PrimitiveType::Double => write!(f, "d")?,
-            PrimitiveType::Bool => write!(f, "b")?,
-            _ => {}
-        }
-
-        write!(f, "image")?;
-
-        match self.0.dim {
-            ImageDimension::Dim1D => write!(f, "1D")?,
-            ImageDimension::Dim2D => write!(f, "2D")?,
-            ImageDimension::Dim3D => write!(f, "3D")?,
-            ImageDimension::DimCube => write!(f, "Cube")?,
-            ImageDimension::Dim1DArray => write!(f, "1DArray")?,
-            ImageDimension::Dim2DArray => write!(f, "2DArray")?,
-        }
-
-        if self.0.ms {
-            write!(f, "MS")?
-        }
-
-        Ok(())
-    }
-}
-
-impl ImageType {
-    pub fn display_glsl(&self) -> impl fmt::Display + '_ {
-        ImageTypeDisplayGlsl(self)
-    }
-}
 
 /// Describes the data type of a value.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TypeImpl {
     /// Void (or unit) type.
-    Void,
+    Unit,
     /// Scalar type.
     Scalar(ScalarType),
-    /// Vector type (ty,size).
-    Vector(VectorType),
-    /// Matrix type (ty,rows,cols).
-    Matrix(MatrixType),
-    /// Array type. (typedesc + length + stride)
-    Array(ArrayType),
+    /// Vector type (element type + size).
+    Vector(ScalarType, u8),
+    /// Matrix type (element type + row count + column count).
+    Matrix(ScalarType, u8, u8),
+    /// Array type (element type + size).
+    Array(Type, u32),
     /// Runtime array type. Array without a known length.
     RuntimeArray(Type),
     /// Structure type (array of (offset, type) tuples).
@@ -320,6 +134,8 @@ pub enum TypeImpl {
     Image(Arc<ImageType>),
     /// Pointer to data.
     Pointer(Type),
+    /// Function or closure type.
+    Function(Arc<FunctionType>),
     /// Sampler.
     Sampler,
     /// Shadow sampler (`samplerShadow`)

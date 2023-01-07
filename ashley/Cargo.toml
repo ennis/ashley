@@ -25,6 +25,8 @@ ashley-derive = { path = "../ashley-derive" }
 inventory = "0.3.2"
 html-escape = "0.2.12"
 ordered-float = "3.4.0"
+smallvec = "1.10.0"
+rspirv = "0.11.0"
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }

@@ -1,21 +1,13 @@
-//! AST lowering to HIR
+//! AST lowering to SPIR-V
 use crate::{
     diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation},
-    dialect::{
-        base,
-        base::{
-            FunctionType, MatrixType, ScalarType, ScalarTypeKind, TupleType, UnknownType,
-            VectorType,
-        },
-    },
-    hir,
-    hir::{Attr, Cursor, HirCtxt, IntegerAttr, Location, OperationId, RegionId, ValueId},
     syntax::{ast, ast::*, ArithOp, BinaryOp, LogicOp, SyntaxNode, SyntaxToken},
-    utils::DowncastExt,
 };
 use codespan_reporting::{diagnostic::Diagnostic, term, term::termcolor::WriteColor};
-use std::{any::Any, cell::Cell, collections::HashMap, io::ErrorKind};
-use crate::hir::Builder;
+use smallvec::SmallVec;
+use std::{any::Any, cell::Cell, collections::HashMap, io::ErrorKind, sync::Arc};
+
+use rspirv::dr::Builder;
 
 trait DiagnosticsExt {
     /// Emits a "missing generic argument" diagnostic.
@@ -45,262 +37,258 @@ impl DiagnosticsExt for Diagnostics {
 
 //--------------------------------------------------------------------------------------------------
 
-/// Attribute with an attached location
-struct AttrWithLoc<'hir>(Attr<'hir>, Location);
-
-//--------------------------------------------------------------------------------------------------
-
-/// Type definition.
-trait TypeDefinition<'hir> {
-    /// Instantiate the type with the given arguments.
-    fn instantiate(
-        &self,
-        ctx: &mut LowerCtxt,
-        args: &[AttrWithLoc<'hir>],
-        instantiation_loc: Location,
-    ) -> Option<Attr<'hir>>;
+#[derive(Copy, Clone, Debug)]
+enum GenericArgument {
+    Type(rspirv),
+    Constant(hir::ConstantImpl),
 }
 
 //--------------------------------------------------------------------------------------------------
 
-/// All builtin scalar types, like `f32`, `i32`, etc.
-struct BuiltinScalarTypeDefinition<'hir> {
-    kind: ScalarTypeKind,
-    cached: Cell<Option<Attr<'hir>>>,
+/*/// Function on an atomic value.
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AtomicFunction {
+    Add,
+    Subtract,
+    And,
+    ExclusiveOr,
+    InclusiveOr,
+    Min,
+    Max,
+    Exchange { compare: Option<Handle<Expression>> },
+}*/
+
+/// Built-in shader function for testing relation between values.
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RelationalFunction {
+    All,
+    Any,
+    IsNan,
+    IsInf,
+    IsFinite,
+    IsNormal,
 }
 
-impl<'hir> TypeDefinition<'hir> for BuiltinScalarTypeDefinition<'hir> {
-    fn instantiate(
-        &self,
-        ctx: &mut LowerCtxt,
-        args: &[AttrWithLoc<'hir>],
-        instantiation_loc: Location,
-    ) -> Option<Attr<'hir>> {
-        if !args.is_empty() {
-            // Should not have arguments
-            ctx.diag.extra_generic_arguments(instantiation_loc, 0, args.len());
-            return None;
-        }
-
-        if let Some(cached) = self.cached.get() {
-            return Some(cached);
-        }
-
-        let ty = ctx.ctxt.intern_attr(ScalarType(self.kind)).upcast();
-        self.cached.set(Some(ty));
-        Some(ty)
-    }
+/// Represents the result of function resolution: either a user-defined function or a builtin function.
+enum FunctionOrBuiltin {
+    Function(FunctionId),
+    BuiltinMath(MathFunction),
+    BuiltinRelational(RelationalFunction),
 }
 
-//--------------------------------------------------------------------------------------------------
-
-/// Vector types: `vec<ty,len>`
-struct BuiltinVectorTypeDefinition;
-
-impl<'hir> TypeDefinition<'hir> for BuiltinVectorTypeDefinition {
-    fn instantiate(
-        &self,
-        b: &mut Builder<'a, 'hir>,
-        ctx: &mut LowerCtxt,
-        args: &[AttrWithLoc<'hir>],
-        instantiation_loc: Location,
-    ) -> Option<Attr<'hir>> {
-        let inst_loc = instantiation_loc.to_source_location();
-
-        let diag_args_invalid = |ctx| {
-            ctx.diag
-                .error("invalid number of generic arguments")
-                .primary_label(
-                    inst_loc,
-                    "expected arguments of the form `<element-type, vector-length>`",
-                )
-                .emit();
-        };
-
-        let elem_type = if let Some(AttrWithLoc(scalar_type, loc)) = args.get(0) {
-            if let Some(ScalarType(elem_type)) = scalar_type.cast() {
-                *elem_type
-            } else {
-                ctx.diag
-                    .error("invalid vector element type")
-                    .primary_label(loc.to_source_location(), "")
-                    .note("expected a scalar type: `f32`, `i32`, `u32`, `bool`")
-                    .emit();
-                ScalarTypeKind::Float
-            }
-        } else {
-            diag_args_invalid(ctx);
-            return None;
-        };
-
-        let vector_length = if let Some(AttrWithLoc(vector_length, loc)) = args.get(1) {
-            if let Some(IntegerAttr(len)) = vector_length.cast() {
-                len as usize
-            } else {
-                ctx.diag
-                    .error("invalid vector size")
-                    .primary_label(loc.to_source_location(), "")
-                    .emit();
-                1
-            }
-        } else {
-            diag_args_invalid(ctx);
-            return None;
-        };
-
-        if args.len() > 2 {
-            diag_args_invalid(ctx);
-            return None;
-        }
-
-        let ty = match vector_length {
-            2 => ctx.ctxt.intern_attr(VectorType(elem_type, 2)),
-            3 => ctx.ctxt.intern_attr(VectorType(elem_type, 3)),
-            4 => ctx.ctxt.intern_attr(VectorType(elem_type, 4)),
-            _ => {
-                ctx.diag
-                    .error("invalid vector size")
-                    .primary_label(inst_loc, "expected 2, 3, or 4")
-                    .emit();
-                return None;
-            }
-        };
-
-        Some(ty.upcast())
-    }
-}
-
-/// Matrix types: `matrix<ty,rows,cols>`
-struct BuiltinMatrixTypeDefinition;
-
-impl<'hir> TypeDefinition<'hir> for BuiltinMatrixTypeDefinition {
-    fn instantiate(
-        &self,
-        ctx: &mut LowerCtxt,
-        args: &[AttrWithLoc<'hir>],
-        instantiation_loc: Location,
-    ) -> Option<Attr<'hir>> {
-        let inst_loc = instantiation_loc.to_source_location();
-
-        let diag_args_invalid = |ctx| {
-            ctx.diag
-                .error("invalid number of generic arguments")
-                .primary_label(
-                    inst_loc,
-                    "expected arguments of the form `<element-type, row-count, column-count>`",
-                )
-                .emit();
-        };
-
-        let elem_type = if let Some(AttrWithLoc(scalar_type, loc)) = args.get(0) {
-            if let Some(ScalarType(elem_type)) = scalar_type.cast() {
-                *elem_type
-            } else {
-                ctx.diag
-                    .error("invalid matrix element type")
-                    .primary_label(loc.to_source_location(), "")
-                    .note("expected a scalar type: `f32`, `i32`, `u32`")
-                    .emit();
-                ScalarTypeKind::Float
-            }
-        } else {
-            diag_args_invalid(ctx);
-            return None;
-        };
-
-        let (row_count, row_loc) = if let Some(AttrWithLoc(count, row_loc)) = args.get(1) {
-            if let Some(IntegerAttr(count)) = count.cast() {
-                (*count, *row_loc)
-            } else {
-                ctx.diag
-                    .error("invalid matrix row count")
-                    .primary_label(row_loc.to_source_location(), "")
-                    .emit();
-                (1, *row_loc)
-            }
-        } else {
-            diag_args_invalid(ctx);
-            return None;
-        };
-
-        let (column_count, column_loc) = if let Some(AttrWithLoc(count, column_loc)) = args.get(2) {
-            if let Some(IntegerAttr(count)) = count.cast() {
-                (*count, *column_loc)
-            } else {
-                ctx.diag
-                    .error("invalid matrix column count")
-                    .primary_label(column_loc.to_source_location(), "")
-                    .emit();
-                (1, *column_loc)
-            }
-        } else {
-            diag_args_invalid(ctx);
-            return None;
-        };
-
-        if args.len() > 3 {
-            diag_args_invalid(ctx);
-            return None;
-        }
-
-        let row_count_ok = row_count >= 2 && row_count <= 4;
-        let col_count_ok = column_count >= 2 && column_count <= 4;
-
-        if !row_count_ok || !col_count_ok {
-            if !row_count_ok {
-                ctx.diag
-                    .error("invalid matrix row count")
-                    .primary_label(row_loc, "expected 2,3, or 4")
-                    .emit();
-                return None;
-            }
-            if !col_count_ok {
-                ctx.diag
-                    .error("invalid matrix row count")
-                    .primary_label(column_loc, "expected 2,3, or 4")
-                    .emit();
-                return None;
-            }
-        }
-
-        let ty = ctx
-            .ctxt
-            .intern_attr(MatrixType(elem_type, row_count as u8, column_count as u8))
-            .upcast();
-        Some(ty)
-    }
-}
-
-//--------------------------------------------------------------------------------------------------
-
-trait Scope<'hir> {
-    /// Resolves a type or type constructor name.
-    fn resolve_type(&self, name: &str) -> Option<&dyn TypeDefinition<'hir>>;
+trait Scope {
+    /// Resolves a type name to a HIR type.
+    fn resolve_type(&self, name: &str) -> Option<hir::Type>;
+    /// Resolves a function name to a HIR function.
+    fn resolve_func(&self, name: &str) -> Option<hir::FunctionId>;
+    /// Resolves a constant name to a HIR constant.
+    fn resolve_const(&self, name: &str) -> Option<hir::Constant>;
 }
 
 /// Root scope containing primitive types & constants.
-struct BuiltinScope<'hir> {
-    ty_f32: hir::Attr<'hir>,
-    ty_f64: hir::Attr<'hir>,
-    ty_u32: hir::Attr<'hir>,
-    ty_i32: hir::Attr<'hir>,
+struct BuiltinScope {
+    ty_f32: hir::Type,
+    ty_f64: hir::Type,
+    ty_u32: hir::Type,
+    ty_i32: hir::Type,
+    ty_bool: hir::Type,
+    ty_f32x2: hir::Type,
+    ty_f32x3: hir::Type,
+    ty_f32x4: hir::Type,
+    ty_i32x2: hir::Type,
+    ty_i32x3: hir::Type,
+    ty_i32x4: hir::Type,
+    ty_u32x2: hir::Type,
+    ty_u32x3: hir::Type,
+    ty_u32x4: hir::Type,
+    ty_b1x2: hir::Type,
+    ty_b1x3: hir::Type,
+    ty_b1x4: hir::Type,
+    ty_texture_1d: hir::Type,
+    ty_texture_2d: hir::Type,
+    ty_texture_3d: hir::Type,
+    ty_texture_1d_array: hir::Type,
+    ty_texture_2d_array: hir::Type,
+    ty_texture_cube: hir::Type,
+    ty_texture_1d_ms: hir::Type,
+    ty_texture_2d_ms: hir::Type,
+    ty_image_1d: hir::Type,
+    ty_image_2d: hir::Type,
+    ty_image_3d: hir::Type,
+    ty_image_1d_array: hir::Type,
+    ty_image_2d_array: hir::Type,
+    ty_image_cube: hir::Type,
+    ty_image_1d_ms: hir::Type,
+    ty_image_2d_ms: hir::Type,
 }
 
-impl<'hir> BuiltinScope<'hir> {
-    fn new(b: &mut hir::Builder<'_, 'hir>) -> BuiltinScope<'hir> {
+macro_rules! make_image_type {
+    ($hir:expr, texture $d:ident $t:ident) => {
+        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+            sampled_ty: ScalarType::$t,
+            dim: ImageDimension::$d,
+            ms: false,
+        })))
+    };
+    ($hir:expr, texture $d:ident $t:ident MS) => {
+        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+            sampled_ty: ScalarType::$t,
+            dim: ImageDimension::$d,
+            ms: true,
+        })))
+    };
+    ($hir:expr, image $d:ident $t:ident) => {
+        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+            element_ty: ScalarType::$t,
+            dim: ImageDimension::$d,
+            ms: false,
+        })))
+    };
+    ($hir:expr, image $d:ident $t:ident MS) => {
+        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+            sampled_ty: ScalarType::$t,
+            dim: ImageDimension::$d,
+            ms: true,
+        })))
+    };
+}
+
+impl<'ir> BuiltinScope<'ir> {
+    fn new(hir: &mut HirCtxt<'ir>) -> BuiltinScope<'ir> {
+        let ty_f32 = hir.intern_type(TypeImpl::Scalar(ScalarType::Float));
+        let ty_f64 = hir.intern_type(TypeImpl::Scalar(ScalarType::Double));
+        let ty_u32 = hir.intern_type(TypeImpl::Scalar(ScalarType::UnsignedInt));
+        let ty_i32 = hir.intern_type(TypeImpl::Scalar(ScalarType::Int));
+
+        let ty_f32x2 = hir.intern_type(TypeImpl::Vector(ScalarType::Float, 2));
+        let ty_f32x3 = hir.intern_type(TypeImpl::Vector(ScalarType::Float, 3));
+        let ty_f32x4 = hir.intern_type(TypeImpl::Vector(ScalarType::Float, 4));
+
+        let ty_i32x2 = hir.intern_type(TypeImpl::Vector(ScalarType::Int, 2));
+        let ty_i32x3 = hir.intern_type(TypeImpl::Vector(ScalarType::Int, 3));
+        let ty_i32x4 = hir.intern_type(TypeImpl::Vector(ScalarType::Int, 4));
+
+        let ty_u32x2 = hir.intern_type(TypeImpl::Vector(ScalarType::UnsignedInt, 2));
+        let ty_u32x3 = hir.intern_type(TypeImpl::Vector(ScalarType::UnsignedInt, 3));
+        let ty_u32x4 = hir.intern_type(TypeImpl::Vector(ScalarType::UnsignedInt, 4));
+
+        let ty_b1x2 = hir.intern_type(TypeImpl::Vector(ScalarType::Bool, 2));
+        let ty_b1x3 = hir.intern_type(TypeImpl::Vector(ScalarType::Bool, 3));
+        let ty_b1x4 = hir.intern_type(TypeImpl::Vector(ScalarType::Bool, 4));
+
+        // sampled images
+        let ty_texture_1d = make_image_type!(hir, texture Dim1D       Float   );
+        let ty_texture_2d = make_image_type!(hir, texture Dim2D       Float   );
+        let ty_texture_3d = make_image_type!(hir, texture Dim3D       Float   );
+        let ty_texture_1d_array = make_image_type!(hir, texture Dim1DArray  Float   );
+        let ty_texture_2d_array = make_image_type!(hir, texture Dim2DArray  Float   );
+        let ty_texture_cube = make_image_type!(hir, texture DimCube     Float   );
+        let ty_texture_1d_ms = make_image_type!(hir, texture Dim1D       Float MS);
+        let ty_texture_2d_ms = make_image_type!(hir, texture Dim2D       Float MS);
+
+        // storage images
+        let ty_image_1d = make_image_type!(hir, image   Dim1D       Float   );
+        let ty_image_2d = make_image_type!(hir, image   Dim2D       Float   );
+        let ty_image_3d = make_image_type!(hir, image   Dim3D       Float   );
+        let ty_image_1d_array = make_image_type!(hir, image   Dim1DArray  Float   );
+        let ty_image_2d_array = make_image_type!(hir, image   Dim2DArray  Float   );
+        let ty_image_cube = make_image_type!(hir, image   DimCube     Float   );
+        let ty_image_1d_ms = make_image_type!(hir, image   Dim1D       Float MS);
+        let ty_image_2d_ms = make_image_type!(hir, image   Dim2D       Float MS);
+
         BuiltinScope {
-            ty_f32: b.f32_ty().upcast(),
-            ty_f64: b.f64_ty().upcast(),
-            ty_u32: b.u32_ty().upcast(),
-            ty_i32: b.i32_ty().upcast(),
+            ty_f32,
+            ty_f64,
+            ty_u32,
+            ty_i32,
+            ty_bool,
+            ty_f32x2,
+            ty_f32x3,
+            ty_f32x4,
+            ty_i32x2,
+            ty_i32x3,
+            ty_i32x4,
+            ty_u32x2,
+            ty_u32x3,
+            ty_u32x4,
+            ty_b1x2,
+            ty_b1x3,
+            ty_b1x4,
+            ty_texture_1d,
+            ty_texture_2d,
+            ty_texture_3d,
+            ty_texture_1d_array,
+            ty_texture_2d_array,
+            ty_texture_cube,
+            ty_texture_1d_ms,
+            ty_texture_2d_ms,
+            ty_image_1d,
+            ty_image_2d,
+            ty_image_3d,
+            ty_image_1d_array,
+            ty_image_2d_array,
+            ty_image_cube,
+            ty_image_1d_ms,
+            ty_image_2d_ms,
         }
+    }
+}
+
+impl Scope for BuiltinScope {
+    fn resolve_type(&self, name: &str) -> Option<hir::Type> {
+        match name {
+            "f32" => Some(self.ty_f32),
+            "f64" => Some(self.ty_f64),
+            "u32" => Some(self.ty_u32),
+            "i32" => Some(self.ty_i32),
+            "bool" => Some(self.ty_bool),
+            "f32x2" => Some(self.ty_f32x2),
+            "f32x3" => Some(self.ty_f32x3),
+            "f32x4" => Some(self.ty_f32x4),
+            "i32x2" => Some(self.ty_i32x2),
+            "i32x3" => Some(self.ty_i32x3),
+            "i32x4" => Some(self.ty_i32x4),
+            "u32x2" => Some(self.ty_u32x2),
+            "u32x3" => Some(self.ty_u32x3),
+            "u32x4" => Some(self.ty_u32x4),
+            "b1x2" => Some(self.ty_b1x2),
+            "b1x3" => Some(self.ty_b1x3),
+            "b1x4" => Some(self.ty_b1x4),
+            "Texture1D" => Some(self.ty_texture_1d),
+            "Texture2D" => Some(self.ty_texture_2d),
+            "Texture3D" => Some(self.ty_texture_3d),
+            "Texture1DArray" => Some(self.ty_texture_1d_array),
+            "Texture2DArray" => Some(self.ty_texture_2d_array),
+            "TextureCube" => Some(self.ty_texture_cube),
+            "Texture1DMS" => Some(self.ty_texture_1d_ms),
+            "Texture2DMS" => Some(self.ty_texture_2d_ms),
+            "Image1D" => Some(self.ty_image_1d),
+            "Image2D" => Some(self.ty_image_2d),
+            "Image3D" => Some(self.ty_image_3d),
+            "Image1DArray" => Some(self.ty_image_1d_array),
+            "Image2DArray" => Some(self.ty_image_2d_array),
+            "ImageCube" => Some(self.ty_image_cube),
+            "Image1DMS" => Some(self.ty_image_1d_ms),
+            "Image2DMS" => Some(self.ty_image_2d_ms),
+            _ => None,
+        }
+    }
+
+    fn resolve_func(&self, name: &str) -> Option<FunctionId> {
+        None
+    }
+
+    fn resolve_const(&self, name: &str) -> Option<Constant> {
+        None
     }
 }
 
 /// Simple scope, contains global variables.
 struct SimpleScope<'a, 'hir> {
-    parent: Option<&'a dyn Scope<'hir>>,
-    types: HashMap<String, Box<dyn TypeDefinition<'hir>>>,
+    parent: Option<&'a dyn Scope>,
+    types: HashMap<String, Type>,
+    functions: HashMap<String, FunctionId>,
+    constants: HashMap<String, Constant>
     //variables: HashMap<String, VariableDefinition>,
 }
 
@@ -314,8 +302,8 @@ impl<'a, 'hir> SimpleScope<'a, 'hir> {
     }
 }
 
-impl<'a, 'hir> Scope<'hir> for SimpleScope<'a, 'hir> {
-    fn resolve_type(&self, name: &str) -> Option<&dyn TypeDefinition<'hir>> {
+impl<'a, 'hir> Scope for SimpleScope<'a, 'hir> {
+    fn resolve_type(&self, name: &str) -> Option<Type> {
         self.types
             .get(name)
             .map(|ty| &**ty)
@@ -373,112 +361,25 @@ impl<'a, 'hir> BlockScope<'a, 'hir> {
 }
 
 impl<'a, 'hir> Scope<'hir> for BlockScope<'a, 'hir> {
-    fn resolve_type(&self, name: &str) -> Option<&dyn TypeDefinition<'hir>> {
+    fn resolve_type(&self, name: &str) -> Option<Type> {
         self.parent.and_then(|parent| parent.resolve_type(name))
     }
 }
 
-struct LowerCtxt<'a> {
+struct LowerCtxt<'a, 'ir> {
     current_file: SourceId,
     diag: &'a Diagnostics,
+    program_inputs: Vec<RequiredValue<'ir>>,
+    program_outputs: Vec<ProvidedValue<'ir>>,
 }
 
-impl<'a> LowerCtxt<'a> {
-    fn new(file: SourceId, diag: &'a Diagnostics) -> LowerCtxt<'a> {
+impl<'a, 'ir> LowerCtxt<'a, 'ir> {
+    fn new(file: SourceId, diag: &'a Diagnostics) -> LowerCtxt<'a, 'ir> {
         LowerCtxt {
             current_file: file,
             diag,
-        }
-    }
-
-    fn instantiate_user_type(&mut self, syntax: Item) -> Option<hir::Attr> {
-        eprintln!("TODO instantiate_user_type");
-        None
-    }
-
-    /*fn instantiate_builtin_type(
-        &mut self,
-        kind: BuiltinTypeKind,
-        args: &[(Attr, Location)],
-        instantiation_loc: Location,
-    ) -> Option<hir::Attr<'ir>> {
-        if matches!(
-            kind,
-            BuiltinTypeKind::Int(_) | BuiltinTypeKind::UnsignedInt(_) | BuiltinTypeKind::Float(_)
-        ) && !args.is_empty()
-        {
-            self.diag
-                .error("extra generic arguments on builtin type")
-                .primary_label(instantiation_loc.to_source_location(), "")
-                .emit();
-        }
-
-        match kind {
-            BuiltinTypeKind::Int(bits) => match bits {
-                8 => {
-                    todo!()
-                }
-                16 => {
-                    todo!()
-                }
-                32 => Some(self.ty_i32),
-                _ => None,
-            },
-            BuiltinTypeKind::UnsignedInt(bits) => match bits {
-                8 => {
-                    todo!()
-                }
-                16 => {
-                    todo!()
-                }
-                32 => Some(self.ty_u32),
-                _ => None,
-            },
-            BuiltinTypeKind::Float(bits) => match bits {
-                32 => Some(self.ty_f32),
-                64 => {
-                    todo!()
-                }
-                _ => None,
-            },
-            BuiltinTypeKind::Vector => {}
-            BuiltinTypeKind::Matrix => {
-                todo!()
-            }
-        }
-    }*/
-
-    /// Instantiate a type given parameters
-    fn instantiate_type_or_unknown(
-        &mut self,
-        ty: &dyn TypeDefinition,
-        args: &[(Attr, Location)],
-        loc: Location,
-    ) -> Attr {
-        match ty {
-            TypeDefinition::Builtin { kind, ty } => {
-                if let Some(ty) = ty.get() {
-                    ty
-                } else {
-                    if let Some(instantiated) = self.instantiate_builtin_type(*kind, args, loc) {
-                        if args.is_empty() {
-                            // no args, we can cache the resulting type instance
-                            ty.set(Some(instantiated));
-                        }
-                        instantiated
-                    } else {
-                        // failed to instantiate
-                        self.ty_unknown
-                    }
-                }
-            }
-            TypeDefinition::User { def, ty } => {
-                if let Some(instantiated) = self.instantiate_user_type(def.clone()) {
-                    instantiated
-                } else {
-                    self.ty_unknown
-                }
-            }
+            program_inputs: vec![],
+            program_outputs: vec![],
         }
     }
 
@@ -490,7 +391,10 @@ impl<'a> LowerCtxt<'a> {
         Location::Source(SourceLocation::new(self.current_file, node.text_range()))
     }
 
-    fn emit_module<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, module: Module) {
+    /// Emits IR for a module.
+    ///
+    /// Essentially, creates a HIR program.
+    fn emit_module(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, module: Module) {
         let mut root_scope = BuiltinScope::new(b);
         let mut global_scope = SimpleScope::new(Some(&root_scope));
         for item in module.items() {
@@ -498,23 +402,50 @@ impl<'a> LowerCtxt<'a> {
         }
     }
 
-    fn emit_item<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, item: Item, scope: &mut SimpleScope<'_, 'ir>) {
+    fn emit_item(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, item: Item, scope: &mut SimpleScope<'_, 'ir>) {
         match item {
             Item::FnDef(def) => {
                 self.emit_fn_def(b, def, scope);
             }
             Item::Global(global) => {
-                //todo!()
+                let Some(name) = global.name() else {
+                    // no diagnostic, this is a syntax error
+                    return;
+                };
+                let Some(kind) = global.qualifier().and_then(|q| q.global_kind()) else {
+                    // no diagnostic, this is a syntax error
+                    return;
+                };
+                let ty = self.emit_type_or_unknown(b, global.ty());
+
+                match kind {
+                    Some(GlobalKind::Uniform) => self.program_inputs.push(RequiredValue {
+                        name: "",
+                        ty,
+                        domain: None,
+                        fulfillment: None,
+                    }),
+                    Some(GlobalKind::Const) => {}
+                    Some(GlobalKind::In) => {}
+                    Some(GlobalKind::Out) => {}
+                    None => {}
+                }
             }
         }
     }
 
+
+    /// Generates IR for a function.
+    fn emit_function(&mut self,
+                     b: &mut hir::FunctionBuilder<'_, 'ir>, func: Option<FnDef>, scope: &mut SimpleScope<'_, 'ir>) {
+
+    }
+
+
     /// Generates IR for an expression node, or returns undef if the expression is `None`.
-    ///
-    /// Helper for
-    fn emit_expr_or_undef<'ir>(
+    fn emit_expr_or_undef(
         &mut self,
-        b: &mut hir::Builder<'_, 'ir>,
+        b: &mut hir::FunctionBuilder<'_, 'ir>,
         expr: Option<Expr>,
         scope: &dyn Scope<'ir>,
     ) -> hir::ValueId {
@@ -530,7 +461,7 @@ impl<'a> LowerCtxt<'a> {
     /// # Return value
     ///
     /// The IR value of the expression
-    fn emit_expr<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, expr: Expr, scope: &dyn Scope<'ir>) -> hir::ValueId {
+    fn emit_expr(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, expr: Expr, scope: &dyn Scope<'ir>) -> hir::ValueId {
         let loc = self.node_loc(expr.syntax());
         match expr {
             Expr::BinExpr(bin_expr) => {
@@ -548,10 +479,10 @@ impl<'a> LowerCtxt<'a> {
                             }
                         },
                         BinaryOp::ArithOp(arith_op) => match arith_op {
-                            ArithOp::Add => base::Add::build(b, lhs, rhs, loc).result,
-                            ArithOp::Mul => base::Mul::build(b, lhs, rhs, loc).result,
-                            ArithOp::Sub => base::Sub::build(b, lhs, rhs, loc).result,
-                            ArithOp::Div => base::Div::build(b, lhs, rhs, loc).result,
+                            ArithOp::Add => b.emit_f_add(lhs, rhs),
+                            ArithOp::Mul => b.emit_mul(lhs, rhs, loc),
+                            ArithOp::Sub => b.emit_sub(lhs, rhs, loc),
+                            ArithOp::Div => b.emit_div(lhs, rhs, loc),
                             ArithOp::Rem => {
                                 todo!()
                             }
@@ -588,7 +519,7 @@ impl<'a> LowerCtxt<'a> {
                         args.push(self.emit_expr(b, arg, scope));
                     }
                 }
-                base::Call::build(b, func, &args, self.node_loc(call_expr.syntax())).result
+                b.emit_call(func, args, self.node_loc(call_expr.syntax()))
             }
             Expr::IndexExpr(index_expr) => {
                 todo!()
@@ -600,23 +531,23 @@ impl<'a> LowerCtxt<'a> {
                 }
                 LiteralKind::IntNumber(v) => {
                     if let Some(value) = v.value() {
-                        let attr = b.int_const(value as i128).upcast();
-                        base::Constant::build(b, attr, loc).result
+                        let c = b.int_const(value as i64);
+                        b.emit_constant(c, loc)
                     } else {
                         b.undef()
                     }
                 }
                 LiteralKind::FloatNumber(v) => {
                     if let Some(value) = v.value() {
-                        let attr = b.fp_const(value);
-                        base::Constant::build(b, attr, loc)
+                        let c = b.fp_const(value);
+                        b.emit_constant(c, loc)
                     } else {
                         b.undef()
                     }
                 }
                 LiteralKind::Bool(v) => {
-                    let attr = b.bool_const(v);
-                    base::Constant::build(b, attr, loc)
+                    let c = b.bool_const(v);
+                    b.emit_constant(c, loc)
                 }
             },
             Expr::PathExpr(path_expr) => b.undef(),
@@ -630,7 +561,7 @@ impl<'a> LowerCtxt<'a> {
     }
 
     /// Emits IR for a type reference.
-    fn emit_type<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, ty: Type) -> hir::Attr<'ir> {
+    fn emit_type(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, ty: Type) -> hir::Attr<'ir> {
         match ty {
             Type::TypeRef(tyref) => {
                 match tyref.ident() {
@@ -653,19 +584,25 @@ impl<'a> LowerCtxt<'a> {
                 let fields = b.ctxt_mut().alloc_slice_copy(&fields);
                 b.ctxt_mut().intern_attr(TupleType(fields)).upcast()
             }
+            Type::ArrayType(array_type) => {
+
+            }
+            Type::ClosureType(closure_type) => {
+
+            }
         }
     }
 
-    fn emit_type_or_unknown<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, ty: Option<Type>) -> hir::Attr<'ir> {
+    fn emit_type_or_unknown(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, ty: Option<Type>) -> hir::Type {
         if let Some(ty) = ty {
             self.emit_type(b, ty)
         } else {
-            self.ty_unknown
+            b.ty_unknown()
         }
     }
 
     /// Emits IR for a block statement.
-    fn emit_stmt<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, stmt: Stmt, scope: &mut BlockScope<'_, 'ir>) {
+    fn emit_stmt<'ir>(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, stmt: Stmt, scope: &mut BlockScope<'_, 'ir>) {
         match stmt {
             Stmt::ExprStmt(expr) => {
                 self.emit_expr_or_undef(b, expr.expr(), scope);
@@ -681,7 +618,7 @@ impl<'a> LowerCtxt<'a> {
     }
 
     /// Emits IR for a block.
-    fn emit_block<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, block: Block, scope: &dyn Scope<'ir>) {
+    fn emit_block<'ir>(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, block: Block, scope: &dyn Scope<'ir>) {
         // start block scope
         let mut block_scope = BlockScope::new(Some(scope));
         for stmt in block.stmts() {
@@ -690,7 +627,7 @@ impl<'a> LowerCtxt<'a> {
     }
 
     /// Emits IR for a function declaration.
-    fn emit_fn_def<'ir>(&mut self, b: &mut hir::Builder<'_, 'ir>, fn_def: FnDef, scope: &mut SimpleScope<'_, 'ir>) {
+    fn emit_fn_def<'ir>(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, fn_def: FnDef, scope: &mut SimpleScope<'_, 'ir>) {
         let loc = self.node_loc(fn_def.syntax());
         // generate IR for all parameter types and generate the function type
         let mut param_types = vec![];

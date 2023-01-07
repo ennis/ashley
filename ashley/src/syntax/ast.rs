@@ -131,21 +131,15 @@ impl_ast_token!(FloatNumber<FLOAT_NUMBER>);
 impl_ast_token!(Else<ELSE_KW>);
 impl_ast_token!(Eq<EQ>);
 
-impl_ast_node!(Module<MODULE>
-              [nodes items: Item]);
-
-impl_ast_node!(TypeRef<TYPE_REF>
-              [token ident: Ident]);
-
-impl_ast_node!(TupleType<TUPLE_TYPE>
-              [nodes fields: Type]);
-
-impl_ast_node!(Block<BLOCK>
-               [nodes stmts: Stmt]);
-
-
-impl_ast_node!(FnParam<FN_PARAM> [token ident: Ident, node ty: Type]);
-impl_ast_node!(ParamList<PARAM_LIST> [nodes parameters: FnParam]);
+impl_ast_node!(Module      <MODULE>       [nodes items: Item]);
+impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident]);
+impl_ast_node!(TupleType   <TUPLE_TYPE>   [nodes fields: Type]);
+impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node  element_type: Type, node length: Expr]);
+impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node ret_type: RetType]);
+impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
+impl_ast_node!(FnParam     <FN_PARAM>     [token ident: Ident, node ty: Type]);
+impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
+impl_ast_node!(ClosureParamList   <CLOSURE_PARAM_LIST>   [nodes parameters: Type]);
 
 impl_ast_node!(FnDef<FN_DEF>
                [node ret_type: RetType,
@@ -171,13 +165,14 @@ impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
 impl_ast_node!(FieldExpr     <FIELD_EXPR>  []);
 impl_ast_node!(LitExpr       <LIT_EXPR>    []);
 impl_ast_node!(PathExpr      <PATH_EXPR>   [token ident: Ident]);
-impl_ast_node!(TupleExpr     <TUPLE_EXPR>   [nodes fields: Expr]);
-impl_ast_node!(ArrayExpr     <ARRAY_EXPR>   [nodes elements: Expr]);
+impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
+impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
-impl_ast_node!(Global        <GLOBAL>       [token name: Ident, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(Qualifier     <QUALIFIER>   []);
+impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
-impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType ]);
+impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType, ARRAY_TYPE => ArrayType, CLOSURE_TYPE => ClosureType ]);
 impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global ]);
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
@@ -389,14 +384,45 @@ impl IndexExpr {
     }
 }
 
+/// Describes the kind of a global program variable.
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum GlobalKind {
+    Uniform,
+    Const,
+    In,
+    Out,
+}
+
+impl Qualifier {
+    pub fn token(&self) -> SyntaxToken {
+        self.syntax()
+            .children_with_tokens()
+            .find(|e| !e.kind().is_trivia())
+            .and_then(|e| e.into_token())
+            .unwrap()
+    }
+
+    pub fn global_kind(&self) -> Option<GlobalKind> {
+        match self.token().kind() {
+            SyntaxKind::UNIFORM_KW => Some(GlobalKind::Uniform),
+            SyntaxKind::IN_KW => Some(GlobalKind::In),
+            SyntaxKind::OUT_KW => Some(GlobalKind::Out),
+            SyntaxKind::CONST_KW => Some(GlobalKind::Const),
+            _ => None,
+        }
+    }
+}
+
 //--------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::{ast::AstNode, ast::Item, ast::Module};
+    use crate::{
+        diagnostic::SourceFileProvider,
+        syntax,
+        syntax::ast::{AstNode, Item, Module},
+    };
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
-    use crate::diagnostic::SourceFileProvider;
-    use crate::syntax;
 
     fn parse_module(text: &str) -> Option<Module> {
         let mut sources = SourceFileProvider::new();

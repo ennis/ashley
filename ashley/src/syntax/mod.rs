@@ -323,6 +323,12 @@ impl<'a> Parser<'a> {
             Some(T!['(']) => {
                 self.parse_tuple_type();
             }
+            Some(T!['[']) => {
+                self.parse_array_type();
+            }
+            Some(FN_KW) => {
+                self.parse_closure_type();
+            }
             Some(IDENT) => {
                 self.start_node(TYPE_REF);
                 self.bump();
@@ -412,6 +418,45 @@ impl<'a> Parser<'a> {
         self.expect(T!['(']);
         self.parse_separated_list(T![,], T![')'], true, true, Self::parse_type);
         self.expect(T![')']);
+        self.finish_node();
+    }
+
+    /// Parses a closure type like `fn(vec2, mat3) -> float`
+    fn parse_closure_type(&mut self) {
+        self.start_node(CLOSURE_TYPE);
+        self.expect(FN_KW);
+        self.skip_ws();
+        self.start_node(CLOSURE_PARAM_LIST);
+        self.expect(T!['(']);
+        self.parse_separated_list(T![,], T![')'], true, false, Self::parse_type);
+        self.expect(T![')']);
+        self.finish_node(); // CLOSURE_PARAM_LIST
+        self.skip_ws();
+        if self.current() == Some(T![->]) {
+            self.start_node(RET_TYPE);
+            self.bump();
+            self.skip_ws();
+            self.parse_type();
+            self.finish_node();
+            self.skip_ws();
+        }
+        self.finish_node();
+    }
+
+    /// Parses an array type like `[f32; 16]`.
+    fn parse_array_type(&mut self) {
+        self.start_node(ARRAY_TYPE);
+        self.expect(T!['[']);
+        self.skip_ws();
+        self.parse_type();
+        self.skip_ws();
+        if self.current() == Some(T![;]) {
+            self.bump();
+            self.skip_ws();
+            self.parse_expr();
+            self.skip_ws();
+        }
+        self.expect(T![']']);
         self.finish_node();
     }
 
@@ -656,7 +701,9 @@ impl<'a> Parser<'a> {
 
     fn parse_global_variable(&mut self) {
         self.start_node(GLOBAL);
+        self.start_node(QUALIFIER);
         self.expect_any(&[IN_KW, OUT_KW, CONST_KW, UNIFORM_KW]);
+        self.finish_node(); // QUALIFIER
         self.skip_ws();
         self.expect_ident("variable name");
         self.skip_ws();
@@ -847,6 +894,10 @@ fn test() -> i32 {
 
 // tuple types
 fn test2() -> (i32,i32) {
+}
+
+// array types
+fn test3() -> [f32; 4] {
 }
 "#
             )

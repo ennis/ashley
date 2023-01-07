@@ -1,9 +1,8 @@
 extern crate self as ashley;
 
 pub mod diagnostic;
-pub mod dialect;
+//pub mod dialect;
 pub mod hir;
-mod id_vec;
 pub mod lower;
 pub mod syntax;
 mod utils;

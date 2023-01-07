@@ -164,6 +164,7 @@ pub enum SyntaxKind {
     //
     // Nodes
     //
+    QUALIFIER,
     FN_DEF,
     STRUCT_DEF,
     STRUCT_FIELD,
@@ -187,6 +188,9 @@ pub enum SyntaxKind {
     CALL_EXPR,
     TYPE_REF,
     TUPLE_TYPE,
+    ARRAY_TYPE,
+    CLOSURE_TYPE,
+    CLOSURE_PARAM_LIST,
     RET_TYPE,
     STMT_LIST,
     EXPR_STMT,

@@ -1,178 +1,27 @@
 use crate::{
     diagnostic::{SourceFileProvider, SourceId, SourceLocation},
-    hir::{Attr, HirCtxt, Location, Operation, OperationId, RegionId, ValueId},
+    hir::{
+        types::{ImageDimension, ImageType, SampledImageType, ScalarType, StructType, FunctionType},
+        HirCtxt, Location, Operation, InstructionData, OperationId, RegionId, Type, TypeImpl,
+        ValueId,
+    },
 };
 use codespan_reporting::files::Files;
 use indexmap::IndexSet;
 use std::{
     collections::HashMap,
     fmt,
-    fmt::{Formatter, Write},
+    fmt::{Display, Formatter, Write},
     fs::File,
     mem,
     path::Path,
 };
-
-/// Trait for HIR entities that can be printed to an `OperationPrinter`
-pub trait IRPrintable<'a> {
-    /// Whether the type or attribute that this entity represents should be printed inline, instead
-    /// of creating an alias for it in the textual representation.
-    fn is_inline(&self) -> bool {
-        false
-    }
-
-    /// Prints this value to the specified `OperationPrinter`.
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>);
-}
-
-#[macro_export]
-macro_rules! write_ir {
-    ($printer:expr, $($t:expr),*) => {
-        $printer.emit(&[
-            $($crate::hir::ToIRSyntax::to_ir_syntax(&$t),)*
-        ])
-    };
-}
-pub use write_ir;
-
-pub enum IRSyntaxElem<'a, 'hir> {
-    Token(&'a str),
-    UInt(u64),
-    Int(i64),
-    SourceId(SourceId),
-    SourceLocation(SourceLocation),
-    Type(Attr<'hir>),
-    TypeDef(Attr<'hir>),
-    Attribute(Attr<'hir>),
-    AttributeDef(Attr<'hir>),
-    Value(ValueId),
-    Region(RegionId),
-}
-
-pub trait ToIRSyntax<'hir> {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir>;
-}
-
-impl<'hir> ToIRSyntax<'hir> for Attr<'hir> {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Attribute(self.clone())
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for str {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Token(self)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for SourceId {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::SourceId(*self)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for SourceLocation {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::SourceLocation(*self)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for u8 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::UInt(*self as u64)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for u16 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::UInt(*self as u64)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for u32 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::UInt(*self as u64)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for u64 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::UInt(*self)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for i8 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Int(*self as i64)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for i16 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Int(*self as i64)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for i32 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Int(*self as i64)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for i64 {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Int(*self)
-    }
-}
-impl<'hir> ToIRSyntax<'hir> for String {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        IRSyntaxElem::Token(self)
-    }
-}
-
-impl<'hir, T> ToIRSyntax<'hir> for &T where T: ToIRSyntax<'hir> + ?Sized {
-    fn to_ir_syntax<'a>(&'a self) -> IRSyntaxElem<'a, 'hir> {
-        ToIRSyntax::to_ir_syntax(&**self)
-    }
-}
-
-pub trait IRPrinter<'hir> {
-    fn emit(&mut self, elem: &[IRSyntaxElem<'_, 'hir>]);
-    fn token(&mut self, token: &str) {
-        self.emit(&[IRSyntaxElem::Token(token)])
-    }
-    /*fn ty(&mut self, ty: Type<'hir>) {
-        self.emit(&[IRSyntaxElem::Type(ty)])
-    }*/
-    fn attr(&mut self, attr: Attr<'hir>) {
-        self.emit(&[IRSyntaxElem::Attribute(attr)])
-    }
-}
-
-//impl<>
-
-// attribute parsing & printing pattern:
-// - token
-// - print inner value
-// - type refs
-//
+use std::slice::SliceIndex;
 
 struct HirHtmlPrintCtxt<'a, 'hir> {
-    hir: &'a HirCtxt<'hir>,
     indent: u32,
     source_files: SourceFileProvider,
     w: &'a mut dyn Write,
-    // Map TypeOrAttr -> Index
-    attrs: HashMap<Attr<'hir>, usize>,
-}
-
-impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
-    fn new(
-        hir: &'a HirCtxt<'hir>,
-        source_files: SourceFileProvider,
-        w: &'a mut dyn Write,
-    ) -> HirHtmlPrintCtxt<'a, 'hir> {
-        let mut attrs = HashMap::new();
-        for (i, attr) in hir.attributes.iter().enumerate() {
-            attrs.insert(*attr, i);
-        }
-        HirHtmlPrintCtxt {
-            hir,
-            source_files,
-            indent: 0,
-            w,
-            attrs,
-        }
-    }
 }
 
 // implemented as a macro to avoid borrowing woes
@@ -189,52 +38,364 @@ macro_rules! write_list {
     };
 }
 
-impl<'a, 'hir> IRPrinter<'hir> for HirHtmlPrintCtxt<'a, 'hir> {
-    fn emit(&mut self, elems: &[IRSyntaxElem<'_, 'hir>]) {
-        for elem in elems {
-            match elem {
-                IRSyntaxElem::Token(str) => {
-                    write!(self.w, "{}", html_escape::encode_text(str)).unwrap();
-                }
-                IRSyntaxElem::UInt(v) => {
-                    write!(self.w, "{v}").unwrap();
-                }
-                IRSyntaxElem::Int(v) => {
-                    write!(self.w, "{v}").unwrap();
-                }
-                IRSyntaxElem::Type(ty) => {
-                    if ty.0.is_inline() {
-                        ty.0.print_hir(self);
-                    } else {
-                        let i = self.attrs[ty];
-                        write!(self.w, "<a class=\"val\" href=\"#t{i}\">t<sub>{i}</sub></a>").unwrap();
-                    }
-                }
-                IRSyntaxElem::TypeDef(ty) => {
-                    ty.0.print_hir(self);
-                }
-                IRSyntaxElem::Attribute(attr) => {
-                    if attr.0.is_inline() {
-                        attr.0.print_hir(self);
-                    } else {
-                        let i = self.attrs[attr];
-                        write!(self.w, "<a class=\"attr\" href=\"#a{i}\">#{i}</a>").unwrap();
-                    }
-                }
-                IRSyntaxElem::AttributeDef(attr) => {
-                    attr.0.print_hir(self);
-                }
-                IRSyntaxElem::Value(v) => {
-                    let i = v.index();
-                    write!(self.w, "<a class=\"val\" href=\"#v{i}\">v<sub>{i}</sub></a>").unwrap();
-                }
-                IRSyntaxElem::Region(r) => {
-                    let index = r.index();
-                    write!(self.w, "<a class=\"region\" href=\"#r{index}\">r{index}</a>").unwrap();
-                }
-                IRSyntaxElem::SourceId(_) => {}
-                IRSyntaxElem::SourceLocation(_) => {}
+pub struct DisplayOperandHtml(ValueId);
+
+impl Display for DisplayOperandHtml {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let index = self.0.index();
+        write!(f, "<a class=\"operand\" href=\"#v{index}\">v<sub>{index}</sub></a>")
+    }
+}
+
+impl ValueId {
+    fn display_html(&self) -> DisplayOperandHtml {
+        DisplayOperandHtml(*self)
+    }
+
+    fn display_result_html(&self) -> DisplayOperandHtml {
+        DisplayOperandHtml(*self)
+    }
+}
+
+impl<'a> Op<'a> {
+    fn mnmemonic(&self) -> &'static str {
+        match self {
+            Op::BinaryOp(op) => match op {
+                BinaryOp::Add => "add",
+                BinaryOp::Sub => "sub",
+                BinaryOp::Mul => "mul",
+                BinaryOp::Div => "div",
+            },
+            Op::Select => "select",
+            Op::Loop(_) => "loop",
+            Op::Call(_) => "call",
+            Op::Interp(_) => "interp",
+            _ => {}
+        }
+    }
+}
+
+struct DisplayScalarType(ScalarType);
+struct DisplayVectorType(VectorType);
+struct DisplayMatrixType(MatrixType);
+struct DisplayArrayType(ArrayType);
+struct DisplayImageType(ImageType);
+struct DisplaySampledImageType(SampledImageType);
+
+impl Display for DisplayScalarType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 .0 {
+            ScalarType::Int => write!(f, "int"),
+            ScalarType::UnsignedInt => write!(f, "uint"),
+            ScalarType::Float => write!(f, "float"),
+            ScalarType::Double => write!(f, "double"),
+            ScalarType::Bool => write!(f, "bool"),
+        }
+    }
+}
+
+impl Display for DisplayVectorType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let n = self.0 .1;
+        match self.0 .0 {
+            ScalarType::Int => write!(f, "ivec{n}"),
+            ScalarType::UnsignedInt => write!(f, "uvec{n}"),
+            ScalarType::Float => write!(f, "vec{n}"),
+            ScalarType::Double => write!(f, "dvec{n}"),
+            ScalarType::Bool => write!(f, "bvec{n}"),
+        }
+    }
+}
+
+impl Display for DisplayMatrixType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (r, c) = (self.0 .1, self.0 .2);
+        match self.0 .0 {
+            ScalarType::Int => write!(f, "imat{r}x{c}"),
+            ScalarType::UnsignedInt => write!(f, "umat{r}x{c}"),
+            ScalarType::Float => write!(f, "mat{r}x{c}"),
+            ScalarType::Double => write!(f, "dmat{r}x{c}"),
+            ScalarType::Bool => write!(f, "bmat{r}x{c}"),
+        }
+    }
+}
+
+impl Display for DisplaySampledImageType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0.sampled_ty.0 {
+            ScalarType::Int => write!(f, "i")?,
+            ScalarType::UnsignedInt => write!(f, "u")?,
+            ScalarType::Double => write!(f, "d")?,
+            ScalarType::Bool => write!(f, "b")?,
+            _ => {}
+        }
+        write!(f, "texture")?;
+        match self.0.dim {
+            ImageDimension::Dim1D => write!(f, "1D")?,
+            ImageDimension::Dim2D => write!(f, "2D")?,
+            ImageDimension::Dim3D => write!(f, "3D")?,
+            ImageDimension::DimCube => write!(f, "Cube")?,
+            ImageDimension::Dim1DArray => write!(f, "1DArray")?,
+            ImageDimension::Dim2DArray => write!(f, "2DArray")?,
+        }
+        if self.0.ms {
+            write!(f, "MS")?
+        }
+        Ok(())
+    }
+}
+
+impl Display for DisplayImageType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0.element_ty.0 {
+            ScalarType::Int => write!(f, "i")?,
+            ScalarType::UnsignedInt => write!(f, "u")?,
+            ScalarType::Double => write!(f, "d")?,
+            ScalarType::Bool => write!(f, "b")?,
+            _ => {}
+        }
+        write!(f, "image")?;
+        match self.0.dim {
+            ImageDimension::Dim1D => write!(f, "1D")?,
+            ImageDimension::Dim2D => write!(f, "2D")?,
+            ImageDimension::Dim3D => write!(f, "3D")?,
+            ImageDimension::DimCube => write!(f, "Cube")?,
+            ImageDimension::Dim1DArray => write!(f, "1DArray")?,
+            ImageDimension::Dim2DArray => write!(f, "2DArray")?,
+        }
+        if self.0.ms {
+            write!(f, "MS")?
+        }
+        Ok(())
+    }
+}
+
+impl ScalarType {
+    fn display(&self) -> DisplayScalarType {
+        DisplayScalarType(*self)
+    }
+}
+
+impl VectorType {
+    fn display(&self) -> DisplayVectorType {
+        DisplayVectorType(*self)
+    }
+}
+
+impl MatrixType {
+    fn display(&self) -> DisplayMatrixType {
+        DisplayMatrixType(*self)
+    }
+}
+
+impl ImageType {
+    fn display(&self) -> DisplayImageType {
+        DisplayImageType(*self)
+    }
+}
+
+impl SampledImageType {
+    fn display(&self) -> DisplaySampledImageType {
+        DisplaySampledImageType(*self)
+    }
+}
+
+fn print_struct_type(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &StructType) -> fmt::Result {
+    write!(ctxt.w, "struct<")?;
+    write_list!(ctxt.w, field in ty.fields.iter() => {
+        write!(ctxt.w, "{}:", field.name)?;
+        print_type(ctxt, hir, field.ty)?;
+    });
+    write!(ctxt.w, ">")?;
+    Ok(())
+}
+
+fn print_function_type(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &FunctionType) -> fmt::Result {
+    write!(ctxt.w, "fn(")?;
+    write_list!(ctxt.w, field in ty.fields.iter() => {
+        write!(ctxt.w, "{}:", field.name)?;
+        print_type(ctxt, hir, field.ty)?;
+    });
+    write!(ctxt.w, ")")?;
+    Ok(())
+}
+
+fn print_type_impl(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &TypeImpl) -> fmt::Result {
+    match ty {
+        TypeImpl::Unit => {
+            write!(ctxt.w, "void")?;
+        }
+        TypeImpl::Scalar(scalar_type) => {
+            write!(ctxt.w, "{}", scalar_type.display())?;
+        }
+        TypeImpl::Vector(vector_type) => {
+            write!(ctxt.w, "{}", vector_type.display())?;
+        }
+        TypeImpl::Matrix(matrix_type) => {
+            write!(ctxt.w, "{}", matrix_type.display())?;
+        }
+        TypeImpl::Array(array_type) => {
+            write!(ctxt.w, "[")?;
+            print_type(ctxt, hir, array_type.0)?;
+            write!(ctxt.w, "; {}]", array_type.1)?;
+        }
+        TypeImpl::RuntimeArray(ty) => {
+            write!(ctxt.w, "[")?;
+            print_type(ctxt, hir, *ty)?;
+            write!(ctxt.w, "]")?;
+        }
+        TypeImpl::Struct(struct_type) => {
+            print_struct_type(ctxt, hir, struct_type)?;
+        }
+        TypeImpl::SampledImage(_) => {}
+        TypeImpl::Image(_) => {}
+        TypeImpl::Pointer(ty) => {
+            write!(ctxt.w, "*")?;
+            print_type(ctxt, hir, *ty)?;
+        }
+        TypeImpl::Sampler => {
+            write!(ctxt.w, "sampler")?;
+        }
+        TypeImpl::ShadowSampler => {
+            write!(ctxt.w, "shadowSampler")?;
+        }
+        TypeImpl::String => {
+            write!(ctxt.w, "string")?;
+        }
+        TypeImpl::Unknown => {
+            write!(ctxt.w, "unknown")?;
+        }
+        TypeImpl::Function(function_type) => {
+            print_function_type(ctxt, hir, function_type)?;
+        }
+    }
+    Ok(())
+}
+
+fn print_type(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: Type) -> fmt::Result {
+    match &hir.types[ty] {
+        ty @ TypeImpl::Scalar(_)
+        | ty @ TypeImpl::Vector(_)
+        | ty @ TypeImpl::Matrix(_)
+        | ty @ TypeImpl::Array(_)
+        | ty @ TypeImpl::RuntimeArray(_)
+        | ty @ TypeImpl::String
+        | ty @ TypeImpl::Unknown
+        | ty @ TypeImpl::Pointer(_) => {
+            // print inline
+            print_type_impl(ctxt, hir, ty)
+        }
+        _ => {
+            let i = ty.index();
+            write!(ctxt.w, "<a class=\"val\" href=\"#t{i}\">!{i}</a>")
+        }
+    }
+}
+
+fn print_op(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, op: &InstructionData) -> fmt::Result {
+    write!(ctxt.w, "<li class=\"op\">")?;
+
+    // results
+    write!(ctxt.w, "<span class=\"results\">")?;
+    write_list!(ctxt.w, r in op.results => {
+        let index = r.index();
+        let ty = r.ty(hir);
+        write!(ctxt.w, "<span class=\"value\" id=\"v{index}\">v<sub>{index}</sub> : ")?;
+        print_type(ctxt, hir, ty)?;
+        write!(ctxt.w, "</span>")?;
+    });
+    write!(ctxt.w, "</span>")?;
+    write!(ctxt.w, " = ")?;
+
+    // mnemonic
+    write!(ctxt.w, "<span class=\"mnemonic\">{}</span>", op.op.mnmemonic())?;
+
+    // instruction-specific format
+    match op.op {
+        Op::Select => {
+            // condition
+            write!(ctxt.w, "({}) {{", op.operands[0].display_html())?;
+            print_region(ctxt, hir, &hir.regions[op.subregions[0]])?;
+            write!(ctxt.w, "}}")?;
+            if op.subregions.len() > 1 {
+                write!(ctxt.w, " else {{")?;
+                print_region(ctxt, hir, &hir.regions[op.subregions[1]])?;
+                write!(ctxt.w, "}}")?;
             }
+        }
+        _ => {
+            todo!()
+        }
+    }
+
+    // location
+    if let Location::Source(src_loc) = op.location {
+        let name = ctxt
+            .source_files
+            .name(src_loc.file)
+            .unwrap_or_else(|_| "???".to_string());
+        let start_line = ctxt
+            .source_files
+            .line_index(src_loc.file, src_loc.range.start().into())
+            .unwrap_or(1);
+        let start_col = ctxt
+            .source_files
+            .column_number(src_loc.file, start_line, src_loc.range.start().into())
+            .unwrap_or(1);
+        //let end_line = self.source_files.line_index(src_loc.file, src_loc.range.end().into()).unwrap_or(1);
+        //let end_col = self.source_files.line_index(src_loc.file, end_line, src_loc.range.end().into()).unwrap_or(1);
+        write!(
+            ctxt.w,
+            "<a class=\"loc\" href=\"file://{name}\">{name}:{start_line}:{start_col}</a>"
+        )?;
+    }
+
+    write!(ctxt.w, "</li>")?;
+    Ok(())
+}
+
+fn print_region(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, region: &RegionData) -> fmt::Result {
+    if !region.arguments.is_empty() {
+        write_list!(ctxt.w, arg in region.arguments => {
+            let i = arg.index();
+            write!(ctxt.w, "<span class=\"value\" id=\"v{i}\">v<sub>{i}</sub></span>")?;
+        });
+        write!(ctxt.w, " -> ")?;
+    }
+    write!(ctxt.w, "<ul class=\"oplist\">")?;
+    let mut operation = region.ops.first();
+    while let Some(op) = operation {
+        let op = &hir.ops[op];
+        print_op(ctxt, hir, &op.data)?;
+        operation = op.next;
+    }
+    write!(ctxt.w, "</ul>")?;
+    Ok(())
+}
+
+
+fn print_type_definitions(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt) -> fmt::Result {
+    write!(ctxt.w, "<p class=\"types\">")?;
+    for (ty, tyimpl) in hir.types.iter() {
+        let index = ty.index();
+        write!(ctxt.w, "<span class=\"deftype\">")?;
+        write!(ctxt.w, "<span class=\"attr\" id=\"t{index}\">!{index}</span> = ")?;
+        print_type_impl(ctxt, hir, tyimpl)?;
+        write!(ctxt.w, "</span><br>")?;
+    }
+    write!(ctxt.w, "</p>")?;
+    Ok(())
+}
+
+impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
+    fn new(
+        source_files: SourceFileProvider,
+        w: &'a mut dyn Write,
+    ) -> HirHtmlPrintCtxt<'a, 'hir> {
+        HirHtmlPrintCtxt {
+            source_files,
+            indent: 0,
+            w,
         }
     }
 }
@@ -247,100 +408,6 @@ impl<'a, 'hir> HirHtmlPrintCtxt<'a, 'hir> {
         Ok(())
     }
 
-    /// NOTE: must be called first to setup type_and_attrs
-    fn print_attribute_and_type_definitions(&mut self) -> fmt::Result {
-        write!(self.w, "<p class=\"attrs-and-types\">")?;
-        for (i, attr) in self.hir.attributes.iter().enumerate() {
-            write!(self.w, "<span class=\"defattr\">")?;
-            write!(self.w, "<span class=\"attr\" id=\"a{i}\">#{i}</span> = ")?;
-            attr.0.print_hir(self);
-            write!(self.w, "</span><br>")?;
-        }
-        write!(self.w, "</p>")?;
-        Ok(())
-    }
-
-    fn print_region(&mut self, region: RegionId) -> fmt::Result {
-        let i = region.index();
-        let region = &self.hir.regions[region];
-        if !region.arguments.is_empty() {
-            write_list!(self.w, arg in region.arguments => {
-                let i = arg.index();
-                write!(self.w, "<span class=\"value\" id=\"v{i}\">v<sub>{i}</sub></span>")?;
-            });
-            write!(self.w, " -> ")?;
-        }
-        write!(self.w, "<ul class=\"oplist\">")?;
-        let mut operation = region.ops.first();
-
-        while let Some(op) = operation {
-            self.print_operation(op)?;
-            operation = self.hir.ops[op].next;
-        }
-        write!(self.w, "</ul>")?;
-        Ok(())
-    }
-
-    fn print_operation(&mut self, op: OperationId) -> fmt::Result {
-        self.print_indent()?;
-        let op = &self.hir.ops[op].data;
-        write!(self.w, "<li class=\"op\">")?;
-        if !op.results.is_empty() {
-            write!(self.w, "<span class=\"results\">")?;
-            write_list!(self.w, v in op.results => {
-                let i = v.index();
-                write!(self.w, "<span class=\"value\" id=\"v{i}\">v<sub>{i}</sub></span>")?;
-            });
-            write!(self.w, "</span> = ")?;
-        }
-        let mnemonic = op.opcode;
-        write!(self.w, "<span class=\"mnemonic\">{mnemonic}</span> ")?;
-        if !op.attributes.is_empty() {
-            write!(self.w, "<span class=\"attrs\">&lt;")?;
-            write_list!(self.w, attr in op.attributes => {
-                self.attr(*attr);
-            });
-            write!(self.w, "&gt;</span>")?;
-        }
-        write!(self.w, "<span class=\"operands\">")?;
-        write_list!(self.w, operand in op.operands => {
-            let index = operand.index();
-            write!(self.w, "<a class=\"operand\" href=\"#v{index}\">v<sub>{index}</sub></a>")?;
-        });
-        write!(self.w, "</span>")?;
-
-        if let Location::Source(src_loc) = op.location {
-            let name = self
-                .source_files
-                .name(src_loc.file)
-                .unwrap_or_else(|_| "???".to_string());
-            let start_line = self
-                .source_files
-                .line_index(src_loc.file, src_loc.range.start().into())
-                .unwrap_or(1);
-            let start_col = self
-                .source_files
-                .column_number(src_loc.file, start_line, src_loc.range.start().into())
-                .unwrap_or(1);
-            //let end_line = self.source_files.line_index(src_loc.file, src_loc.range.end().into()).unwrap_or(1);
-            //let end_col = self.source_files.line_index(src_loc.file, end_line, src_loc.range.end().into()).unwrap_or(1);
-            write!(
-                self.w,
-                "<a class=\"loc\" href=\"file://{name}\">{name}:{start_line}:{start_col}</a>"
-            )?;
-        }
-
-        for r in op.regions {
-            let i = r.index();
-            write!(self.w, " {{")?;
-            self.print_region(*r)?;
-            write!(self.w, "}}")?;
-        }
-
-        write!(self.w, "</li>")?;
-
-        Ok(())
-    }
 }
 
 /// Prints a region as an a HTML-formatted document.
@@ -353,7 +420,8 @@ pub fn print_hir_region_html(
 ) -> fmt::Result {
     // write the HTML body
     let mut output = String::new();
-    let mut html = HirHtmlPrintCtxt::new(hir, source_files, &mut output);
+    let mut html = HirHtmlPrintCtxt::new(source_files, &mut output);
+    print_type_definitions(ctxt, hir, )?;
     html.print_attribute_and_type_definitions()?;
     html.print_region(region)?;
 

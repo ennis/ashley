@@ -1,35 +1,31 @@
 mod builder;
-pub mod constraint;
+mod constant;
 mod list;
-mod print;
+pub mod print;
+pub mod types;
 mod visit;
-mod types;
-mod op;
 
 use crate::{
-    diagnostic::{DiagnosticBuilder, Diagnostics},
+    diagnostic::{DiagnosticBuilder, Diagnostics, SourceLocation},
     hir::{
+        constant::ConstantImpl,
         list::{List, ListNode},
     },
+    utils::interner::Interner,
 };
 use bumpalo::Bump;
 use ordered_float::OrderedFloat;
+use smallvec::SmallVec;
 use std::{
     fmt,
     hash::Hash,
     num::NonZeroU32,
     ops::{Bound, Deref, DerefMut, RangeBounds},
 };
-use crate::diagnostic::SourceLocation;
-use crate::hir::op::Op;
-use crate::hir::types::TypeImpl;
-pub use crate::utils::interner::{Attr, AttributeBase, BooleanAttr, FloatAttr, IntegerAttr, Location, StringAttr};
-use crate::utils::interner::{AttrInterner, Interner};
 
 pub use self::{
-    builder::{build_operation, Builder, operation_format, operation_formats},
-    constraint::{AttrConstraint, MatchCtxt, operation_constraint, OperationConstraint, RegionConstraint, ValueConstraint},
-    print::{IRPrintable, IRPrinter, IRSyntaxElem, print_hir_region_html, ToIRSyntax, write_hir_html_file, write_ir},
+    builder::FunctionBuilder,
+    types::TypeImpl,
     visit::{IRVisitable, Visit},
 };
 
@@ -59,22 +55,7 @@ impl Default for Location {
     }
 }
 
-impl<'a> IRPrintable<'a> for Location {
-    fn print_hir(&self, printer: &mut dyn IRPrinter<'a>) {
-        match self {
-            Location::Source(src_loc) => {
-                write_ir!(printer, "loc(", *src_loc, ")");
-            }
-            Location::Unknown => {
-                write_ir!(printer, "loc(?)");
-            }
-        }
-    }
-}
-
-
 //--------------------------------------------------------------------------------------------------
-
 
 macro_rules! id_types {
     ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
@@ -119,9 +100,6 @@ macro_rules! id_types {
 
 // Define the handle types for elements in the context arrays
 id_types! {
-    /// Handle to a HIR region.
-    pub struct RegionId;
-
     /// Handle to a HIR operation.
     pub struct OperationId;
 
@@ -133,34 +111,19 @@ id_types! {
 
     /// Interned handle to a HIR type.
     pub struct Type;
+
+    /// Interned handle to a HIR constant.
+    pub struct Constant;
 }
 
 impl ValueId {
-    /// Tries to match a pattern on this value.
-    pub fn pmatch<'ir, T>(&self, ctxt: &HirCtxt<'ir>) -> Option<T>
-    where
-        T: ValueConstraint<'ir>,
-    {
-        let mcx = MatchCtxt::new(ctxt);
-        T::try_match(&mcx, *self)
-    }
-
     /// Returns the type of the value.
-    pub fn ty<'ir>(&self, ctxt: &HirCtxt<'ir>) -> Attr<'ir> {
+    pub fn ty<'ir>(&self, ctxt: &HirCtxt<'ir>) -> Type {
         ctxt.values[*self].ty
     }
 }
 
 impl OperationId {
-    /// Tries to match a pattern on this operation.
-    pub fn pmatch<'ir, T>(&self, ctxt: &HirCtxt<'ir>) -> Option<T>
-    where
-        T: OperationConstraint<'ir>,
-    {
-        let mcx = MatchCtxt::new(ctxt);
-        T::try_match(&mcx, *self)
-    }
-
     /// Returns a pointer to the underlying op.
     pub fn op(&self, ctxt: &HirCtxt) -> &Op {
         &ctxt.ops[*self].data.op
@@ -170,63 +133,41 @@ impl OperationId {
     pub fn op_mut<'a, 'ir>(&self, ctxt: &'a mut HirCtxt<'ir>) -> &'a mut Op<'ir> {
         &mut ctxt.ops[*self].data.op
     }
-
-    /// Returns a range of operands.
-    pub fn operand_range<'ir>(&self, ctxt: &HirCtxt<'ir>, range: impl RangeBounds<usize>) -> &'ir [ValueId] {
-        let operands = ctxt.ops[*self].data.operands;
-        let start = range.start_bound().cloned();
-        let end = range.end_bound().cloned();
-        &operands[(start, end)]
-    }
-
-    /// Returns a range of results.
-    pub fn result_range<'ir>(&self, ctxt: &HirCtxt<'ir>, range: impl RangeBounds<usize>) -> &'ir [ValueId] {
-        let results = ctxt.ops[*self].data.results;
-        let start = range.start_bound().cloned();
-        let end = range.end_bound().cloned();
-        &results[(start, end)]
-    }
 }
 
 impl RegionId {
-    /// Tries to match a pattern on this region.
-    pub fn pmatch<'ir, T>(&self, ctxt: &HirCtxt<'ir>) -> Option<T>
-    where
-        T: RegionConstraint<'ir>,
-    {
-        let mcx = MatchCtxt::new(ctxt);
-        T::try_match(&mcx, *self)
-    }
-
     /// Returns this regions's arguments.
     pub fn arguments<'ir>(&self, ctxt: &HirCtxt<'ir>) -> &'ir [ValueId] {
-        ctxt.regions[*self].arguments
+        &ctxt.regions[*self].arguments
     }
 }
 
 //--------------------------------------------------------------------------------------------------
 
 /// Operation linked list nodes.
-pub type Operation<'ir> = ListNode<OperationId, OperationData<'ir>>;
+pub type Operation<'ir> = ListNode<OperationId, InstructionData<'ir>>;
+
+pub enum Operand {
+    Constant(Constant),
+    ExtInst(u32),
+    Function(FunctionId),
+    Value(ValueId),
+    Type(Type),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct InstructionResult {
+    pub value: ValueId,
+    pub ty: Type,
+}
 
 /// Data associated to an operation.
 #[derive(Copy, Clone, Debug)]
-pub struct OperationData<'ir> {
-    /// Operation kind
-    op: Op<'ir>,
-    /// Location
-    location: Location,
-    /// Parent region
-    region: RegionId,
-}
-
-/// Region definition.
-#[derive(Clone, Debug)]
-pub struct RegionData<'ir> {
-    /// Values representing the region arguments.
-    pub arguments: Vec<ValueId>,
-    /// Ordered list of operations in the region.
-    pub ops: List<OperationId, OperationData>,
+pub struct InstructionData<'ir> {
+    pub opcode: u32,
+    pub result: Option<InstructionResult>,
+    pub operands: SmallVec<[Operand; 3]>,
+    pub function: FunctionId,
 }
 
 /// The kind of value represented in a `Value`.
@@ -235,7 +176,7 @@ pub enum ValueKind {
     /// Operation result (operation ID, result index).
     OpResult(OperationId, u32),
     /// Region argument (region ID, argument index).
-    RegionArg(RegionId, u32),
+    Argument(FunctionId, u32),
 }
 
 /// HIR value.
@@ -270,10 +211,10 @@ impl Value {
     /// * region the region owning the argument
     /// * index the index of the region argument
     /// * ty value type
-    pub fn region_argument(reg: RegionId, index: u32, ty: Type) -> Value {
+    pub fn argument(f: FunctionId, index: u32, ty: Type) -> Value {
         Value {
             ty,
-            kind: ValueKind::RegionArg(reg, index),
+            kind: ValueKind::Argument(f, index),
         }
     }
 }
@@ -312,59 +253,60 @@ pub struct FunctionParameter<'a> {
 /// HIR functions.
 #[derive(Debug)]
 pub struct Function<'a> {
-    pub parameter: &'a mut [FunctionParameter<'a>],
+    pub parameters: Vec<FunctionParameter<'a>>,
+    pub arguments: Vec<ValueId>,
     pub return_ty: Type,
     pub name: &'a str,
-    pub body: RegionId,
+    /// Ordered list of operations in the region.
+    pub ops: List<OperationId, InstructionData<'a>>,
 }
 
-
-pub struct RequiredValue<'a> {
-    pub name: &'a str,
-    pub ty: Type,
-    pub fulfillment: Option<ValueId>,
+/// Describes the domain of a shader value.
+#[derive(Copy, Clone, Debug)]
+pub enum Domain {
+    /// Uniforms
+    Uniform,
+    /// Vertex-domain value (vertex attribute or values in vertex shaders)
+    VertexInvocation,
+    /// Fragment-domain value (values in fragment shaders).
+    ///
+    /// Fragment-domain values can be used in fragment derivative operations (dFdx & dFdy).
+    FragmentInvocation,
+    /// Generic value inside a shader invocation (used for all other stages).
+    Invocation,
 }
 
-pub struct ProvidedValue<'a> {
+/// Describes a program input value.
+pub struct InterfaceVariableData<'a> {
     pub name: &'a str,
     pub ty: Type,
-    pub value: ValueId,
 }
 
 pub enum ProgramKind {
-    Generic(RegionId),
-    Vertex(RegionId),
-    Fragment(RegionId),
-    Compute(RegionId),
+    Generic,
+    Vertex,
+    Fragment,
+    Compute,
     Rasterize,
 }
 
-/// Pipeline program
-pub struct Program<'a> {
-    pub required: Vec<RequiredValue<'a>>,
-    pub provided: Vec<ProvidedValue<'a>>,
-    pub kind: ProgramKind,
-}
-
-pub struct Pipeline {
-    pub programs: Vec<ProgramId>,
-}
 
 /// Container for HIR entities.
 ///
 /// It holds regions, values, operations, types and attributes.
 pub struct HirCtxt<'hir> {
     pub(crate) arena: &'hir HirArena,
-
     pub(crate) types_interner: Interner<TypeImpl, Type>,
+    pub(crate) constants_interner: Interner<ConstantImpl, Constant>,
     pub types: id_arena::Arena<TypeImpl, Type>,
+    pub constants: id_arena::Arena<ConstantImpl, Constant>,
     pub functions: id_arena::Arena<Function<'hir>, FunctionId>,
-    pub programs: id_arena::Arena<Program, ProgramId>,
-    pub pipelines: id_arena::Arena<Pipeline<'a>, PipelineId>,
-
+    pub interface: id_arena::Arena<InterfaceVariableData<'hir>, InterfaceVariable>,
     pub values: id_arena::Arena<Value, ValueId>,
-    pub regions: id_arena::Arena<RegionData<'hir>, RegionId>,
     pub ops: id_arena::Arena<Operation<'hir>, OperationId>,
+
+    ty_unknown: Type,
+    ty_unit: Type,
 }
 
 impl<'hir> fmt::Debug for HirCtxt<'hir> {
@@ -380,18 +322,33 @@ impl<'hir> fmt::Debug for HirCtxt<'hir> {
 impl<'hir> HirCtxt<'hir> {
     /// Creates a new HirCtxt, that uses the specified arena allocator.
     pub fn new(arena: &'hir HirArena) -> HirCtxt<'hir> {
-        /*let mut op_def_map = HashMap::new();
-        for op_def in inventory::iter::<OperationDef> {
-            op_def_map.insert(op_def.opcode, op_def);
-        }*/
+        let mut types_interner = Interner::new();
+        let constants_interner = Interner::new();
+        let mut types = Default::default();
+        let constants = Default::default();
+        let functions = Default::default();
+        let programs = Default::default();
+        let pipelines = Default::default();
+        let values = Default::default();
+        let regions = Default::default();
+        let ops = Default::default();
+        let ty_unknown = types_interner
+            .intern(TypeImpl::Unknown, || types.alloc(TypeImpl::Unknown))
+            .0;
+        let ty_unit = types_interner.intern(TypeImpl::Unit, || types.alloc(TypeImpl::Unit)).0;
 
         HirCtxt {
             arena,
-            interner: AttrInterner::new(),
-            attributes: vec![],
-            values: id_arena::Arena::new(),
-            regions: id_arena::Arena::new(),
-            ops: id_arena::Arena::new(),
+            types_interner,
+            constants_interner,
+            types,
+            constants,
+            functions,
+            interface: (),
+            values,
+            ops,
+            ty_unknown,
+            ty_unit,
         }
     }
 
@@ -410,115 +367,46 @@ impl<'hir> HirCtxt<'hir> {
         self.arena.0.alloc_slice_copy(src)
     }
 
-    /// Interns an attribute.
-    fn intern_attr_inner<T>(&mut self, attr: T) -> &'hir T
-    where
-        T: AttributeBase<'hir> + Eq + Hash,
-    {
-        let (attr, inserted) = self.interner.intern(self.arena, attr);
-        if inserted {
-            self.attributes.push(Attr(attr));
-        }
-        attr
+    /// Interns a type.
+    pub fn intern_type<T>(&mut self, ty: TypeImpl) -> Type {
+        self.types_interner
+            .intern(ty.clone(), || self.types.alloc(ty.clone()))
+            .0
     }
 
-    /// Interns an attribute.
-    pub fn intern_attr<T>(&mut self, value: T) -> Attr<'hir, T>
-    where
-        T: AttributeBase<'hir> + Eq + Hash,
-    {
-        Attr(self.intern_attr_inner(value))
+    /// Returns the unknown type.
+    pub fn ty_unknown(&self) -> Type {
+        self.ty_unknown
+    }
+
+    /// Returns the unknown type.
+    pub fn ty_unit(&self) -> Type {
+        self.ty_unit
+    }
+
+    /// Interns a constant.
+    pub fn intern_constant<T>(&mut self, v: ConstantImpl) -> Constant {
+        self.constants_interner
+            .intern(v.clone(), || self.constants.alloc(v.clone()))
+            .0
+    }
+
+    /// Adds a program to this context.
+    pub fn add_program(&mut self, program: Program) -> ProgramId {
+        self.programs.alloc(program)
+    }
+
+    /// Adds a function to this context.
+    pub fn add_function(&mut self, function: Function) -> FunctionId {
+        self.functions.alloc(function)
     }
 
     /// Creates a new empty region with no parent and no arguments.
     pub fn create_region(&mut self) -> RegionId {
-        let region = self.regions.alloc(RegionData {
-            arguments: &[],
+        self.regions.alloc(RegionData {
+            arguments: Default::default(),
             ops: Default::default(),
-        });
-        region
-    }
-
-    /*/// Creates and appends a new subregion under the specified operation.
-    pub fn create_subregion(
-        &mut self,
-        parent_op: OperationId,
-        arg_types: &[Attr<'hir>],
-    ) -> (RegionId, &'hir [ValueId]) {
-        // Allocate values for the subregion
-        let region_id = self.regions.next_id();
-        let mut arguments = vec![];
-        for (i, ty) in arg_types.iter().enumerate() {
-            arguments.push(self.values.alloc(Value::region_argument(region_id, i as u32, *ty)));
-        }
-        let arguments = self.alloc_slice_copy(&arguments);
-        let region = self.regions.alloc(Region::new(RegionData {
-            arguments,
-            ops: Default::default(),
-        }));
-        self.ops[parent_op].data.regions.append(region, &mut self.regions);
-        (region, arguments)
-    }*/
-
-    /// A short-hand method to build an operation.
-    pub fn create_operation(
-        &mut self,
-        at: Cursor,
-        create_info: OperationCreateInfo<'hir>,
-    ) -> (OperationId, &'hir [ValueId]) {
-        let id = self.ops.next_id();
-        let attributes = self.arena.0.alloc_slice_fill_iter(create_info.attributes);
-        let operands = self.arena.0.alloc_slice_fill_iter(create_info.operands);
-        let results = self
-            .arena
-            .0
-            .alloc_slice_fill_copy(create_info.result_types.len(), ValueId::from_index(0));
-        // create result values
-        for i in 0..create_info.result_types.len() {
-            results[i] = self
-                .values
-                .alloc(Value::result(id, i as u32, create_info.result_types[i]));
-        }
-
-        let regions = self
-            .arena
-            .0
-            .alloc_slice_fill_copy(create_info.regions.len(), RegionId::from_index(0));
-        for (i, region) in create_info.regions.iter().enumerate() {
-            let region_id = self.regions.next_id();
-            let n_args = region.arguments.len();
-            let arguments = self.arena.0.alloc_slice_fill_copy(n_args, ValueId::from_index(0));
-            for (i_arg, arg) in region.arguments.iter().enumerate() {
-                arguments[i] = self
-                    .values
-                    .alloc(Value::region_argument(region_id, i_arg as u32, arg.clone()));
-            }
-            regions[i] = self.regions.alloc(RegionData {
-                arguments,
-                ops: List::default(),
-            });
-        }
-
-        let data = OperationData {
-            opcode: create_info.opcode,
-            attributes,
-            operands,
-            results,
-            regions,
-            location: create_info.location,
-        };
-        let op = self.ops.alloc(Operation::new(data));
-        assert_eq!(op, id);
-        match at {
-            Cursor::End(region) => {
-                self.regions[region].ops.append(op, &mut self.ops);
-            }
-            Cursor::Before(region, next) => {
-                self.regions[region].ops.insert_before(op, next, &mut self.ops);
-            }
-        }
-
-        (op, results)
+        })
     }
 }
 
@@ -526,10 +414,7 @@ impl<'hir> HirCtxt<'hir> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        dialect::base::{FunctionType, ScalarType, ScalarTypeKind},
-        hir::{HirArena, HirCtxt, print_hir_region_html},
-    };
+    use crate::hir::{print_hir_region_html, HirArena, HirCtxt};
     use std::{fs::File, io::Write, path::PathBuf};
 
     fn html_output_file_path(title: &str) -> PathBuf {
@@ -537,6 +422,4 @@ mod tests {
         let root = env!("CARGO_MANIFEST_DIR");
         PathBuf::from(root).join(OUT_DIR).join(format!("{title}.html"))
     }
-
-    fn attr_lifetime_test() {}
 }

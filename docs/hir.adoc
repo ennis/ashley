@@ -8,6 +8,7 @@ Here are the different entities described by the HIR:
 * *Functions*
 * *Pipelines*, configuration information for GPU pipelines (graphics & compute)
 ** Pipelines are an ordered collection of *programs*, that _require_ input values from earlier programs and _provide_ values for later programs
+*** Those values may be shader varyings, but programs can also provide and require functions (closures, really), and interfaces (maybe later)
 ** Each program is supposed to run in a particular shader stage, but this can be inferred from inputs and outputs
 
 === Values

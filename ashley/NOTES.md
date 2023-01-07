@@ -1055,5 +1055,39 @@ Generic representations:
 - make generic operations easier, like traversing operands and results, traversing use chains, replacing values
 
 
+# Do we need any special instructions in functions/programs, other than what SPIR-V offers?
+
+We won't do any transformations on instructions within functions, that's for sure (other than maybe replacing accesses).
+
+* Do we need structured select/loops?
+  * if we don't do any analysis on them, no
+* Get rid of types?
+  * use SPIR-V instructions instead
+* Maybe interpolation, but that's not really super useful (could be a separate program)
+* closures? instead, just 
 
 
+# Required IR transformations
+
+* fuse programs in the same domain
+  * hoist program inputs to function parameters
+* generate shader main body
+* instrumentation
+
+Keep function/constant IDs
+
+# Idea: do all transformations at the lowering stage
+* hoist program inputs to function parameters
+* instrumentation
+* (except fusion)
+
+=> A superset, and in-memory representation of SPIR-V
+
+
+# Bolder idea: just use SPIR-V (with extensions)
+Use the `Linkage` capability to merge modules together.
+Modules can be serialized to the SPIR-V binary format.
+Can read and extract interface from SPIR-V directly.
+
+# Sharing functions between modules?
+Use a prelude inserted into all modules

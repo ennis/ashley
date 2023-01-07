@@ -5,4 +5,4 @@ opt-level = 3
 opt-level = 3
 
 [workspace]
-members = ["ashley", "ashley-derive"]
+members = ["ashley", "ashley-derive", "codegen"]

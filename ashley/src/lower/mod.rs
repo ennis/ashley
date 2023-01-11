@@ -1,13 +1,12 @@
 //! AST lowering to SPIR-V
-use crate::{
-    diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation},
-    syntax::{ast, ast::*, ArithOp, BinaryOp, LogicOp, SyntaxNode, SyntaxToken},
-};
+use crate::{diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation}, hir, syntax::{ast, ast::*, ArithOp, BinaryOp, LogicOp, SyntaxNode, SyntaxToken}};
 use codespan_reporting::{diagnostic::Diagnostic, term, term::termcolor::WriteColor};
 use smallvec::SmallVec;
 use std::{any::Any, cell::Cell, collections::HashMap, io::ErrorKind, sync::Arc};
 
 use rspirv::dr::Builder;
+use crate::hir::{Constant, Function, TypeData};
+use crate::hir::types::ScalarType;
 
 trait DiagnosticsExt {
     /// Emits a "missing generic argument" diagnostic.
@@ -124,28 +123,28 @@ struct BuiltinScope {
 
 macro_rules! make_image_type {
     ($hir:expr, texture $d:ident $t:ident) => {
-        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
             sampled_ty: ScalarType::$t,
             dim: ImageDimension::$d,
             ms: false,
         })))
     };
     ($hir:expr, texture $d:ident $t:ident MS) => {
-        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
             sampled_ty: ScalarType::$t,
             dim: ImageDimension::$d,
             ms: true,
         })))
     };
     ($hir:expr, image $d:ident $t:ident) => {
-        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
             element_ty: ScalarType::$t,
             dim: ImageDimension::$d,
             ms: false,
         })))
     };
     ($hir:expr, image $d:ident $t:ident MS) => {
-        hir.intern_type(TypeImpl::SampledImage(Arc::new(SampledImageType {
+        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
             sampled_ty: ScalarType::$t,
             dim: ImageDimension::$d,
             ms: true,
@@ -153,28 +152,28 @@ macro_rules! make_image_type {
     };
 }
 
-impl<'ir> BuiltinScope<'ir> {
-    fn new(hir: &mut HirCtxt<'ir>) -> BuiltinScope<'ir> {
-        let ty_f32 = hir.intern_type(TypeImpl::Scalar(ScalarType::Float));
-        let ty_f64 = hir.intern_type(TypeImpl::Scalar(ScalarType::Double));
-        let ty_u32 = hir.intern_type(TypeImpl::Scalar(ScalarType::UnsignedInt));
-        let ty_i32 = hir.intern_type(TypeImpl::Scalar(ScalarType::Int));
+impl BuiltinScope {
+    fn new(module: &mut hir::Module) -> BuiltinScope {
+        let ty_f32 = module.define_type(TypeData::Scalar(ScalarType::Float));
+        let ty_f64 = module.define_type(TypeData::Scalar(ScalarType::Double));
+        let ty_u32 = module.define_type(TypeData::Scalar(ScalarType::UnsignedInt));
+        let ty_i32 = module.define_type(TypeData::Scalar(ScalarType::Int));
 
-        let ty_f32x2 = hir.intern_type(TypeImpl::Vector(ScalarType::Float, 2));
-        let ty_f32x3 = hir.intern_type(TypeImpl::Vector(ScalarType::Float, 3));
-        let ty_f32x4 = hir.intern_type(TypeImpl::Vector(ScalarType::Float, 4));
+        let ty_f32x2 = module.define_type(TypeData::Vector(ScalarType::Float, 2));
+        let ty_f32x3 = module.define_type(TypeData::Vector(ScalarType::Float, 3));
+        let ty_f32x4 = module.define_type(TypeData::Vector(ScalarType::Float, 4));
 
-        let ty_i32x2 = hir.intern_type(TypeImpl::Vector(ScalarType::Int, 2));
-        let ty_i32x3 = hir.intern_type(TypeImpl::Vector(ScalarType::Int, 3));
-        let ty_i32x4 = hir.intern_type(TypeImpl::Vector(ScalarType::Int, 4));
+        let ty_i32x2 = module.define_type(TypeData::Vector(ScalarType::Int, 2));
+        let ty_i32x3 = module.define_type(TypeData::Vector(ScalarType::Int, 3));
+        let ty_i32x4 = module.define_type(TypeData::Vector(ScalarType::Int, 4));
 
-        let ty_u32x2 = hir.intern_type(TypeImpl::Vector(ScalarType::UnsignedInt, 2));
-        let ty_u32x3 = hir.intern_type(TypeImpl::Vector(ScalarType::UnsignedInt, 3));
-        let ty_u32x4 = hir.intern_type(TypeImpl::Vector(ScalarType::UnsignedInt, 4));
+        let ty_u32x2 = module.define_type(TypeData::Vector(ScalarType::UnsignedInt, 2));
+        let ty_u32x3 = module.define_type(TypeData::Vector(ScalarType::UnsignedInt, 3));
+        let ty_u32x4 = module.define_type(TypeData::Vector(ScalarType::UnsignedInt, 4));
 
-        let ty_b1x2 = hir.intern_type(TypeImpl::Vector(ScalarType::Bool, 2));
-        let ty_b1x3 = hir.intern_type(TypeImpl::Vector(ScalarType::Bool, 3));
-        let ty_b1x4 = hir.intern_type(TypeImpl::Vector(ScalarType::Bool, 4));
+        let ty_b1x2 = module.define_type(TypeData::Vector(ScalarType::Bool, 2));
+        let ty_b1x3 = module.define_type(TypeData::Vector(ScalarType::Bool, 3));
+        let ty_b1x4 = module.define_type(TypeData::Vector(ScalarType::Bool, 4));
 
         // sampled images
         let ty_texture_1d = make_image_type!(hir, texture Dim1D       Float   );
@@ -274,7 +273,7 @@ impl Scope for BuiltinScope {
         }
     }
 
-    fn resolve_func(&self, name: &str) -> Option<FunctionId> {
+    fn resolve_func(&self, name: &str) -> Option<Function> {
         None
     }
 
@@ -284,16 +283,16 @@ impl Scope for BuiltinScope {
 }
 
 /// Simple scope, contains global variables.
-struct SimpleScope<'a, 'hir> {
+struct SimpleScope<'a> {
     parent: Option<&'a dyn Scope>,
     types: HashMap<String, Type>,
-    functions: HashMap<String, FunctionId>,
+    functions: HashMap<String, Function>,
     constants: HashMap<String, Constant>
     //variables: HashMap<String, VariableDefinition>,
 }
 
-impl<'a, 'hir> SimpleScope<'a, 'hir> {
-    fn new(parent: Option<&'a dyn Scope<'hir>>) -> SimpleScope<'a, 'hir> {
+impl<'a> SimpleScope<'a> {
+    fn new(parent: Option<&'a dyn Scope>) -> SimpleScope<'a> {
         SimpleScope {
             parent,
             types: Default::default(),
@@ -302,7 +301,7 @@ impl<'a, 'hir> SimpleScope<'a, 'hir> {
     }
 }
 
-impl<'a, 'hir> Scope for SimpleScope<'a, 'hir> {
+impl<'a> Scope for SimpleScope<'a> {
     fn resolve_type(&self, name: &str) -> Option<Type> {
         self.types
             .get(name)
@@ -320,13 +319,13 @@ struct FunctionArgument {
 }
 
 /// The scope of the body of a function.
-struct FunctionBodyScope<'a, 'hir> {
-    parent: Option<&'a dyn Scope<'hir>>,
+struct FunctionBodyScope<'a> {
+    parent: Option<&'a dyn Scope>,
     arguments: HashMap<String, FunctionArgument>,
 }
 
-impl<'a, 'hir> FunctionBodyScope<'a, 'hir> {
-    fn new(parent: Option<&'a dyn Scope<'hir>>) -> FunctionBodyScope<'a, 'hir> {
+impl<'a> FunctionBodyScope<'a> {
+    fn new(parent: Option<&'a dyn Scope>) -> FunctionBodyScope<'a> {
         FunctionBodyScope {
             parent,
             arguments: Default::default(),
@@ -339,17 +338,17 @@ struct LocalVariableDefinition {
     /// Corresponding syntax node of the definition.
     node: SyntaxNode,
     /// HIR value holding the logical pointer to the variable.
-    hir_value: hir::ValueId,
+    hir_value: hir::Value,
 }
 
 /// Scope defined by a block inside a function.
-struct BlockScope<'a, 'hir> {
-    parent: Option<&'a dyn Scope<'hir>>,
+struct BlockScope<'a> {
+    parent: Option<&'a dyn Scope>,
     variables: HashMap<String, LocalVariableDefinition>,
 }
 
-impl<'a, 'hir> BlockScope<'a, 'hir> {
-    fn new(parent: Option<&'a dyn Scope<'hir>>) -> BlockScope<'a, 'hir> {
+impl<'a> BlockScope<'a> {
+    fn new(parent: Option<&'a dyn Scope>) -> BlockScope<'a> {
         BlockScope {
             parent,
             variables: Default::default(),
@@ -360,41 +359,37 @@ impl<'a, 'hir> BlockScope<'a, 'hir> {
     fn declare_variable(&mut self, def: LocalVariableDefinition) {}
 }
 
-impl<'a, 'hir> Scope<'hir> for BlockScope<'a, 'hir> {
+impl<'a> Scope for BlockScope<'a> {
     fn resolve_type(&self, name: &str) -> Option<Type> {
         self.parent.and_then(|parent| parent.resolve_type(name))
     }
 }
 
-struct LowerCtxt<'a, 'ir> {
+struct LowerCtxt<'a> {
     current_file: SourceId,
     diag: &'a Diagnostics,
-    program_inputs: Vec<RequiredValue<'ir>>,
-    program_outputs: Vec<ProvidedValue<'ir>>,
 }
 
-impl<'a, 'ir> LowerCtxt<'a, 'ir> {
-    fn new(file: SourceId, diag: &'a Diagnostics) -> LowerCtxt<'a, 'ir> {
+impl<'a> LowerCtxt<'a> {
+    fn new(file: SourceId, diag: &'a Diagnostics) -> LowerCtxt<'a> {
         LowerCtxt {
             current_file: file,
             diag,
-            program_inputs: vec![],
-            program_outputs: vec![],
         }
     }
 
-    fn token_loc(&self, token: &SyntaxToken) -> Location {
-        Location::Source(SourceLocation::new(self.current_file, token.text_range()))
+    fn token_loc(&self, token: &SyntaxToken) -> SourceLocation {
+        SourceLocation::new(self.current_file, token.text_range())
     }
 
-    fn node_loc(&self, node: &SyntaxNode) -> Location {
-        Location::Source(SourceLocation::new(self.current_file, node.text_range()))
+    fn node_loc(&self, node: &SyntaxNode) -> SourceLocation {
+        SourceLocation::new(self.current_file, node.text_range())
     }
 
     /// Emits IR for a module.
     ///
     /// Essentially, creates a HIR program.
-    fn emit_module(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, module: Module) {
+    fn emit_module(&mut self, b: &mut hir::FunctionBuilder, module: Module) {
         let mut root_scope = BuiltinScope::new(b);
         let mut global_scope = SimpleScope::new(Some(&root_scope));
         for item in module.items() {
@@ -402,7 +397,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
         }
     }
 
-    fn emit_item(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, item: Item, scope: &mut SimpleScope<'_, 'ir>) {
+    fn emit_item(&mut self, b: &mut hir::FunctionBuilder, item: Item, scope: &mut SimpleScope<'_>) {
         match item {
             Item::FnDef(def) => {
                 self.emit_fn_def(b, def, scope);
@@ -437,7 +432,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
 
     /// Generates IR for a function.
     fn emit_function(&mut self,
-                     b: &mut hir::FunctionBuilder<'_, 'ir>, func: Option<FnDef>, scope: &mut SimpleScope<'_, 'ir>) {
+                     b: &mut hir::FunctionBuilder, func: Option<FnDef>, scope: &mut SimpleScope<'_>) {
 
     }
 
@@ -445,9 +440,9 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
     /// Generates IR for an expression node, or returns undef if the expression is `None`.
     fn emit_expr_or_undef(
         &mut self,
-        b: &mut hir::FunctionBuilder<'_, 'ir>,
+        b: &mut hir::FunctionBuilder,
         expr: Option<Expr>,
-        scope: &dyn Scope<'ir>,
+        scope: &dyn Scope,
     ) -> hir::ValueId {
         if let Some(expr) = expr {
             self.emit_expr(b, expr, scope)
@@ -461,7 +456,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
     /// # Return value
     ///
     /// The IR value of the expression
-    fn emit_expr(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, expr: Expr, scope: &dyn Scope<'ir>) -> hir::ValueId {
+    fn emit_expr(&mut self, b: &mut hir::FunctionBuilder, expr: Expr, scope: &dyn Scope) -> hir::ValueId {
         let loc = self.node_loc(expr.syntax());
         match expr {
             Expr::BinExpr(bin_expr) => {
@@ -561,7 +556,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
     }
 
     /// Emits IR for a type reference.
-    fn emit_type(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, ty: Type) -> hir::Attr<'ir> {
+    fn emit_type(&mut self, b: &mut hir::FunctionBuilder, ty: Type) -> hir::Type {
         match ty {
             Type::TypeRef(tyref) => {
                 match tyref.ident() {
@@ -593,7 +588,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
         }
     }
 
-    fn emit_type_or_unknown(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, ty: Option<Type>) -> hir::Type {
+    fn emit_type_or_unknown(&mut self, b: &mut hir::FunctionBuilder, ty: Option<Type>) -> hir::Type {
         if let Some(ty) = ty {
             self.emit_type(b, ty)
         } else {
@@ -602,7 +597,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
     }
 
     /// Emits IR for a block statement.
-    fn emit_stmt<'ir>(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, stmt: Stmt, scope: &mut BlockScope<'_, 'ir>) {
+    fn emit_stmt(&mut self, b: &mut hir::FunctionBuilder, stmt: Stmt, scope: &mut BlockScope) {
         match stmt {
             Stmt::ExprStmt(expr) => {
                 self.emit_expr_or_undef(b, expr.expr(), scope);
@@ -618,7 +613,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
     }
 
     /// Emits IR for a block.
-    fn emit_block<'ir>(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, block: Block, scope: &dyn Scope<'ir>) {
+    fn emit_block(&mut self, b: &mut hir::FunctionBuilder, block: Block, scope: &dyn Scope) {
         // start block scope
         let mut block_scope = BlockScope::new(Some(scope));
         for stmt in block.stmts() {
@@ -627,7 +622,7 @@ impl<'a, 'ir> LowerCtxt<'a, 'ir> {
     }
 
     /// Emits IR for a function declaration.
-    fn emit_fn_def<'ir>(&mut self, b: &mut hir::FunctionBuilder<'_, 'ir>, fn_def: FnDef, scope: &mut SimpleScope<'_, 'ir>) {
+    fn emit_fn_def(&mut self, b: &mut hir::FunctionBuilder, fn_def: FnDef, scope: &mut SimpleScope) {
         let loc = self.node_loc(fn_def.syntax());
         // generate IR for all parameter types and generate the function type
         let mut param_types = vec![];

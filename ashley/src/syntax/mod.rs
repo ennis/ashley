@@ -171,14 +171,17 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_ws();
             match self.current() {
-                Some(FN_KW) => {
-                    self.parse_fn();
+                Some(IMPORT_KW) => {
+                    self.parse_import_declaration();
+                }
+                Some(STRUCT_KW) => {
+                    self.parse_struct_def();
                 }
                 Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW) => {
                     self.parse_global_variable();
                 }
-                Some(STRUCT_KW) => {
-                    self.parse_struct_def();
+                Some(FN_KW) => {
+                    self.parse_fn();
                 }
                 None => break,
                 _ => {
@@ -189,6 +192,51 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    fn parse_package_parameter(&mut self) {
+        match self.current() {
+            Some(INT_NUMBER | STRING) => {
+                self.start_node(LIT_EXPR);
+                self.bump();
+                self.finish_node();
+            }
+            _ => {
+                let span = self.span();
+                self.diag
+                    .error("expected package parameter")
+                    .primary_label(span, "")
+                    .emit();
+            }
+        }
+    }
+
+    fn parse_import_declaration(&mut self) {
+        self.start_node(IMPORT_DECL);
+        self.expect(IMPORT_KW);
+        self.skip_ws();
+        self.expect_ident("package name");
+        self.skip_ws();
+        if let Some(T!['(']) = self.current() {
+            self.start_node(IMPORT_PARAM_LIST);
+            self.bump();
+            self.skip_ws();
+            self.parse_separated_list(T![,], T![')'], true, false, Self::parse_package_parameter);
+            self.expect(T![')']);
+            self.finish_node(); // IMPORT_PARAM_LIST
+            self.skip_ws();
+        }
+
+        if let Some(T![as]) = self.current() {
+            self.start_node(IMPORT_ALIAS);
+            self.bump();
+            self.skip_ws();
+            self.expect_ident("package import alias");
+            self.finish_node(); // IMPORT_ALIAS
+            self.skip_ws();
+        }
+        self.expect(T![;]);
+        self.finish_node();     // IMPORT_DECL
     }
 
     fn parse_struct_def(&mut self) {
@@ -1052,6 +1100,19 @@ struct TwoFieldsTrailing {
     a: f32,
     b: f32,
 }
+"#
+        ));
+    }
+
+    #[test]
+    fn imports() {
+        insta::assert_debug_snapshot!(parse_source_text(
+            r#"
+import package;
+import package2 as p;
+import package3("test") as p1;
+import package3  (   "test"   )  as p1  ;
+import package4  ;
 "#
         ));
     }

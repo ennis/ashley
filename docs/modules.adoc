@@ -1,0 +1,32 @@
+= Packages
+
+== Interface
+
+* Module parameters: int constants, strings
+* import other modules
+* may be composed of multiple modules
+** vertex shader module
+** fragment shader module
+* list of exports (concatenation of all the exports of individual modules)
+** uniforms
+** vertex-varying values
+** fragment-varying values
+
+Importing a package : makes all compatible exports visible in the importing module:
+
+[source]
+----
+// (current module is a vertex shader)
+import vertex_2d;   // import with no parameters, defines a variable named "vertex_2d", of structure type that contains uniforms and all exported variables for the current stage (vertex shader)
+
+import vertex_color("color") as main_vertex_color;  // import with a string parameter, a variable named "main_vertex_color", (must specify a name when parameters are involved, otherwise same semantics as above)
+----
+
+== Resolution
+
+An import declaration is lowered to a non-semantic SPIR-V instruction to specify the name (identifier, with mangled parameters) of the imported package. Otherwise, each referenced variable is defined in SPIR-V as an imported global variable (prefixed by the mangled package name).
+
+Exported types are automatically visible in the importing module.
+
+In practical terms, when the compiler sees an import declaration, it looks for a package with a matching name (somewhere there's a list of available packages). If one is found, an `OpExtImportPackage` instruction is emitted in the SPIR-V module and all exported types are copied in the importing module. All exported variables are made visible in scope. If one of such variables is referenced in the importing module, an `OpVariable` instruction is added with `Import` linkage, with the name of the variable prefixed by the mangled name of the package. These will be resolved during linking.
+

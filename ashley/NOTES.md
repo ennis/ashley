@@ -1091,3 +1091,29 @@ Can read and extract interface from SPIR-V directly.
 
 # Sharing functions between modules?
 Use a prelude inserted into all modules
+
+
+# Uniforms
+Q: Does this declare a new parameter?
+
+```
+uniform normal_map: Texture2D;
+```
+A: Yes, if instead you want to use a visible uniform, use: `import uniform normal_map: Texture2D;`
+to make it visible: `export uniform normal_map: Texture2D;`
+
+Set of values visible in the pipeline:
+```
+vec2 position;
+vec4 color;
+uniform texture2D normal_map; // "export uniform" 
+```
+
+
+# Use cases
+
+## Add a new local control on a mesh, with a vertex color
+
+* In the shader, click-drag the "Vertex Color" component onto the pipeline
+
+

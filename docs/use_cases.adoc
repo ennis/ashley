@@ -1,0 +1,39 @@
+= Linker use cases
+
+== Add a new local control on a mesh, with a vertex color
+
+In the shader graph view, click-drag the "Vertex Color" component onto the pipeline:
+
+[mermaid]
+.Vertex color block
+....
+graph TD;
+    Before-->|interface| vertex_color["Vertex Color (color0)"];
+    vertex_color-->|"interface+color0"| After;
+....
+
+
+Maybe a graph is not the best representation? After all, the order of some components do not matter (e.g. if there are multiple vertex color available, the order in which they appear in the pipeline is irrelevant). Also, "Vertex Color" is a combination of a vertex shader, an interpolation node, and a fragment shader, it does not "execute" at a particular point in the pipeline.
+
+In terms of interaction, a "checkbox" would be sufficient. Click on the checkbox to import a subgraph that provides a vertex color value.
+
+
+[mermaid]
+.Vertex color block
+....
+graph TD;
+    subgraph providers
+        direction BT
+        vertex_color_0["Vertex Color (color0)"]
+        vertex_color_1["Vertex Color (color1)"];
+    end
+    Before-->|"interface+color0"| After;
+....
+
+Not sure that the graph representation is useful in this case. Could simply add an `import vertex_color(0) as color_0` to import a module and use the values they provide.
+
+In terms of SPIR-V, this would show up as a global variable, of type struct containing all values provided by the module, with "import" linkage, and an "import" instruction to import the named module "vertex_color" with argument 0.
+
+== Dump a fragment-varying value to a render target
+
+No graph interaction necessary, just right-click on the variable and select `Dump to render target`.

@@ -339,121 +339,121 @@ fn generate_instruction(inst: &Instruction, ext: Option<Extension>) -> proc_macr
                 quote!(ImageOperands)
             }
             OperandKind::FPFastMathMode => {
-                quote!(spirv_headers::FPFastMathMode)
+                quote!(spirv::FPFastMathMode)
             }
             OperandKind::SelectionControl => {
-                quote!(spirv_headers::SelectionControl)
+                quote!(spirv::SelectionControl)
             }
             OperandKind::LoopControl => {
-                quote!(spirv_headers::LoopControl)
+                quote!(spirv::LoopControl)
             }
             OperandKind::FunctionControl => {
-                quote!(spirv_headers::FunctionControl)
+                quote!(spirv::FunctionControl)
             }
             OperandKind::MemorySemantics => {
-                quote!(spirv_headers::MemorySemantics)
+                quote!(spirv::MemorySemantics)
             }
             OperandKind::MemoryAccess => {
-                quote!(spirv_headers::MemoryAccess)
+                quote!(spirv::MemoryAccess)
             }
             OperandKind::KernelProfilingInfo => {
-                quote!(spirv_headers::KernelProfilingInfo)
+                quote!(spirv::KernelProfilingInfo)
             }
             OperandKind::RayFlags => {
-                quote!(spirv_headers::RayFlags)
+                quote!(spirv::RayFlags)
             }
             OperandKind::FragmentShadingRate => {
-                quote!(spirv_headers::FragmentShadingRate)
+                quote!(spirv::FragmentShadingRate)
             }
             OperandKind::SourceLanguage => {
-                quote!(spirv_headers::SourceLanguage)
+                quote!(spirv::SourceLanguage)
             }
             OperandKind::ExecutionModel => {
-                quote!(spirv_headers::ExecutionModel)
+                quote!(spirv::ExecutionModel)
             }
             OperandKind::AddressingModel => {
-                quote!(spirv_headers::AddressingModel)
+                quote!(spirv::AddressingModel)
             }
             OperandKind::MemoryModel => {
-                quote!(spirv_headers::MemoryModel)
+                quote!(spirv::MemoryModel)
             }
             OperandKind::ExecutionMode => {
-                quote!(spirv_headers::ExecutionMode)
+                quote!(spirv::ExecutionMode)
             }
             OperandKind::StorageClass => {
-                quote!(spirv_headers::StorageClass)
+                quote!(spirv::StorageClass)
             }
             OperandKind::Dim => {
-                quote!(spirv_headers::Dim)
+                quote!(spirv::Dim)
             }
             OperandKind::SamplerAddressingMode => {
-                quote!(spirv_headers::SamplerAddressingMode)
+                quote!(spirv::SamplerAddressingMode)
             }
             OperandKind::SamplerFilterMode => {
-                quote!(spirv_headers::SamplerFilterMode)
+                quote!(spirv::SamplerFilterMode)
             }
             OperandKind::ImageFormat => {
-                quote!(spirv_headers::ImageFormat)
+                quote!(spirv::ImageFormat)
             }
             OperandKind::ImageChannelOrder => {
-                quote!(spirv_headers::ImageChannelOrder)
+                quote!(spirv::ImageChannelOrder)
             }
             OperandKind::ImageChannelDataType => {
-                quote!(spirv_headers::ImageChannelDataType)
+                quote!(spirv::ImageChannelDataType)
             }
             OperandKind::FPRoundingMode => {
-                quote!(spirv_headers::FPRoundingMode)
+                quote!(spirv::FPRoundingMode)
             }
             OperandKind::FPDenormMode => {
-                quote!(spirv_headers::FPDenormMode)
+                quote!(spirv::FPDenormMode)
             }
             OperandKind::QuantizationModes => {
-                quote!(spirv_headers::QuantizationModes)
+                quote!(spirv::QuantizationModes)
             }
             OperandKind::FPOperationMode => {
-                quote!(spirv_headers::FPOperationMode)
+                quote!(spirv::FPOperationMode)
             }
             OperandKind::OverflowModes => {
-                quote!(spirv_headers::OverflowModes)
+                quote!(spirv::OverflowModes)
             }
             OperandKind::LinkageType => {
-                quote!(spirv_headers::LinkageType)
+                quote!(spirv::LinkageType)
             }
             OperandKind::AccessQualifier => {
-                quote!(spirv_headers::AccessQualifier)
+                quote!(spirv::AccessQualifier)
             }
             OperandKind::FunctionParameterAttribute => {
-                quote!(spirv_headers::FunctionParameterAttribute)
+                quote!(spirv::FunctionParameterAttribute)
             }
             OperandKind::Decoration => {
-                quote!(spirv_headers::Decoration)
+                quote!(spirv::Decoration)
             }
             OperandKind::BuiltIn => {
-                quote!(spirv_headers::BuiltIn)
+                quote!(spirv::BuiltIn)
             }
             OperandKind::Scope => {
-                quote!(spirv_headers::Scope)
+                quote!(spirv::Scope)
             }
             OperandKind::GroupOperation => {
-                quote!(spirv_headers::GroupOperation)
+                quote!(spirv::GroupOperation)
             }
             OperandKind::KernelEnqueueFlags => {
-                quote!(spirv_headers::KernelEnqueueFlags)
+                quote!(spirv::KernelEnqueueFlags)
             }
             OperandKind::Capability => {
-                quote!(spirv_headers::Capability)
+                quote!(spirv::Capability)
             }
             OperandKind::RayQueryIntersection => {
-                quote!(spirv_headers::RayQueryIntersection)
+                quote!(spirv::RayQueryIntersection)
             }
             OperandKind::RayQueryCommittedIntersectionType => {
-                quote!(spirv_headers::RayQueryCommittedIntersectionType)
+                quote!(spirv::RayQueryCommittedIntersectionType)
             }
             OperandKind::RayQueryCandidateIntersectionType => {
-                quote!(spirv_headers::RayQueryCandidateIntersectionType)
+                quote!(spirv::RayQueryCandidateIntersectionType)
             }
             OperandKind::PackedVectorFormat => {
-                quote!(spirv_headers::PackedVectorFormat)
+                quote!(spirv::PackedVectorFormat)
             }
             OperandKind::IdMemorySemantics => {
                 quote!(MemorySemanticsId)
@@ -462,7 +462,7 @@ fn generate_instruction(inst: &Instruction, ext: Option<Extension>) -> proc_macr
                 quote!(ScopeId)
             }
             OperandKind::IdRef => {
-                quote!(ValueId)
+                quote!(Value)
             }
             OperandKind::IdResultType => {
                 quote!(Type)
@@ -485,13 +485,13 @@ fn generate_instruction(inst: &Instruction, ext: Option<Extension>) -> proc_macr
                 quote!(u32)
             }
             OperandKind::PairLiteralIntegerIdRef => {
-                quote!((i32, ValueId))
+                quote!((i32, Value))
             }
             OperandKind::PairIdRefLiteralInteger => {
-                quote!((ValueId, i32))
+                quote!((Value, i32))
             }
             OperandKind::PairIdRefIdRef => {
-                quote!((ValueId, ValueId))
+                quote!((Value, Value))
             }
             _ => {
                 panic!("unsupported operand kind")
@@ -524,7 +524,7 @@ fn generate_instruction(inst: &Instruction, ext: Option<Extension>) -> proc_macr
         }
     } else {
         quote! {
-            let mut inst_builder = InstBuilder::new(spirv_headers::Op::#inst_variant_name);
+            let mut inst_builder = InstBuilder::new(spirv::Op::#inst_variant_name);
         }
     };
 
@@ -536,11 +536,11 @@ fn generate_instruction(inst: &Instruction, ext: Option<Extension>) -> proc_macr
         quote!()
     };
 
-    let return_result_type = if has_result { quote!( -> ValueId ) } else { quote!() };
+    let return_result_type = if has_result { quote!( -> Value ) } else { quote!() };
     let append_inst_and_return_result = if has_result {
         quote!(self.append_inst(inst_builder).unwrap())
     } else {
-        quote!{ self.append_inst(inst_builder); }
+        quote! { self.append_inst(inst_builder); }
     };
 
     quote! {
@@ -569,7 +569,7 @@ fn generate_instruction_methods(insts: &[Instruction], ext: Option<Extension>) -
     }
 
     quote! {
-        impl<'a, 'hir> FunctionBuilder<'a, 'hir> {
+        impl<'a> FunctionBuilder<'a> {
             #(#methods)*
         }
     }

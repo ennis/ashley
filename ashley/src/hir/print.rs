@@ -2,8 +2,8 @@ use crate::{
     diagnostic::{SourceFileProvider, SourceId, SourceLocation},
     hir::{
         types::{ImageDimension, ImageType, SampledImageType, ScalarType, StructType, FunctionType},
-        HirCtxt, Location, Operation, InstructionData, OperationId, RegionId, Type, TypeImpl,
-        ValueId,
+        HirCtxt, Location, Operation, InstructionData, OperationId, RegionId, Type, TypeData,
+        Value,
     },
 };
 use codespan_reporting::files::Files;
@@ -38,7 +38,7 @@ macro_rules! write_list {
     };
 }
 
-pub struct DisplayOperandHtml(ValueId);
+pub struct DisplayOperandHtml(Value);
 
 impl Display for DisplayOperandHtml {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -47,7 +47,7 @@ impl Display for DisplayOperandHtml {
     }
 }
 
-impl ValueId {
+impl Value {
     fn display_html(&self) -> DisplayOperandHtml {
         DisplayOperandHtml(*self)
     }
@@ -220,52 +220,52 @@ fn print_function_type(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &Function
     Ok(())
 }
 
-fn print_type_impl(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &TypeImpl) -> fmt::Result {
+fn print_type_impl(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &TypeData) -> fmt::Result {
     match ty {
-        TypeImpl::Unit => {
+        TypeData::Unit => {
             write!(ctxt.w, "void")?;
         }
-        TypeImpl::Scalar(scalar_type) => {
+        TypeData::Scalar(scalar_type) => {
             write!(ctxt.w, "{}", scalar_type.display())?;
         }
-        TypeImpl::Vector(vector_type) => {
+        TypeData::Vector(vector_type) => {
             write!(ctxt.w, "{}", vector_type.display())?;
         }
-        TypeImpl::Matrix(matrix_type) => {
+        TypeData::Matrix(matrix_type) => {
             write!(ctxt.w, "{}", matrix_type.display())?;
         }
-        TypeImpl::Array(array_type) => {
+        TypeData::Array(array_type) => {
             write!(ctxt.w, "[")?;
             print_type(ctxt, hir, array_type.0)?;
             write!(ctxt.w, "; {}]", array_type.1)?;
         }
-        TypeImpl::RuntimeArray(ty) => {
+        TypeData::RuntimeArray(ty) => {
             write!(ctxt.w, "[")?;
             print_type(ctxt, hir, *ty)?;
             write!(ctxt.w, "]")?;
         }
-        TypeImpl::Struct(struct_type) => {
+        TypeData::Struct(struct_type) => {
             print_struct_type(ctxt, hir, struct_type)?;
         }
-        TypeImpl::SampledImage(_) => {}
-        TypeImpl::Image(_) => {}
-        TypeImpl::Pointer(ty) => {
+        TypeData::SampledImage(_) => {}
+        TypeData::Image(_) => {}
+        TypeData::Pointer(ty) => {
             write!(ctxt.w, "*")?;
             print_type(ctxt, hir, *ty)?;
         }
-        TypeImpl::Sampler => {
+        TypeData::Sampler => {
             write!(ctxt.w, "sampler")?;
         }
-        TypeImpl::ShadowSampler => {
+        TypeData::ShadowSampler => {
             write!(ctxt.w, "shadowSampler")?;
         }
-        TypeImpl::String => {
+        TypeData::String => {
             write!(ctxt.w, "string")?;
         }
-        TypeImpl::Unknown => {
+        TypeData::Unknown => {
             write!(ctxt.w, "unknown")?;
         }
-        TypeImpl::Function(function_type) => {
+        TypeData::Function(function_type) => {
             print_function_type(ctxt, hir, function_type)?;
         }
     }
@@ -274,14 +274,14 @@ fn print_type_impl(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: &TypeImpl) ->
 
 fn print_type(ctxt: &mut HirHtmlPrintCtxt, hir: &HirCtxt, ty: Type) -> fmt::Result {
     match &hir.types[ty] {
-        ty @ TypeImpl::Scalar(_)
-        | ty @ TypeImpl::Vector(_)
-        | ty @ TypeImpl::Matrix(_)
-        | ty @ TypeImpl::Array(_)
-        | ty @ TypeImpl::RuntimeArray(_)
-        | ty @ TypeImpl::String
-        | ty @ TypeImpl::Unknown
-        | ty @ TypeImpl::Pointer(_) => {
+        ty @ TypeData::Scalar(_)
+        | ty @ TypeData::Vector(_)
+        | ty @ TypeData::Matrix(_)
+        | ty @ TypeData::Array(_)
+        | ty @ TypeData::RuntimeArray(_)
+        | ty @ TypeData::String
+        | ty @ TypeData::Unknown
+        | ty @ TypeData::Pointer(_) => {
             // print inline
             print_type_impl(ctxt, hir, ty)
         }

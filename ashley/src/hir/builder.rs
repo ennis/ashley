@@ -1,14 +1,19 @@
 use crate::{
     diagnostic::Diagnostics,
     hir::{
-        constant::ConstantImpl, Constant, Cursor, Function, FunctionId, FunctionParameter, HirCtxt, InstructionData,
-        InstructionResult, Location, Operand, Operation, OperationId, Type, TypeImpl, Value, ValueId, ValueKind,
+        constant::ConstantData, Block, BlockData, Constant, FunctionData, Function, FunctionParameter,
+        InstructionData, Module, Operand, Operation, OperationId, Type, TypeData, Value,
+        ValueData, ValueKind,
     },
 };
+use ashley::hir::TerminatingInstruction;
 use bumpalo::Bump;
+use id_arena::Arena;
 use ordered_float::OrderedFloat;
+use rspirv::spirv;
 use smallvec::SmallVec;
 use std::{collections::HashMap, fmt, hash::Hash, ops::Deref};
+
 
 struct InstBuilder {
     opcode: u32,
@@ -17,6 +22,14 @@ struct InstBuilder {
 }
 
 impl InstBuilder {
+    fn new(opcode: spirv::Op) -> InstBuilder {
+        InstBuilder {
+            opcode: opcode as u32,
+            result_type: None,
+            operands: Default::default(),
+        }
+    }
+
     fn set_result(&mut self, result_type: Type) {
         self.result = Some(result_type);
     }
@@ -26,20 +39,20 @@ trait IntoOperand {
     fn write_operand(&self, builder: &mut InstBuilder);
 }
 
-impl IntoOperand for ValueId {
+impl IntoOperand for Value {
     fn write_operand(&self, builder: &mut InstBuilder) {
         builder.operands.push(Operand::Value(*self))
     }
 }
 
-impl IntoOperand for (ValueId, ValueId) {
+impl IntoOperand for (Value, Value) {
     fn write_operand(&self, builder: &mut InstBuilder) {
         builder.operands.push(Operand::Value(self.0));
         builder.operands.push(Operand::Value(self.1));
     }
 }
 
-impl<'a> IntoOperand for &'a [ValueId] {
+impl<'a> IntoOperand for &'a [Value] {
     fn write_operand(&self, builder: &mut InstBuilder) {
         for v in self {
             builder.operands.push(Operand::Value(v));
@@ -47,7 +60,7 @@ impl<'a> IntoOperand for &'a [ValueId] {
     }
 }
 
-impl IntoOperand for FunctionId {
+impl IntoOperand for Function {
     fn write_operand(&self, builder: &mut InstBuilder) {
         builder.operands.push(Operand::Function(*self))
     }
@@ -65,93 +78,213 @@ impl IntoOperand for Type {
     }
 }
 
-/// Used to build a HIR function.
-pub struct FunctionBuilder<'a, 'hir> {
-    pub ctxt: &'a mut HirCtxt<'hir>,
-    diag: &'a Diagnostics,
-    function: FunctionId,
+pub struct ImageOperands {
+    //pub bits: spirv::ImageOperands,
+    pub bias: Option<Value>,
+    pub lod: Option<Value>,
+    pub grad: Option<(Value, Value)>,       // dx, dy
+    pub const_offset: Option<Constant>,
+    pub offset: Option<Value>,
+    pub const_offsets: Option<Constant>,
+    pub sample: Option<Value>,
+    pub min_lod: Option<Value>,
+    pub sign_extend: bool,
+    pub zero_extend: bool,
 }
 
-impl<'a, 'hir> Deref for FunctionBuilder<'a, 'hir> {
-    type Target = HirCtxt<'hir>;
-
-    fn deref(&self) -> &Self::Target {
-        &*self.ctxt
+impl Default for ImageOperands {
+    fn default() -> Self {
+        ImageOperands {
+            bias: None,
+            lod: None,
+            grad: None,
+            const_offset: None,
+            offset: None,
+            const_offsets: None,
+            sample: None,
+            min_lod: None,
+            sign_extend: false,
+            zero_extend: false,
+        }
     }
 }
 
-impl<'a, 'hir> FunctionBuilder<'a, 'hir> {
+impl IntoOperand for ImageOperands {
+    fn write_operand(&self, builder: &mut InstBuilder) {
+        let mut bits = spirv::ImageOperands::empty();
+        // NOTE: the order is important: operands indicated by smaller-numbered bits should appear first
+        if let Some(bias) = self.bias {
+            bits.set(spirv::ImageOperands::BIAS, true);
+            bias.write_operand(builder);
+        }
+        if let Some(lod) = self.lod {
+            bits.set(spirv::ImageOperands::LOD, true);
+            lod.write_operand(builder);
+        }
+        if let Some(grad) = self.grad {
+            bits.set(spirv::ImageOperands::GRAD, true);
+            grad.0.write_operand(builder);
+            grad.1.write_operand(builder);
+        }
+        if let Some(const_offset) = self.const_offset {
+            bits.set(spirv::ImageOperands::CONST_OFFSET, true);
+            const_offset.write_operand(builder);
+        }
+        if let Some(offset) = self.offset {
+            bits.set(spirv::ImageOperands::OFFSET, true);
+            offset.write_operand(builder);
+        }
+        if let Some(const_offsets) = self.const_offsets {
+            bits.set(spirv::ImageOperands::CONST_OFFSETS, true);
+            const_offsets.write_operand(builder);
+        }
+        if let Some(sample) = self.sample {
+            bits.set(spirv::ImageOperands::SAMPLE, true);
+            sample.write_operand(builder);
+        }
+        if let Some(min_lod) = self.min_lod {
+            bits.set(spirv::ImageOperands::MIN_LOD, true);
+            min_lod.write_operand(builder);
+        }
+        if let Some(sign_extend) = self.sign_extend {
+            bits.set(spirv::ImageOperands::SIGN_EXTEND, true);
+            sign_extend.write_operand(builder);
+        }
+        if let Some(zero_extend) = self.zero_extend {
+            bits.set(spirv::ImageOperands::ZERO_EXTEND, true);
+            zero_extend.write_operand(builder);
+        }
+    }
+}
+
+/// Used to build a HIR function.
+pub struct FunctionBuilder {
+    function: FunctionData,
+    block: Block,
+}
+
+impl FunctionBuilder {
     ///
     pub fn new(
-        ctxt: &'a mut HirCtxt<'hir>,
-        diag: &'a Diagnostics,
         return_ty: Type,
         parameters: Vec<FunctionParameter>,
-    ) -> FunctionBuilder<'a, 'hir> {
-        let function_id = ctxt.functions.next_id();
+        linkage: Option<spirv::LinkageType>
+    ) -> FunctionBuilder
+    {
+        let mut blocks = Arena::new();
+        let mut values = Arena::new();
+
         let arguments: Vec<_> = parameters
             .iter()
-            .enumerate()
-            .map(|(i, param)| ctxt.alloc_value(Value::argument(function_id, i as u32, param.ty)))
+            .map(|param| {
+                values
+                    .alloc(ValueData::new(param.ty))
+            })
             .collect();
-        let function = ctxt.functions.alloc(Function {
+        let entry_block = blocks.alloc(BlockData::new());
+        let function = FunctionData {
             parameters,
             arguments,
             return_ty,
-            name: "", // TODO
-            ops: Default::default(),
-        });
+            name: "".to_string(), // TODO
+            linkage,
+            values: Default::default(),
+            blocks,
+            entry_block,
+        };
 
-        FunctionBuilder { ctxt, diag, function }
+        FunctionBuilder {
+            function,
+            block: entry_block,
+        }
     }
 
-    /// Returns the underlying HirCtxt.
-    pub fn ctxt_mut(&mut self) -> &mut HirCtxt<'hir> {
-        self.ctxt
-    }
-
-    /// Returns the diagnostics instance associated with this builder.
-    pub fn diagnostics(&self) -> &'a Diagnostics {
-        self.diag
+    /// Returns the underlying module.
+    pub fn module_mut(&mut self) -> &mut Module {
+        self.module
     }
 
     /// Emits a floating-point constant.
     pub fn fp_const(&mut self, value: f64) -> Constant {
-        self.ctxt.intern_constant(ConstantImpl::F64(OrderedFloat::from(value)))
+        self.module
+            .define_constant(ConstantData::F64(OrderedFloat::from(value)))
     }
 
     /// Emits an integer constant.
     pub fn int_const(&mut self, value: i64) -> Constant {
-        self.ctxt.intern_constant(ConstantImpl::I64(value))
+        self.module.define_constant(ConstantData::I64(value))
     }
 
     /// Emits a boolean constant.
     pub fn bool_const(&mut self, value: bool) -> Constant {
-        self.ctxt.intern_constant(ConstantImpl::Boolean(value))
+        self.module.define_constant(ConstantData::Boolean(value))
     }
 
     /// Inserts an operation at the current cursor position.
-    fn append_inst(&mut self, inst: InstBuilder) -> Option<ValueId> {
+    fn append_inst(&mut self, inst: InstBuilder) -> Option<Value> {
         // allocate result value
-        let next_id = self.ctxt.ops.next_id();
         let result = if let Some(result_type) = inst.result_type {
-            Some(InstructionResult {
-                value: self.ctxt.values.alloc(Value::result(next_id, 0, result_type)),
-                ty: result_type,
-            })
+            Some(self.function.values.alloc(ValueData::new(result_type)))
         } else {
             None
         };
 
-        let id = self.ctxt.ops.alloc(Operation::new(InstructionData {
+        self.function.instructions.push(InstructionData {
             opcode: inst.opcode,
             result,
             operands: inst.operands,
-            function: self.function,
-        }));
-
-        self.ctxt.functions[self.function].ops.append(id, &mut self.ctxt.ops);
+        });
         result.map(|r| r.value)
+    }
+
+    /// Enters a new block.
+    pub fn begin_block(&mut self) -> Block {
+        let block = self.function.blocks.alloc(BlockData {
+            instructions: vec![],
+            terminator: None,
+        });
+        self.block = block;
+        block
+    }
+
+    /// Switch to the specified block in the current function.
+    pub fn select_block(&mut self, block: Block) {
+        assert!(
+            self.function.blocks[block].terminator.is_none(),
+            "cannot switch to a terminated block"
+        );
+        self.block = block;
+    }
+
+    fn terminate_block(&mut self, inst: TerminatingInstruction) {
+        let block = &mut self.function.blocks[self.block];
+        assert!(block.terminator.is_none(), "block already terminated");
+        block.terminator = Some(inst);
+    }
+
+    pub fn emit_selection_merge(&mut self, merge_block: Block) {
+        let mut i = InstBuilder::new(spirv::Op::SelectionMerge);
+        i.operands.push(Operand::Block(merge_block));
+        self.append_inst(i);
+    }
+
+    pub fn emit_loop_merge(&mut self, merge_block: Block, continue_target: Block) {
+        let mut i = InstBuilder::new(spirv::Op::LoopMerge);
+        i.operands.push(Operand::Block(merge_block));
+        i.operands.push(Operand::Block(continue_target));
+        self.append_inst(i);
+    }
+
+    pub fn branch(&mut self, target: Block) {
+        self.terminate_block(TerminatingInstruction::Branch(target));
+    }
+
+    pub fn branch_conditional(&mut self, condition: Value, true_block: Block, false_block: Block) {
+        self.terminate_block(TerminatingInstruction::BranchConditional {
+            condition,
+            true_block,
+            false_block,
+        });
     }
 }
 

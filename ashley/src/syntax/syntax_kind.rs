@@ -136,6 +136,10 @@ pub enum SyntaxKind {
     UNIFORM_KW,
     #[token("struct")]
     STRUCT_KW,
+    #[token("import")]
+    IMPORT_KW,
+    #[token("as")]
+    AS,
 
     #[regex(r#"[a-zA-Z_][a-zA-Z0-9_]*"#)]
     IDENT,
@@ -164,6 +168,9 @@ pub enum SyntaxKind {
     //
     // Nodes
     //
+    IMPORT_DECL,
+    IMPORT_PARAM_LIST,
+    IMPORT_ALIAS,
     QUALIFIER,
     FN_DEF,
     STRUCT_DEF,
@@ -280,7 +287,7 @@ macro_rules ! T {
     [>>] => { $ crate :: syntax :: SyntaxKind :: SHR } ;
     [<<=] => { $ crate :: syntax :: SyntaxKind :: SHLEQ } ;
     [>>=] => { $ crate :: syntax :: SyntaxKind :: SHREQ } ;
-    //[as] => { $ crate :: syntax :: SyntaxKind :: AS_KW } ;
+    [as] => { $ crate :: syntax :: SyntaxKind :: AS_KW } ;
     //[async] => { $ crate :: syntax :: SyntaxKind :: ASYNC_KW } ;
     //[await] => { $ crate :: syntax :: SyntaxKind :: AWAIT_KW } ;
     //[box] => { $ crate :: syntax :: SyntaxKind :: BOX_KW } ;

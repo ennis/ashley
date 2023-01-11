@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use rspirv::spirv;
 use crate::hir::{Type};
 
 /// Scalar type kind.
@@ -22,7 +23,6 @@ impl ScalarType {
         }
     }
 }
-
 
 /// Field of a struct type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -63,42 +63,11 @@ pub struct FunctionType {
     pub arg_types: Vec<Type>,
 }
 
-/// Dimensions of an image.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ImageDimension {
-    /// 1D image
-    Dim1D,
-    /// 2D image
-    Dim2D,
-    /// 3D image
-    Dim3D,
-    /// Cube map image: 6 2D images of the same size
-    DimCube,
-    /// Array of 1D images
-    Dim1DArray,
-    /// Array of 2D images
-    Dim2DArray,
-}
-
-impl ImageDimension {
-    pub fn display(&self) -> &'static str {
-        match self {
-            ImageDimension::Dim1D => "1D",
-            ImageDimension::Dim2D => "2D",
-            ImageDimension::Dim3D => "3D",
-            ImageDimension::DimCube => "cube map",
-            ImageDimension::Dim1DArray => "1D array",
-            ImageDimension::Dim2DArray => "2D array",
-        }
-    }
-}
-
-
 /// Sampled image type
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SampledImageType {
     pub sampled_ty: ScalarType,
-    pub dim: ImageDimension,
+    pub dim: spirv::Dim,
     pub ms: bool,
 }
 
@@ -106,14 +75,14 @@ pub struct SampledImageType {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ImageType {
     pub element_ty: ScalarType,
-    pub dim: ImageDimension,
+    pub dim: spirv::Dim,
     pub ms: bool,
 }
 
 
 /// Describes the data type of a value.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum TypeImpl {
+pub enum TypeData {
     /// Void (or unit) type.
     Unit,
     /// Scalar type.

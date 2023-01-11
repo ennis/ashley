@@ -2,19 +2,18 @@ mod builder;
 mod constant;
 mod list;
 pub mod print;
+mod transform;
 pub mod types;
 mod visit;
 
 use crate::{
     diagnostic::{DiagnosticBuilder, Diagnostics, SourceLocation},
-    hir::{
-        constant::ConstantImpl,
-        list::{List, ListNode},
-    },
+    hir::list::{List, ListNode},
     utils::interner::Interner,
 };
 use bumpalo::Bump;
 use ordered_float::OrderedFloat;
+use rspirv::spirv;
 use smallvec::SmallVec;
 use std::{
     fmt,
@@ -23,37 +22,7 @@ use std::{
     ops::{Bound, Deref, DerefMut, RangeBounds},
 };
 
-pub use self::{
-    builder::FunctionBuilder,
-    types::TypeImpl,
-    visit::{IRVisitable, Visit},
-};
-
-//--------------------------------------------------------------------------------------------------
-
-/// Byte-span source location attribute.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Location {
-    /// An actual location in source code.
-    Source(SourceLocation),
-    /// Represents an unknown location.
-    Unknown,
-}
-
-impl Location {
-    pub fn to_source_location(&self) -> Option<SourceLocation> {
-        match self {
-            Location::Source(loc) => Some(*loc),
-            Location::Unknown => None,
-        }
-    }
-}
-
-impl Default for Location {
-    fn default() -> Self {
-        Location::Unknown
-    }
-}
+pub use self::{builder::FunctionBuilder, constant::ConstantData, types::TypeData, visit::Visit};
 
 //--------------------------------------------------------------------------------------------------
 
@@ -104,70 +73,52 @@ id_types! {
     pub struct OperationId;
 
     /// Handle to a HIR value.
-    pub struct ValueId;
+    pub struct Value;
 
     /// Handle to a HIR function.
-    pub struct FunctionId;
+    pub struct Function;
 
     /// Interned handle to a HIR type.
     pub struct Type;
 
     /// Interned handle to a HIR constant.
     pub struct Constant;
+
+    /// Interned handle to a HIR constant.
+    pub struct InterfaceVariable;
+
+    /// Handle to a function basic block.
+    pub struct Block;
 }
 
-impl ValueId {
+impl Value {
     /// Returns the type of the value.
-    pub fn ty<'ir>(&self, ctxt: &HirCtxt<'ir>) -> Type {
-        ctxt.values[*self].ty
-    }
-}
-
-impl OperationId {
-    /// Returns a pointer to the underlying op.
-    pub fn op(&self, ctxt: &HirCtxt) -> &Op {
-        &ctxt.ops[*self].data.op
-    }
-
-    /// Returns a mutable pointer to the underlying op.
-    pub fn op_mut<'a, 'ir>(&self, ctxt: &'a mut HirCtxt<'ir>) -> &'a mut Op<'ir> {
-        &mut ctxt.ops[*self].data.op
-    }
-}
-
-impl RegionId {
-    /// Returns this regions's arguments.
-    pub fn arguments<'ir>(&self, ctxt: &HirCtxt<'ir>) -> &'ir [ValueId] {
-        &ctxt.regions[*self].arguments
+    pub fn ty(&self, module: &Module) -> Type {
+        module.values[self.0].ty
     }
 }
 
 //--------------------------------------------------------------------------------------------------
 
 /// Operation linked list nodes.
-pub type Operation<'ir> = ListNode<OperationId, InstructionData<'ir>>;
+pub type Operation = ListNode<OperationId, InstructionData>;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Operand {
     Constant(Constant),
     ExtInst(u32),
-    Function(FunctionId),
-    Value(ValueId),
+    Function(Function),
+    Value(Value),
+    Block(Block),
     Type(Type),
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct InstructionResult {
-    pub value: ValueId,
-    pub ty: Type,
 }
 
 /// Data associated to an operation.
 #[derive(Copy, Clone, Debug)]
-pub struct InstructionData<'ir> {
+pub struct InstructionData {
     pub opcode: u32,
-    pub result: Option<InstructionResult>,
+    pub result: Option<Value>,
     pub operands: SmallVec<[Operand; 3]>,
-    pub function: FunctionId,
 }
 
 /// The kind of value represented in a `Value`.
@@ -176,89 +127,94 @@ pub enum ValueKind {
     /// Operation result (operation ID, result index).
     OpResult(OperationId, u32),
     /// Region argument (region ID, argument index).
-    Argument(FunctionId, u32),
+    Argument(Function, u32),
 }
 
-/// HIR value.
-///
-/// Represents an immutable value in the HIR.
-/// For now, there are two kinds of represented values: operation results (the most common), and region arguments.
+/// SSA value data.
 #[derive(Debug)]
-pub struct Value {
+pub struct ValueData {
     /// The type of the value.
     ty: Type,
-    /// Value kind.
-    kind: ValueKind,
 }
 
-impl Value {
-    /// Creates a new value representing the result of an operation.
-    ///
-    /// # Arguments
-    /// * op the operation producing the result
-    /// * index the index of the result
-    /// * ty value type
-    pub fn result(op: OperationId, index: u32, ty: Type) -> Value {
-        Value {
-            ty,
-            kind: ValueKind::OpResult(op, index),
-        }
-    }
-
-    /// Creates a new value representing a region argument.
-    ///
-    /// # Arguments
-    /// * region the region owning the argument
-    /// * index the index of the region argument
-    /// * ty value type
-    pub fn argument(f: FunctionId, index: u32, ty: Type) -> Value {
-        Value {
-            ty,
-            kind: ValueKind::Argument(f, index),
-        }
+impl ValueData {
+    /// Creates a new SSA value with the specified type.
+    pub fn new(ty: Type) -> ValueData {
+        ValueData { ty }
     }
 }
 
-/// Arena allocator used by `HirCtxt`s.
-///
-/// The same allocator can be shared by multiple `HirCtxt`s, but usually one is created for each `HirCtxt`.
-/// It is not owned by `HirCtxt`s themselves because it would lead to self-referential lifetimes.
-pub struct HirArena(pub(crate) Bump);
-
-impl HirArena {
-    /// Creates a new `HirArena`.
-    pub fn new() -> HirArena {
-        HirArena(Bump::new())
-    }
-}
-
-/// Operation cursor.
+/*/// Operation cursor.
 #[derive(Copy, Clone)]
 pub enum Cursor {
     /// Insert at the end.
     End(RegionId),
     /// Insert before the specified operation.
     Before(RegionId, OperationId),
-}
+}*/
 
 /// Function argument
 #[derive(Copy, Clone, Debug)]
-pub struct FunctionParameter<'a> {
+pub struct FunctionParameter {
     /// Name of the parameter, for debugging purposes only
-    pub name: &'a str,
+    pub name: String,
     /// Type of the parameter
     pub ty: Type,
 }
 
 /// HIR functions.
 #[derive(Debug)]
-pub struct Function<'a> {
-    pub parameters: Vec<FunctionParameter<'a>>,
-    pub arguments: Vec<ValueId>,
+pub struct FunctionData {
+    pub parameters: Vec<FunctionParameter>,
+    pub arguments: Vec<Value>,
     pub return_ty: Type,
-    pub name: &'a str,
-    /// Ordered list of operations in the region.
-    pub ops: List<OperationId, InstructionData<'a>>,
+    pub name: String,
+    pub linkage: Option<spirv::LinkageType>,
+    pub values: id_arena::Arena<ValueData, Value>,
+    pub blocks: id_arena::Arena<BlockData, Block>,
+    pub entry_block: Block,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum IntegerLiteral {
+    I32(i32),
+    U32(u32),
+    I64(i64),
+    U64(u64),
+}
+
+/// Block terminator instruction.
+#[derive(Copy, Clone, Debug)]
+pub enum TerminatingInstruction {
+    Branch(Block),
+    BranchConditional {
+        condition: Value,
+        true_block: Block,
+        false_block: Block,
+    },
+    Switch {
+        selector: Value,
+        default: Block,
+        target: Vec<(IntegerLiteral, Block)>,
+    },
+    Return,
+    ReturnValue(Value),
+    Unreachable,
+    TerminateInvocation,
+}
+
+pub struct BlockData {
+    pub instructions: Vec<InstructionData>,
+    pub terminator: Option<TerminatingInstruction>,
+}
+
+impl BlockData {
+    pub fn new() -> BlockData {
+        BlockData {
+            instructions: vec![],
+            terminator: None,
+        }
+    }
 }
 
 /// Describes the domain of a shader value.
@@ -277,8 +233,8 @@ pub enum Domain {
 }
 
 /// Describes a program input value.
-pub struct InterfaceVariableData<'a> {
-    pub name: &'a str,
+pub struct InterfaceVariableData {
+    pub name: String,
     pub ty: Type,
 }
 
@@ -290,26 +246,22 @@ pub enum ProgramKind {
     Rasterize,
 }
 
-
 /// Container for HIR entities.
 ///
 /// It holds regions, values, operations, types and attributes.
-pub struct HirCtxt<'hir> {
-    pub(crate) arena: &'hir HirArena,
-    pub(crate) types_interner: Interner<TypeImpl, Type>,
-    pub(crate) constants_interner: Interner<ConstantImpl, Constant>,
-    pub types: id_arena::Arena<TypeImpl, Type>,
-    pub constants: id_arena::Arena<ConstantImpl, Constant>,
-    pub functions: id_arena::Arena<Function<'hir>, FunctionId>,
-    pub interface: id_arena::Arena<InterfaceVariableData<'hir>, InterfaceVariable>,
-    pub values: id_arena::Arena<Value, ValueId>,
-    pub ops: id_arena::Arena<Operation<'hir>, OperationId>,
-
+pub struct Module {
+    pub(crate) types_interner: Interner<TypeData, Type>,
+    pub(crate) constants_interner: Interner<ConstantData, Constant>,
+    pub types: id_arena::Arena<TypeData, Type>,
+    pub constants: id_arena::Arena<ConstantData, Constant>,
+    pub functions: id_arena::Arena<FunctionData, Function>,
+    pub interface: id_arena::Arena<InterfaceVariableData, InterfaceVariable>,
+    pub ops: id_arena::Arena<Operation, OperationId>,
     ty_unknown: Type,
     ty_unit: Type,
 }
 
-impl<'hir> fmt::Debug for HirCtxt<'hir> {
+impl fmt::Debug for Module {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("HirCtxt")
             .field("values", &self.values)
@@ -319,56 +271,35 @@ impl<'hir> fmt::Debug for HirCtxt<'hir> {
     }
 }
 
-impl<'hir> HirCtxt<'hir> {
-    /// Creates a new HirCtxt, that uses the specified arena allocator.
-    pub fn new(arena: &'hir HirArena) -> HirCtxt<'hir> {
+impl Module {
+    pub fn new() -> Module {
         let mut types_interner = Interner::new();
         let constants_interner = Interner::new();
         let mut types = Default::default();
         let constants = Default::default();
         let functions = Default::default();
-        let programs = Default::default();
-        let pipelines = Default::default();
-        let values = Default::default();
-        let regions = Default::default();
+        let interface = Default::default();
         let ops = Default::default();
         let ty_unknown = types_interner
-            .intern(TypeImpl::Unknown, || types.alloc(TypeImpl::Unknown))
+            .intern(TypeData::Unknown, || types.alloc(TypeData::Unknown))
             .0;
-        let ty_unit = types_interner.intern(TypeImpl::Unit, || types.alloc(TypeImpl::Unit)).0;
+        let ty_unit = types_interner.intern(TypeData::Unit, || types.alloc(TypeData::Unit)).0;
 
-        HirCtxt {
-            arena,
+        Module {
             types_interner,
             constants_interner,
             types,
             constants,
             functions,
-            interface: (),
-            values,
+            interface,
             ops,
             ty_unknown,
             ty_unit,
         }
     }
 
-    /// Allocates data into the HIR arena.
-    pub fn alloc<T>(&mut self, src: T) -> &'hir T {
-        self.arena.0.alloc(src)
-    }
-
-    /// Allocates a string into the HIR arena.
-    pub fn alloc_str(&mut self, str: &str) -> &'hir str {
-        self.arena.0.alloc_str(str)
-    }
-
-    /// Allocates data into the HIR arena.
-    pub fn alloc_slice_copy<T: Copy>(&mut self, src: &[T]) -> &'hir [T] {
-        self.arena.0.alloc_slice_copy(src)
-    }
-
     /// Interns a type.
-    pub fn intern_type<T>(&mut self, ty: TypeImpl) -> Type {
+    pub fn define_type<T>(&mut self, ty: TypeData) -> Type {
         self.types_interner
             .intern(ty.clone(), || self.types.alloc(ty.clone()))
             .0
@@ -385,28 +316,15 @@ impl<'hir> HirCtxt<'hir> {
     }
 
     /// Interns a constant.
-    pub fn intern_constant<T>(&mut self, v: ConstantImpl) -> Constant {
+    pub fn define_constant<T>(&mut self, v: ConstantData) -> Constant {
         self.constants_interner
             .intern(v.clone(), || self.constants.alloc(v.clone()))
             .0
     }
 
-    /// Adds a program to this context.
-    pub fn add_program(&mut self, program: Program) -> ProgramId {
-        self.programs.alloc(program)
-    }
-
     /// Adds a function to this context.
-    pub fn add_function(&mut self, function: Function) -> FunctionId {
+    pub fn add_function(&mut self, function: FunctionData) -> Function {
         self.functions.alloc(function)
-    }
-
-    /// Creates a new empty region with no parent and no arguments.
-    pub fn create_region(&mut self) -> RegionId {
-        self.regions.alloc(RegionData {
-            arguments: Default::default(),
-            ops: Default::default(),
-        })
     }
 }
 
@@ -414,7 +332,7 @@ impl<'hir> HirCtxt<'hir> {
 
 #[cfg(test)]
 mod tests {
-    use crate::hir::{print_hir_region_html, HirArena, HirCtxt};
+    //use crate::hir::{print_hir_region_html, HirArena, HirCtxt};
     use std::{fs::File, io::Write, path::PathBuf};
 
     fn html_output_file_path(title: &str) -> PathBuf {

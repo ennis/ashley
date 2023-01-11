@@ -132,10 +132,15 @@ impl_ast_token!(Else<ELSE_KW>);
 impl_ast_token!(Eq<EQ>);
 
 impl_ast_node!(Module      <MODULE>       [nodes items: Item]);
+impl_ast_node!(ImportDecl  <IMPORT_DECL>  [token package_name: Ident]);
+impl_ast_node!(ImportParamList <IMPORT_PARAM_LIST>  []);
+impl_ast_node!(ImportAlias <IMPORT_ALIAS> [token alias: Ident]);
 impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident]);
 impl_ast_node!(TupleType   <TUPLE_TYPE>   [nodes fields: Type]);
 impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node  element_type: Type, node length: Expr]);
 impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node ret_type: RetType]);
+impl_ast_node!(StructDef   <STRUCT_DEF>   [nodes fields: StructField]);
+impl_ast_node!(StructField <STRUCT_FIELD> [token ident: Ident, node ty: Type]);
 impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
 impl_ast_node!(FnParam     <FN_PARAM>     [token ident: Ident, node ty: Type]);
 impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
@@ -173,7 +178,7 @@ impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node qualifier: Q
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType, ARRAY_TYPE => ArrayType, CLOSURE_TYPE => ClosureType ]);
-impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global ]);
+impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global, STRUCT_DEF => StructDef, IMPORT_DECL => ImportDecl ]);
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
     RETURN_STMT => ReturnStmt,

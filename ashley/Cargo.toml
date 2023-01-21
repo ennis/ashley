@@ -26,6 +26,7 @@ inventory = "0.3.2"
 html-escape = "0.2.12"
 ordered-float = "3.4.0"
 smallvec = "1.10.0"
+spirv = { version = "0.2.0", features = ["serialize", "deserialize"] }
 rspirv = "0.11.0"
 
 [dev-dependencies]

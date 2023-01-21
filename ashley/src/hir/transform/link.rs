@@ -1,14 +1,6 @@
 use crate::hir::{constant::ConstantData, Constant, Function, FunctionData, Module, Operand, Type, TypeData};
 use std::collections::HashMap;
 
-struct Merger<'a> {
-    module: &'a mut Module,
-    constant_map: HashMap<Handle<Constant>, Handle<Constant>>,
-    type_map: HashMap<Handle<Type>, Handle<Type>>,
-    function_map: HashMap<Handle<FunctionData>, Handle<FunctionData>>,
-    global_var_map: HashMap<Handle<GlobalVariable>, Handle<GlobalVariable>>,
-}
-
 struct LinkInput<'a> {
     module: &'a Module,
     // Maps: ID in src module -> ID in dst module
@@ -26,7 +18,7 @@ fn replace_uses_in_function(module: &mut Module, function: Function, to_replace:
         for inst in block.instructions.iter_mut() {
             for operand in inst.operands.iter_mut() {
                 if operand == to_replace {
-                    *operand = replace_with;
+                    *operand = replace_with.clone();
                 }
             }
         }
@@ -59,11 +51,11 @@ fn merge_type(dst: &mut Module, mut tydata: TypeData, map: &[usize]) -> Type {
                 remap(&mut f.ty);
             }
         }
-        TypeData::Pointer(ref mut ty) => {
-            remap(ty);
+        TypeData::Pointer { ref mut pointee_type, .. } => {
+            remap(pointee_type);
         }
         TypeData::Function(ref mut function_type) => {
-            remap(&mut function_type.return_ty);
+            remap(&mut function_type.return_type);
             for argty in function_type.arg_types.iter_mut() {
                 remap(argty);
             }
@@ -81,16 +73,16 @@ fn merge_function(
     function_map: &[usize],
 ) -> Function {
     let remap_operand = |op: &mut Operand| match op {
-        Operand::Constant(ref mut constant) => {
+        Operand::ConstantRef(ref mut constant) => {
             *constant = Constant::from_index(constant_map[constant.index()]);
         }
         Operand::ExtInst(_) => {}
-        Operand::Function(ref mut function) => {
+        Operand::FunctionRef(ref mut function) => {
             *function = Function::from_index(function_map[function.index()]);
         }
-        Operand::Value(_) => {}
-        Operand::Block(_) => {}
-        Operand::Type(ref mut ty) => {
+        Operand::ValueRef(_) => {}
+        Operand::BlockRef(_) => {}
+        Operand::TypeRef(ref mut ty) => {
             *ty = Type::from_index(type_map[ty.index()]);
         }
     };

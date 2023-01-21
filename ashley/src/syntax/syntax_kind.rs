@@ -104,6 +104,10 @@ pub enum SyntaxKind {
     FN_KW,
     #[token("const")]
     CONST_KW,
+    #[token("import")]
+    IMPORT_KW,
+    #[token("extern")]
+    EXTERN_KW,
     #[token("if")]
     IF_KW,
     #[token("else")]
@@ -136,8 +140,6 @@ pub enum SyntaxKind {
     UNIFORM_KW,
     #[token("struct")]
     STRUCT_KW,
-    #[token("import")]
-    IMPORT_KW,
     #[token("as")]
     AS,
 
@@ -172,7 +174,9 @@ pub enum SyntaxKind {
     IMPORT_PARAM_LIST,
     IMPORT_ALIAS,
     QUALIFIER,
+    EXTERN,
     FN_DEF,
+    FN_DECL,
     STRUCT_DEF,
     STRUCT_FIELD,
     GLOBAL,
@@ -187,6 +191,7 @@ pub enum SyntaxKind {
     BIN_EXPR,
     PREFIX_EXPR,
     INDEX_EXPR,
+    INDEX,
     PAREN_EXPR,
     TUPLE_EXPR,
     ARRAY_EXPR,

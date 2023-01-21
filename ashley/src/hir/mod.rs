@@ -1,28 +1,37 @@
 mod builder;
 mod constant;
 mod list;
-pub mod print;
+//pub mod print;
 mod transform;
 pub mod types;
 mod visit;
 
 use crate::{
     diagnostic::{DiagnosticBuilder, Diagnostics, SourceLocation},
-    hir::list::{List, ListNode},
+    hir::{
+        builder::ValueOrConstant,
+        list::{List, ListNode},
+        types::{Field, ScalarType, StructType},
+    },
     utils::interner::Interner,
 };
 use bumpalo::Bump;
+use id_arena::Arena;
 use ordered_float::OrderedFloat;
-use rspirv::spirv;
+use rspirv::{
+    spirv,
+    spirv::{LinkageType, MemorySemantics},
+};
 use smallvec::SmallVec;
 use std::{
     fmt,
     hash::Hash,
     num::NonZeroU32,
     ops::{Bound, Deref, DerefMut, RangeBounds},
+    sync::Arc,
 };
 
-pub use self::{builder::FunctionBuilder, constant::ConstantData, types::TypeData, visit::Visit};
+pub use self::{builder::FunctionBuilder, constant::ConstantData, types::TypeData};
 
 //--------------------------------------------------------------------------------------------------
 
@@ -85,10 +94,22 @@ id_types! {
     pub struct Constant;
 
     /// Interned handle to a HIR constant.
-    pub struct InterfaceVariable;
+    pub struct GlobalVariable;
 
     /// Handle to a function basic block.
     pub struct Block;
+}
+
+impl Type {
+    /// Returns the pointee type (the type of the value produced by dereferencing the pointer).
+    pub fn pointee_type(&self, m: &Module) -> Option<(Type, spirv::StorageClass)> {
+        match m.types[*self] {
+            TypeData::Pointer { pointee_type, storage_class } => {
+                Some((pointee_type, storage_class))
+            }
+            _ => None
+        }
+    }
 }
 
 impl Value {
@@ -103,31 +124,74 @@ impl Value {
 /// Operation linked list nodes.
 pub type Operation = ListNode<OperationId, InstructionData>;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Operand {
-    Constant(Constant),
-    ExtInst(u32),
-    Function(Function),
-    Value(Value),
-    Block(Block),
-    Type(Type),
+    ConstantRef(Constant),
+    GlobalRef(GlobalVariable),
+    FunctionRef(Function),
+    ValueRef(Value),
+    BlockRef(Block),
+    TypeRef(Type),
+
+    FPFastMathMode(spirv::FPFastMathMode),
+    SelectionControl(spirv::SelectionControl),
+    LoopControl(spirv::LoopControl),
+    FunctionControl(spirv::FunctionControl),
+    MemorySemantics(spirv::MemorySemantics),
+    MemoryAccess(spirv::MemoryAccess),
+    KernelProfilingInfo(spirv::KernelProfilingInfo),
+    RayFlags(spirv::RayFlags),
+    FragmentShadingRate(spirv::FragmentShadingRate),
+    SourceLanguage(spirv::SourceLanguage),
+    ExecutionModel(spirv::ExecutionModel),
+    AddressingModel(spirv::AddressingModel),
+    MemoryModel(spirv::MemoryModel),
+    ExecutionMode(spirv::ExecutionMode),
+    StorageClass(spirv::StorageClass),
+    Dim(spirv::Dim),
+    SamplerAddressingMode(spirv::SamplerAddressingMode),
+    SamplerFilterMode(spirv::SamplerFilterMode),
+    ImageFormat(spirv::ImageFormat),
+    ImageChannelOrder(spirv::ImageChannelOrder),
+    ImageChannelDataType(spirv::ImageChannelDataType),
+    FPRoundingMode(spirv::FPRoundingMode),
+    LinkageType(spirv::LinkageType),
+    AccessQualifier(spirv::AccessQualifier),
+    FunctionParameterAttribute(spirv::FunctionParameterAttribute),
+    Decoration(spirv::Decoration),
+    BuiltIn(spirv::BuiltIn),
+    Scope(spirv::Scope),
+    GroupOperation(spirv::GroupOperation),
+    KernelEnqueueFlags(spirv::KernelEnqueueFlags),
+    Capability(spirv::Capability),
+    RayQueryIntersection(spirv::RayQueryIntersection),
+    RayQueryCommittedIntersectionType(spirv::RayQueryCommittedIntersectionType),
+    RayQueryCandidateIntersectionType(spirv::RayQueryCandidateIntersectionType),
+    LiteralInt32(u32),
+    LiteralInt64(u64),
+    LiteralFloat32(f32),
+    LiteralFloat64(f64),
+    LiteralExtInstInteger(u32),
+    LiteralSpecConstantOpInteger(spirv::Op),
+    LiteralString(String),
+}
+
+
+impl From<ValueOrConstant> for Operand {
+    fn from(value: ValueOrConstant) -> Self {
+        match value {
+            ValueOrConstant::Value(v) => { Operand::ValueRef(v)}
+            ValueOrConstant::Constant(v) => {Operand::ConstantRef(v)}
+        }
+    }
 }
 
 /// Data associated to an operation.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct InstructionData {
-    pub opcode: u32,
+    pub opcode: spirv::Op,
     pub result: Option<Value>,
     pub operands: SmallVec<[Operand; 3]>,
-}
-
-/// The kind of value represented in a `Value`.
-#[derive(Clone, Debug)]
-pub enum ValueKind {
-    /// Operation result (operation ID, result index).
-    OpResult(OperationId, u32),
-    /// Region argument (region ID, argument index).
-    Argument(Function, u32),
 }
 
 /// SSA value data.
@@ -154,7 +218,7 @@ pub enum Cursor {
 }*/
 
 /// Function argument
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct FunctionParameter {
     /// Name of the parameter, for debugging purposes only
     pub name: String,
@@ -162,17 +226,72 @@ pub struct FunctionParameter {
     pub ty: Type,
 }
 
-/// HIR functions.
+/// HIR functions or function declarations.
 #[derive(Debug)]
 pub struct FunctionData {
     pub parameters: Vec<FunctionParameter>,
     pub arguments: Vec<Value>,
-    pub return_ty: Type,
+    pub function_type: Type,
     pub name: String,
     pub linkage: Option<spirv::LinkageType>,
-    pub values: id_arena::Arena<ValueData, Value>,
-    pub blocks: id_arena::Arena<BlockData, Block>,
-    pub entry_block: Block,
+    pub values: Arena<ValueData, Value>,
+    pub blocks: Arena<BlockData, Block>,
+    pub entry_block: Option<Block>,
+    pub function_control: spirv::FunctionControl,
+}
+
+impl FunctionData {
+    /// Creates a new function with a block.
+    pub fn new(
+        name: String,
+        function_type: Type,
+        parameters: Vec<FunctionParameter>,
+        linkage: Option<spirv::LinkageType>,
+        function_control: spirv::FunctionControl,
+    ) -> (FunctionData, Block) {
+        let mut blocks = Arena::new();
+        let mut values = Arena::new();
+
+        let arguments: Vec<_> = parameters
+            .iter()
+            .map(|param| values.alloc(ValueData::new(param.ty)))
+            .collect();
+
+        let entry_block = blocks.alloc(BlockData::new());
+
+        (FunctionData {
+            parameters,
+            arguments,
+            function_type,
+            name,
+            linkage,
+            values,
+            blocks,
+            entry_block: Some(entry_block),
+            function_control,
+        }, entry_block)
+    }
+
+    /// Creates a new function declaration.
+    pub fn new_declaration(
+        name: String,
+        function_type: Type,
+        parameters: Vec<FunctionParameter>,
+        linkage: Option<spirv::LinkageType>,
+        function_control: spirv::FunctionControl,
+    ) -> FunctionData {
+        FunctionData {
+            parameters,
+            arguments: vec![],
+            function_type,
+            name,
+            linkage,
+            values: Default::default(),
+            blocks: Default::default(),
+            entry_block: None,
+            function_control,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -183,8 +302,26 @@ pub enum IntegerLiteral {
     U64(u64),
 }
 
+/// Reference to a value or a constant.
+pub enum ValueOrConstant {
+    Value(Value),
+    Constant(Constant),
+}
+
+impl From<Value> for ValueOrConstant {
+    fn from(value: Value) -> Self {
+        ValueOrConstant::Value(value)
+    }
+}
+
+impl From<Constant> for ValueOrConstant {
+    fn from(constant: Constant) -> Self {
+        ValueOrConstant::Constant(constant)
+    }
+}
+
 /// Block terminator instruction.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum TerminatingInstruction {
     Branch(Block),
     BranchConditional {
@@ -232,10 +369,13 @@ pub enum Domain {
     Invocation,
 }
 
-/// Describes a program input value.
-pub struct InterfaceVariableData {
+/// Describes a global variable.
+pub struct GlobalVariableData {
     pub name: String,
+    /// Type of the global variable (not necessarily a pointer).
     pub ty: Type,
+    pub storage_class: spirv::StorageClass,
+    pub linkage: Option<LinkageType>,
 }
 
 pub enum ProgramKind {
@@ -246,16 +386,51 @@ pub enum ProgramKind {
     Rasterize,
 }
 
+macro_rules! const_vec_builder {
+    ($method2:ident,$method3:ident,$method4:ident, $component:ty, $scalar_ty:ident, $component_method:ident) => {
+        pub fn $method2(&mut self, x: $component, y: $component) -> Constant {
+            let x = self.$component_method(x);
+            let y = self.$component_method(y);
+            let ty = self.define_type(TypeData::Vector(ScalarType::$scalar_ty, 2));
+            self.module.define_constant(ConstantData::Composite {
+                ty,
+                constituents: vec![x, y],
+            })
+        }
+        pub fn $method3(&mut self, x: $component, y: $component, z: $component) -> Constant {
+            let x = self.$component_method(x);
+            let y = self.$component_method(y);
+            let z = self.$component_method(z);
+            let ty = self.define_type(TypeData::Vector(ScalarType::$scalar_ty, 3));
+            self.module.define_constant(ConstantData::Composite {
+                ty,
+                constituents: vec![x, y, z],
+            })
+        }
+        pub fn $method4(&mut self, x: $component, y: $component, z: $component, w: $component) -> Constant {
+            let x = self.$component_method(x);
+            let y = self.$component_method(y);
+            let z = self.$component_method(z);
+            let w = self.$component_method(w);
+            let ty = self.define_type(TypeData::Vector(ScalarType::$scalar_ty, 4));
+            self.module.define_constant(ConstantData::Composite {
+                ty,
+                constituents: vec![x, y, z, w],
+            })
+        }
+    };
+}
+
 /// Container for HIR entities.
 ///
 /// It holds regions, values, operations, types and attributes.
 pub struct Module {
-    pub(crate) types_interner: Interner<TypeData, Type>,
+    pub(crate) types_interner: Interner<TypeData<'static>, Type>,
     pub(crate) constants_interner: Interner<ConstantData, Constant>,
-    pub types: id_arena::Arena<TypeData, Type>,
+    pub types: id_arena::Arena<TypeData<'static>, Type>,
     pub constants: id_arena::Arena<ConstantData, Constant>,
     pub functions: id_arena::Arena<FunctionData, Function>,
-    pub interface: id_arena::Arena<InterfaceVariableData, InterfaceVariable>,
+    pub globals: id_arena::Arena<GlobalVariableData, GlobalVariable>,
     pub ops: id_arena::Arena<Operation, OperationId>,
     ty_unknown: Type,
     ty_unit: Type,
@@ -278,7 +453,7 @@ impl Module {
         let mut types = Default::default();
         let constants = Default::default();
         let functions = Default::default();
-        let interface = Default::default();
+        let globals = Default::default();
         let ops = Default::default();
         let ty_unknown = types_interner
             .intern(TypeData::Unknown, || types.alloc(TypeData::Unknown))
@@ -291,7 +466,7 @@ impl Module {
             types,
             constants,
             functions,
-            interface,
+            globals,
             ops,
             ty_unknown,
             ty_unit,
@@ -299,14 +474,28 @@ impl Module {
     }
 
     /// Interns a type.
-    pub fn define_type<T>(&mut self, ty: TypeData) -> Type {
+    pub fn define_type(&mut self, ty: TypeData) -> Type {
         self.types_interner
-            .intern(ty.clone(), || self.types.alloc(ty.clone()))
+            .intern(ty.clone(), || self.types.alloc(ty.into_static()))
             .0
     }
 
+    /*/// Defines a structure type.
+    pub fn define_struct_type(&mut self, name: Option<&str>, fields: impl IntoIterator<Item = Field>) -> Type {
+        let fields = fields.collect::<Vec<_>>();
+        let name = name.map(ToOwned::to_owned);
+        let struct_type = StructType { name, fields };
+        // TODO: intern struct types separately so that we don't allocate an arc every time
+        self.define_type(TypeData::Struct(Arc::new(struct_type)))
+    }*/
+
     /// Returns the unknown type.
     pub fn ty_unknown(&self) -> Type {
+        self.ty_unknown
+    }
+
+    /// Alias for ty_unknown.
+    pub fn error_type(&self) -> Type {
         self.ty_unknown
     }
 
@@ -322,10 +511,37 @@ impl Module {
             .0
     }
 
-    /// Adds a function to this context.
+    pub fn define_global_variable(&mut self, v: GlobalVariableData) -> GlobalVariable {
+        self.globals.alloc(v)
+    }
+
+    /// Adds a function to the module.
     pub fn add_function(&mut self, function: FunctionData) -> Function {
         self.functions.alloc(function)
     }
+
+    /// Emits a floating-point constant.
+    pub fn const_f32(&mut self, value: f32) -> Constant {
+        self.define_constant(ConstantData::F32(OrderedFloat::from(value)))
+    }
+
+    /// Emits an integer constant.
+    pub fn const_i32(&mut self, value: i32) -> Constant {
+        self.define_constant(ConstantData::I32(value))
+    }
+    /// Emits an integer constant.
+    pub fn const_u32(&mut self, value: u32) -> Constant {
+        self.define_constant(ConstantData::U32(value))
+    }
+
+    /// Emits a boolean constant.
+    pub fn const_bool(&mut self, value: bool) -> Constant {
+        self.define_constant(ConstantData::Bool(value))
+    }
+
+    const_vec_builder!(const_f32x2, const_f32x3, const_f32x4, f32, Float, const_f32);
+    const_vec_builder!(const_i32x2, const_i32x3, const_i32x4, i32, Int, const_i32);
+    const_vec_builder!(const_u32x2, const_u32x3, const_u32x4, u32, UnsignedInt, const_u32);
 }
 
 //--------------------------------------------------------------------------------------------------

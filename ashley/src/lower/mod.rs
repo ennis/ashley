@@ -1,383 +1,269 @@
 //! AST lowering to SPIR-V
-use crate::{diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation}, hir, syntax::{ast, ast::*, ArithOp, BinaryOp, LogicOp, SyntaxNode, SyntaxToken}};
-use codespan_reporting::{diagnostic::Diagnostic, term, term::termcolor::WriteColor};
-use smallvec::SmallVec;
-use std::{any::Any, cell::Cell, collections::HashMap, io::ErrorKind, sync::Arc};
+mod builtin;
+mod consteval;
+mod mangle;
+mod swizzle;
+mod typecheck;
+mod types;
 
-use rspirv::dr::Builder;
-use crate::hir::{Constant, Function, TypeData};
-use crate::hir::types::ScalarType;
+use crate::{
+    diagnostic::{DiagnosticBuilder, Diagnostics, SourceFileProvider, SourceId, SourceLocation},
+    hir,
+    hir::{
+        types::{FunctionType, ScalarType, StructType},
+        Constant, ConstantData, Function, FunctionBuilder, FunctionData, GlobalVariable, GlobalVariableData, Module,
+        Operation, TypeData, ValueOrConstant,
+    },
+    lower::{
+        builtin::BuiltinTypes,
+        consteval::try_evaluate_constant_expression,
+        typecheck::{typecheck_builtin_operation, BuiltinOperation},
+    },
+    syntax::{ast, ast::AstNode, ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxNode, SyntaxToken},
+};
+use ashley::{hir::Value, lower::typecheck::check_signature, syntax::ast::Expr};
+use codespan_reporting::{diagnostic::Diagnostic, term, term::termcolor::WriteColor};
+use rspirv::{dr::Builder, spirv};
+use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+use spirv::CLOp::exp;
+use std::{
+    any::Any,
+    cell::Cell,
+    collections::HashMap,
+    io::ErrorKind,
+    panic::Location,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 trait DiagnosticsExt {
-    /// Emits a "missing generic argument" diagnostic.
-    fn missing_generic_argument(&mut self, instantiation_loc: Location, expected_forms: &str);
+    /// "missing generic argument"
+    fn missing_generic_argument(
+        &mut self,
+        instantiation_loc: SourceLocation,
+        expected_forms: &str,
+    ) -> DiagnosticBuilder;
 
-    /// Emits a "extra generic argument(s)" diagnostic.
-    fn extra_generic_arguments(&mut self, instantiation_loc: Location, expected: usize, got: usize);
+    /// "extra generic argument(s)"
+    fn extra_generic_arguments(
+        &mut self,
+        instantiation_loc: SourceLocation,
+        expected: usize,
+        got: usize,
+    ) -> DiagnosticBuilder;
+
+    /// "an item with the same name has already been defined"
+    fn already_defined(
+        &mut self,
+        name: &str,
+        loc: SourceLocation,
+        prev_loc: Option<SourceLocation>,
+    ) -> DiagnosticBuilder;
+
+    /// "cannot find type `{name}` in this scope"
+    fn cannot_find_type(&mut self, name: &str, loc: SourceLocation) -> DiagnosticBuilder;
+
+    /// "cannot find value `{name}` in this scope"
+    fn cannot_find_value(&mut self, name: &str, loc: SourceLocation) -> DiagnosticBuilder;
+
+    /// "could not evaluate constant expression"
+    fn consteval_failure(&mut self, loc: SourceLocation) -> DiagnosticBuilder;
 }
 
 impl DiagnosticsExt for Diagnostics {
-    fn missing_generic_argument(&mut self, instantiation_loc: Location, expected_forms: &str) {
+    fn missing_generic_argument(&self, instantiation_loc: SourceLocation, expected_forms: &str) -> DiagnosticBuilder {
         self.error("missing generic argument")
             .primary_label(instantiation_loc.to_source_location(), "")
             .note(format!("expected: `{expected_forms}`"))
-            .emit();
     }
 
-    fn extra_generic_arguments(&mut self, instantiation_loc: Location, expected: usize, got: usize) {
-        self.error("too many generic arguments")
-            .primary_label(
-                instantiation_loc.to_source_location(),
-                format!("expected {expected} argument(s), got {got} argument(s)"),
-            )
-            .emit();
+    fn extra_generic_arguments(
+        &self,
+        instantiation_loc: SourceLocation,
+        expected: usize,
+        got: usize,
+    ) -> DiagnosticBuilder {
+        self.error("too many generic arguments").primary_label(
+            instantiation_loc.to_source_location(),
+            format!("expected {expected} argument(s), got {got} argument(s)"),
+        )
+    }
+
+    fn already_defined(&self, name: &str, loc: SourceLocation, prev_loc: Option<SourceLocation>) -> DiagnosticBuilder {
+        self.error(format!(
+            "`{name}`an item with the same name has already been defined in this scope"
+        ))
+        .primary_label(loc, "")
+        .secondary_label(prev_loc, "previous definition here")
+    }
+
+    fn cannot_find_type(&mut self, name: &str, loc: SourceLocation) -> DiagnosticBuilder {
+        self.error(format!("cannot find type `{name}` in this scope"))
+            .primary_label(loc, "")
+    }
+
+    fn cannot_find_value(&mut self, name: &str, loc: SourceLocation) -> DiagnosticBuilder {
+        self.error(format!("cannot find value `{name}` in this scope"))
+            .primary_label(loc, "")
+    }
+
+    fn consteval_failure(&mut self, loc: SourceLocation) -> DiagnosticBuilder {
+        ctxt.diag
+            .error("could not evaluate constant expression")
+            .primary_label(loc, "")
     }
 }
 
 //--------------------------------------------------------------------------------------------------
 
-#[derive(Copy, Clone, Debug)]
-enum GenericArgument {
-    Type(rspirv),
-    Constant(hir::ConstantImpl),
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+enum DefNameKind {
+    Function,
+    Type,
+    Variable,
 }
 
-//--------------------------------------------------------------------------------------------------
-
-/*/// Function on an atomic value.
-#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
-pub enum AtomicFunction {
-    Add,
-    Subtract,
-    And,
-    ExclusiveOr,
-    InclusiveOr,
-    Min,
-    Max,
-    Exchange { compare: Option<Handle<Expression>> },
-}*/
-
-/// Built-in shader function for testing relation between values.
-#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
-pub enum RelationalFunction {
-    All,
-    Any,
-    IsNan,
-    IsInf,
-    IsFinite,
-    IsNormal,
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct DefName {
+    kind: DefNameKind,
+    name: String,
 }
 
-/// Represents the result of function resolution: either a user-defined function or a builtin function.
-enum FunctionOrBuiltin {
-    Function(FunctionId),
-    BuiltinMath(MathFunction),
-    BuiltinRelational(RelationalFunction),
+enum DefKind {
+    Type(hir::Type),
+    Function(FuncRef),
+    Constant(hir::Constant),
+    GlobalVariable(hir::GlobalVariable),
+    BlockVariable(hir::Value),
 }
 
-trait Scope {
-    /// Resolves a type name to a HIR type.
-    fn resolve_type(&self, name: &str) -> Option<hir::Type>;
-    /// Resolves a function name to a HIR function.
-    fn resolve_func(&self, name: &str) -> Option<hir::FunctionId>;
-    /// Resolves a constant name to a HIR constant.
-    fn resolve_const(&self, name: &str) -> Option<hir::Constant>;
+struct Def {
+    location: Option<SourceLocation>,
+    kind: DefKind,
 }
 
-/// Root scope containing primitive types & constants.
-struct BuiltinScope {
-    ty_f32: hir::Type,
-    ty_f64: hir::Type,
-    ty_u32: hir::Type,
-    ty_i32: hir::Type,
-    ty_bool: hir::Type,
-    ty_f32x2: hir::Type,
-    ty_f32x3: hir::Type,
-    ty_f32x4: hir::Type,
-    ty_i32x2: hir::Type,
-    ty_i32x3: hir::Type,
-    ty_i32x4: hir::Type,
-    ty_u32x2: hir::Type,
-    ty_u32x3: hir::Type,
-    ty_u32x4: hir::Type,
-    ty_b1x2: hir::Type,
-    ty_b1x3: hir::Type,
-    ty_b1x4: hir::Type,
-    ty_texture_1d: hir::Type,
-    ty_texture_2d: hir::Type,
-    ty_texture_3d: hir::Type,
-    ty_texture_1d_array: hir::Type,
-    ty_texture_2d_array: hir::Type,
-    ty_texture_cube: hir::Type,
-    ty_texture_1d_ms: hir::Type,
-    ty_texture_2d_ms: hir::Type,
-    ty_image_1d: hir::Type,
-    ty_image_2d: hir::Type,
-    ty_image_3d: hir::Type,
-    ty_image_1d_array: hir::Type,
-    ty_image_2d_array: hir::Type,
-    ty_image_cube: hir::Type,
-    ty_image_1d_ms: hir::Type,
-    ty_image_2d_ms: hir::Type,
+struct Scope<'a> {
+    parent: Option<&'a Scope<'a>>,
+    types: HashMap<String, Def>,
+    variables: HashMap<String, Def>,
+    functions: HashMap<String, Def>,
 }
 
-macro_rules! make_image_type {
-    ($hir:expr, texture $d:ident $t:ident) => {
-        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
-            sampled_ty: ScalarType::$t,
-            dim: ImageDimension::$d,
-            ms: false,
-        })))
-    };
-    ($hir:expr, texture $d:ident $t:ident MS) => {
-        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
-            sampled_ty: ScalarType::$t,
-            dim: ImageDimension::$d,
-            ms: true,
-        })))
-    };
-    ($hir:expr, image $d:ident $t:ident) => {
-        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
-            element_ty: ScalarType::$t,
-            dim: ImageDimension::$d,
-            ms: false,
-        })))
-    };
-    ($hir:expr, image $d:ident $t:ident MS) => {
-        module.define_type(TypeData::SampledImage(Arc::new(SampledImageType {
-            sampled_ty: ScalarType::$t,
-            dim: ImageDimension::$d,
-            ms: true,
-        })))
-    };
-}
-
-impl BuiltinScope {
-    fn new(module: &mut hir::Module) -> BuiltinScope {
-        let ty_f32 = module.define_type(TypeData::Scalar(ScalarType::Float));
-        let ty_f64 = module.define_type(TypeData::Scalar(ScalarType::Double));
-        let ty_u32 = module.define_type(TypeData::Scalar(ScalarType::UnsignedInt));
-        let ty_i32 = module.define_type(TypeData::Scalar(ScalarType::Int));
-
-        let ty_f32x2 = module.define_type(TypeData::Vector(ScalarType::Float, 2));
-        let ty_f32x3 = module.define_type(TypeData::Vector(ScalarType::Float, 3));
-        let ty_f32x4 = module.define_type(TypeData::Vector(ScalarType::Float, 4));
-
-        let ty_i32x2 = module.define_type(TypeData::Vector(ScalarType::Int, 2));
-        let ty_i32x3 = module.define_type(TypeData::Vector(ScalarType::Int, 3));
-        let ty_i32x4 = module.define_type(TypeData::Vector(ScalarType::Int, 4));
-
-        let ty_u32x2 = module.define_type(TypeData::Vector(ScalarType::UnsignedInt, 2));
-        let ty_u32x3 = module.define_type(TypeData::Vector(ScalarType::UnsignedInt, 3));
-        let ty_u32x4 = module.define_type(TypeData::Vector(ScalarType::UnsignedInt, 4));
-
-        let ty_b1x2 = module.define_type(TypeData::Vector(ScalarType::Bool, 2));
-        let ty_b1x3 = module.define_type(TypeData::Vector(ScalarType::Bool, 3));
-        let ty_b1x4 = module.define_type(TypeData::Vector(ScalarType::Bool, 4));
-
-        // sampled images
-        let ty_texture_1d = make_image_type!(hir, texture Dim1D       Float   );
-        let ty_texture_2d = make_image_type!(hir, texture Dim2D       Float   );
-        let ty_texture_3d = make_image_type!(hir, texture Dim3D       Float   );
-        let ty_texture_1d_array = make_image_type!(hir, texture Dim1DArray  Float   );
-        let ty_texture_2d_array = make_image_type!(hir, texture Dim2DArray  Float   );
-        let ty_texture_cube = make_image_type!(hir, texture DimCube     Float   );
-        let ty_texture_1d_ms = make_image_type!(hir, texture Dim1D       Float MS);
-        let ty_texture_2d_ms = make_image_type!(hir, texture Dim2D       Float MS);
-
-        // storage images
-        let ty_image_1d = make_image_type!(hir, image   Dim1D       Float   );
-        let ty_image_2d = make_image_type!(hir, image   Dim2D       Float   );
-        let ty_image_3d = make_image_type!(hir, image   Dim3D       Float   );
-        let ty_image_1d_array = make_image_type!(hir, image   Dim1DArray  Float   );
-        let ty_image_2d_array = make_image_type!(hir, image   Dim2DArray  Float   );
-        let ty_image_cube = make_image_type!(hir, image   DimCube     Float   );
-        let ty_image_1d_ms = make_image_type!(hir, image   Dim1D       Float MS);
-        let ty_image_2d_ms = make_image_type!(hir, image   Dim2D       Float MS);
-
-        BuiltinScope {
-            ty_f32,
-            ty_f64,
-            ty_u32,
-            ty_i32,
-            ty_bool,
-            ty_f32x2,
-            ty_f32x3,
-            ty_f32x4,
-            ty_i32x2,
-            ty_i32x3,
-            ty_i32x4,
-            ty_u32x2,
-            ty_u32x3,
-            ty_u32x4,
-            ty_b1x2,
-            ty_b1x3,
-            ty_b1x4,
-            ty_texture_1d,
-            ty_texture_2d,
-            ty_texture_3d,
-            ty_texture_1d_array,
-            ty_texture_2d_array,
-            ty_texture_cube,
-            ty_texture_1d_ms,
-            ty_texture_2d_ms,
-            ty_image_1d,
-            ty_image_2d,
-            ty_image_3d,
-            ty_image_1d_array,
-            ty_image_2d_array,
-            ty_image_cube,
-            ty_image_1d_ms,
-            ty_image_2d_ms,
-        }
-    }
-}
-
-impl Scope for BuiltinScope {
-    fn resolve_type(&self, name: &str) -> Option<hir::Type> {
-        match name {
-            "f32" => Some(self.ty_f32),
-            "f64" => Some(self.ty_f64),
-            "u32" => Some(self.ty_u32),
-            "i32" => Some(self.ty_i32),
-            "bool" => Some(self.ty_bool),
-            "f32x2" => Some(self.ty_f32x2),
-            "f32x3" => Some(self.ty_f32x3),
-            "f32x4" => Some(self.ty_f32x4),
-            "i32x2" => Some(self.ty_i32x2),
-            "i32x3" => Some(self.ty_i32x3),
-            "i32x4" => Some(self.ty_i32x4),
-            "u32x2" => Some(self.ty_u32x2),
-            "u32x3" => Some(self.ty_u32x3),
-            "u32x4" => Some(self.ty_u32x4),
-            "b1x2" => Some(self.ty_b1x2),
-            "b1x3" => Some(self.ty_b1x3),
-            "b1x4" => Some(self.ty_b1x4),
-            "Texture1D" => Some(self.ty_texture_1d),
-            "Texture2D" => Some(self.ty_texture_2d),
-            "Texture3D" => Some(self.ty_texture_3d),
-            "Texture1DArray" => Some(self.ty_texture_1d_array),
-            "Texture2DArray" => Some(self.ty_texture_2d_array),
-            "TextureCube" => Some(self.ty_texture_cube),
-            "Texture1DMS" => Some(self.ty_texture_1d_ms),
-            "Texture2DMS" => Some(self.ty_texture_2d_ms),
-            "Image1D" => Some(self.ty_image_1d),
-            "Image2D" => Some(self.ty_image_2d),
-            "Image3D" => Some(self.ty_image_3d),
-            "Image1DArray" => Some(self.ty_image_1d_array),
-            "Image2DArray" => Some(self.ty_image_2d_array),
-            "ImageCube" => Some(self.ty_image_cube),
-            "Image1DMS" => Some(self.ty_image_1d_ms),
-            "Image2DMS" => Some(self.ty_image_2d_ms),
-            _ => None,
-        }
-    }
-
-    fn resolve_func(&self, name: &str) -> Option<Function> {
-        None
-    }
-
-    fn resolve_const(&self, name: &str) -> Option<Constant> {
-        None
-    }
-}
-
-/// Simple scope, contains global variables.
-struct SimpleScope<'a> {
-    parent: Option<&'a dyn Scope>,
-    types: HashMap<String, Type>,
-    functions: HashMap<String, Function>,
-    constants: HashMap<String, Constant>
-    //variables: HashMap<String, VariableDefinition>,
-}
-
-impl<'a> SimpleScope<'a> {
-    fn new(parent: Option<&'a dyn Scope>) -> SimpleScope<'a> {
-        SimpleScope {
+impl<'a> Scope<'a> {
+    fn new(parent: Option<&'a Scope<'a>>) -> Scope {
+        Scope {
             parent,
             types: Default::default(),
-            //variables: Default::default(),
-        }
-    }
-}
-
-impl<'a> Scope for SimpleScope<'a> {
-    fn resolve_type(&self, name: &str) -> Option<Type> {
-        self.types
-            .get(name)
-            .map(|ty| &**ty)
-            .or_else(|| self.parent.and_then(|parent| parent.resolve_type(name)))
-    }
-}
-
-/// Function argument.
-struct FunctionArgument {
-    /// AST node of the corresponding function parameter.
-    node: FnParam,
-    /// HIR value holding the value of the function argument.
-    hir_value: hir::ValueId,
-}
-
-/// The scope of the body of a function.
-struct FunctionBodyScope<'a> {
-    parent: Option<&'a dyn Scope>,
-    arguments: HashMap<String, FunctionArgument>,
-}
-
-impl<'a> FunctionBodyScope<'a> {
-    fn new(parent: Option<&'a dyn Scope>) -> FunctionBodyScope<'a> {
-        FunctionBodyScope {
-            parent,
-            arguments: Default::default(),
-        }
-    }
-}
-
-/// Definition of a local variable in a block.
-struct LocalVariableDefinition {
-    /// Corresponding syntax node of the definition.
-    node: SyntaxNode,
-    /// HIR value holding the logical pointer to the variable.
-    hir_value: hir::Value,
-}
-
-/// Scope defined by a block inside a function.
-struct BlockScope<'a> {
-    parent: Option<&'a dyn Scope>,
-    variables: HashMap<String, LocalVariableDefinition>,
-}
-
-impl<'a> BlockScope<'a> {
-    fn new(parent: Option<&'a dyn Scope>) -> BlockScope<'a> {
-        BlockScope {
-            parent,
             variables: Default::default(),
+            functions: Default::default(),
         }
     }
 
-    /// Declares local variable in this scope, Possibly shadows an existing one.
-    fn declare_variable(&mut self, def: LocalVariableDefinition) {}
+    fn resolve(&self, kind: DefNameKind, name: &str) -> Option<&Def> {
+        let def = match kind {
+            DefNameKind::Function => self.functions.get(name),
+            DefNameKind::Type => self.types.get(name),
+            DefNameKind::Variable => self.variables.get(name),
+        };
+
+        def.or_else(|| self.parent.and_then(|parent| parent.resolve(kind, name)))
+    }
+
+    fn define_type(&mut self, name: String, location: Option<SourceLocation>, ty: hir::Type) -> Option<Def> {
+        self.types.insert(
+            name,
+            Def {
+                kind: DefKind::Type(ty),
+                location,
+            },
+        )
+    }
+
+    fn define_function(&mut self, name: String, location: Option<SourceLocation>, func: FuncRef) -> Option<Def> {
+        self.functions.insert(
+            name,
+            Def {
+                kind: DefKind::Function(func),
+                location,
+            },
+        )
+    }
+
+    fn define_constant(
+        &mut self,
+        name: String,
+        location: Option<SourceLocation>,
+        constant: hir::Constant,
+    ) -> Option<Def> {
+        self.variables.insert(
+            name,
+            Def {
+                kind: DefKind::Constant(constant),
+                location,
+            },
+        )
+    }
+
+    fn define_global_variable(
+        &mut self,
+        name: String,
+        location: Option<SourceLocation>,
+        var: hir::GlobalVariable,
+    ) -> Option<Def> {
+        self.variables.insert(
+            name,
+            Def {
+                kind: DefKind::GlobalVariable(var),
+                location,
+            },
+        )
+    }
+
+    fn define_block_variable(
+        &mut self,
+        name: String,
+        location: Option<SourceLocation>,
+        var: hir::Value,
+    ) -> Option<Def> {
+        self.variables.insert(
+            name,
+            Def {
+                kind: DefKind::BlockVariable(var),
+                location,
+            },
+        )
+    }
 }
 
-impl<'a> Scope for BlockScope<'a> {
-    fn resolve_type(&self, name: &str) -> Option<Type> {
-        self.parent.and_then(|parent| parent.resolve_type(name))
+//--------------------------------------------------------------------------------------------------
+
+/// HIR value with its type.
+///
+/// Avoids an indirection to the `types` array in the module.
+struct TypedValue {
+    ty: hir::Type,
+    val: hir::Value,
+}
+
+impl TypedValue {
+    fn new(val: hir::Value, ty: hir::Type) -> TypedValue {
+        TypedValue { ty, val }
     }
 }
 
 struct LowerCtxt<'a> {
     current_file: SourceId,
     diag: &'a Diagnostics,
+    m: &'a mut hir::Module,
+    types: BuiltinTypes,
+    error_type: hir::Type,
+    error_place_type: hir::Type,
 }
 
 impl<'a> LowerCtxt<'a> {
-    fn new(file: SourceId, diag: &'a Diagnostics) -> LowerCtxt<'a> {
-        LowerCtxt {
-            current_file: file,
-            diag,
-        }
-    }
-
     fn token_loc(&self, token: &SyntaxToken) -> SourceLocation {
         SourceLocation::new(self.current_file, token.text_range())
     }
@@ -385,307 +271,730 @@ impl<'a> LowerCtxt<'a> {
     fn node_loc(&self, node: &SyntaxNode) -> SourceLocation {
         SourceLocation::new(self.current_file, node.text_range())
     }
+}
 
-    /// Emits IR for a module.
-    ///
-    /// Essentially, creates a HIR program.
-    fn emit_module(&mut self, b: &mut hir::FunctionBuilder, module: Module) {
-        let mut root_scope = BuiltinScope::new(b);
-        let mut global_scope = SimpleScope::new(Some(&root_scope));
-        for item in module.items() {
-            self.emit_item(b, item, &mut global_scope)
+/// Converts an Ident to a String, or generates one if the Ident is empty.
+fn ident_to_string_opt(ident: Option<ast::Ident>) -> String {
+    static ANON_IDENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    ident
+        .map(|ident| ident.text().to_string())
+        .unwrap_or_else(|| format!("__anon_{}", ANON_IDENT_COUNTER.fetch_add(1, Ordering::Relaxed)))
+}
+
+/// Resolved reference to a function.
+enum FuncRef {
+    /// User-defined function
+    User(Function),
+    /// Built-in
+    Builtin(BuiltinOperation),
+}
+
+fn lower_function_call(ctxt: &mut LowerCtxt, func_ref: FuncRef) {}
+
+/// Emits IR for a module.
+fn lower_module(ctxt: &mut LowerCtxt, module: ast::Module, builtin_scope: &Scope<'_>) {
+    let mut global_scope = Scope::new(Some(&builtin_scope));
+    for item in module.items() {
+        lower_item(ctxt, item, &mut global_scope)
+    }
+}
+
+fn lower_item(ctxt: &mut LowerCtxt, item: ast::Item, scope: &mut Scope<'_>) {
+    match item {
+        ast::Item::FnDef(def) => {
+            lower_fn_def(ctxt, def, scope);
         }
-    }
-
-    fn emit_item(&mut self, b: &mut hir::FunctionBuilder, item: Item, scope: &mut SimpleScope<'_>) {
-        match item {
-            Item::FnDef(def) => {
-                self.emit_fn_def(b, def, scope);
-            }
-            Item::Global(global) => {
-                let Some(name) = global.name() else {
-                    // no diagnostic, this is a syntax error
-                    return;
-                };
-                let Some(kind) = global.qualifier().and_then(|q| q.global_kind()) else {
-                    // no diagnostic, this is a syntax error
-                    return;
-                };
-                let ty = self.emit_type_or_unknown(b, global.ty());
-
-                match kind {
-                    Some(GlobalKind::Uniform) => self.program_inputs.push(RequiredValue {
-                        name: "",
-                        ty,
-                        domain: None,
-                        fulfillment: None,
-                    }),
-                    Some(GlobalKind::Const) => {}
-                    Some(GlobalKind::In) => {}
-                    Some(GlobalKind::Out) => {}
-                    None => {}
-                }
-            }
+        ast::Item::FnDecl(decl) => {
+            lower_fn_decl(ctxt, decl, scope);
         }
-    }
+        ast::Item::Global(global) => {
+            let loc = ctxt.node_loc(global.syntax());
 
+            // no diagnostic, this is a syntax error
+            let name = ident_to_string_opt(global.name());
+            let Some(kind) = global.qualifier().and_then(|q| q.global_kind()) else { return; };
+            let ty = lower_type_opt(ctxt, global.ty(), scope);
 
-    /// Generates IR for a function.
-    fn emit_function(&mut self,
-                     b: &mut hir::FunctionBuilder, func: Option<FnDef>, scope: &mut SimpleScope<'_>) {
-
-    }
-
-
-    /// Generates IR for an expression node, or returns undef if the expression is `None`.
-    fn emit_expr_or_undef(
-        &mut self,
-        b: &mut hir::FunctionBuilder,
-        expr: Option<Expr>,
-        scope: &dyn Scope,
-    ) -> hir::ValueId {
-        if let Some(expr) = expr {
-            self.emit_expr(b, expr, scope)
-        } else {
-            b.undef()
-        }
-    }
-
-    /// Generates IR for an expression node.
-    ///
-    /// # Return value
-    ///
-    /// The IR value of the expression
-    fn emit_expr(&mut self, b: &mut hir::FunctionBuilder, expr: Expr, scope: &dyn Scope) -> hir::ValueId {
-        let loc = self.node_loc(expr.syntax());
-        match expr {
-            Expr::BinExpr(bin_expr) => {
-                let lhs = self.emit_expr_or_undef(b, bin_expr.lhs(), scope);
-                let rhs = self.emit_expr_or_undef(b, bin_expr.rhs(), scope);
-
-                if let Some((_, op)) = bin_expr.op_details() {
-                    match op {
-                        BinaryOp::LogicOp(logic_op) => match logic_op {
-                            LogicOp::And => {
-                                todo!()
-                            }
-                            LogicOp::Or => {
-                                todo!()
-                            }
-                        },
-                        BinaryOp::ArithOp(arith_op) => match arith_op {
-                            ArithOp::Add => b.emit_f_add(lhs, rhs),
-                            ArithOp::Mul => b.emit_mul(lhs, rhs, loc),
-                            ArithOp::Sub => b.emit_sub(lhs, rhs, loc),
-                            ArithOp::Div => b.emit_div(lhs, rhs, loc),
-                            ArithOp::Rem => {
-                                todo!()
-                            }
-                            ArithOp::Shl => {
-                                todo!()
-                            }
-                            ArithOp::Shr => {
-                                todo!()
-                            }
-                            ArithOp::BitXor => {
-                                todo!()
-                            }
-                            ArithOp::BitOr => {
-                                todo!()
-                            }
-                            ArithOp::BitAnd => {
-                                todo!()
-                            }
-                        },
-                        BinaryOp::CmpOp(_) => {
-                            todo!()
-                        }
-                        BinaryOp::Assignment(_) => b.undef(),
-                    }
-                } else {
-                    b.undef()
-                }
-            }
-            Expr::CallExpr(call_expr) => {
-                let func = self.emit_expr_or_undef(b, call_expr.func(), scope);
-                let mut args = Vec::new();
-                if let Some(arg_list) = call_expr.arg_list() {
-                    for arg in arg_list.arguments() {
-                        args.push(self.emit_expr(b, arg, scope));
-                    }
-                }
-                b.emit_call(func, args, self.node_loc(call_expr.syntax()))
-            }
-            Expr::IndexExpr(index_expr) => {
-                todo!()
-            }
-            Expr::ParenExpr(expr) => self.emit_expr_or_undef(b, expr.expr(), scope),
-            Expr::LitExpr(lit) => match lit.kind() {
-                LiteralKind::String(str) => {
-                    todo!()
-                }
-                LiteralKind::IntNumber(v) => {
-                    if let Some(value) = v.value() {
-                        let c = b.int_const(value as i64);
-                        b.emit_constant(c, loc)
-                    } else {
-                        b.undef()
-                    }
-                }
-                LiteralKind::FloatNumber(v) => {
-                    if let Some(value) = v.value() {
-                        let c = b.fp_const(value);
-                        b.emit_constant(c, loc)
-                    } else {
-                        b.undef()
-                    }
-                }
-                LiteralKind::Bool(v) => {
-                    let c = b.bool_const(v);
-                    b.emit_constant(c, loc)
-                }
-            },
-            Expr::PathExpr(path_expr) => b.undef(),
-            Expr::TupleExpr(_) => {
-                todo!()
-            }
-            Expr::ArrayExpr(_) => {
-                todo!()
-            }
-        }
-    }
-
-    /// Emits IR for a type reference.
-    fn emit_type(&mut self, b: &mut hir::FunctionBuilder, ty: Type) -> hir::Type {
-        match ty {
-            Type::TypeRef(tyref) => {
-                match tyref.ident() {
-                    Some(ident) => {
-                        // resolve builtin types
-                        if let Some(hir_ty) = self.emit_builtin_type(ident.text()) {
-                            hir_ty
+            match kind {
+                Some(ast::QualifierKind::Const) => {
+                    let value = if let Some(initializer) = global.initializer() {
+                        let Some(initializer) = initializer.expr() else {return;};
+                        let loc = ctxt.node_loc(initializer.syntax());
+                        if let Some(value) = try_evaluate_constant_expression(ctxt, &initializer, scope, Some(ty)) {
+                            ctxt.m.define_constant(value)
                         } else {
-                            self.ty_unknown
+                            ctxt.diag
+                                .error("could not evaluate constant expression")
+                                .primary_label(loc, "")
+                                .emit();
+                            // dummy
+                            ctxt.m.define_constant(ConstantData::Bool(false))
                         }
-                    }
-                    _ => self.ty_unknown,
-                }
-            }
-            Type::TupleType(tuple_ty) => {
-                let mut fields = vec![];
-                for t in tuple_ty.fields() {
-                    fields.push(self.emit_type(b, t));
-                }
-                let fields = b.ctxt_mut().alloc_slice_copy(&fields);
-                b.ctxt_mut().intern_attr(TupleType(fields)).upcast()
-            }
-            Type::ArrayType(array_type) => {
-
-            }
-            Type::ClosureType(closure_type) => {
-
-            }
-        }
-    }
-
-    fn emit_type_or_unknown(&mut self, b: &mut hir::FunctionBuilder, ty: Option<Type>) -> hir::Type {
-        if let Some(ty) = ty {
-            self.emit_type(b, ty)
-        } else {
-            b.ty_unknown()
-        }
-    }
-
-    /// Emits IR for a block statement.
-    fn emit_stmt(&mut self, b: &mut hir::FunctionBuilder, stmt: Stmt, scope: &mut BlockScope) {
-        match stmt {
-            Stmt::ExprStmt(expr) => {
-                self.emit_expr_or_undef(b, expr.expr(), scope);
-            }
-            Stmt::ReturnStmt(_) => {}
-            Stmt::WhileStmt(_) => {}
-            Stmt::BreakStmt(_) => {}
-            Stmt::ContinueStmt(_) => {}
-            Stmt::DiscardStmt(_) => {}
-            Stmt::LocalVariable(_) => {}
-            Stmt::IfStmt(if_stmt) => {}
-        }
-    }
-
-    /// Emits IR for a block.
-    fn emit_block(&mut self, b: &mut hir::FunctionBuilder, block: Block, scope: &dyn Scope) {
-        // start block scope
-        let mut block_scope = BlockScope::new(Some(scope));
-        for stmt in block.stmts() {
-            self.emit_stmt(b, stmt, &mut block_scope)
-        }
-    }
-
-    /// Emits IR for a function declaration.
-    fn emit_fn_def(&mut self, b: &mut hir::FunctionBuilder, fn_def: FnDef, scope: &mut SimpleScope) {
-        let loc = self.node_loc(fn_def.syntax());
-        // generate IR for all parameter types and generate the function type
-        let mut param_types = vec![];
-        if let Some(param_list) = fn_def.param_list() {
-            for param in param_list.parameters() {
-                param_types.push(self.emit_type_or_unknown(b, param.ty()));
-            }
-        }
-        // generate return type
-        let arg_types = self.ctxt.alloc_slice_copy(&param_types);
-        let return_ty = if let Some(ret_type) = fn_def.ret_type() {
-            self.emit_type_or_unknown(b, ret_type.ty())
-        } else {
-            // no trailing return type in the AST (`-> Type`), so return unit.
-            self.ctxt.intern_attr(base::UnitType).upcast()
-        };
-
-        // intern the function type
-        let function_type = FunctionType { arg_types, return_ty };
-        let function_type = b.ctxt_mut().intern_attr(function_type);
-
-        let base::Function {
-            op,
-            result,
-            body,
-            arguments,
-        } = base::Function::build(b, function_type, loc);
-
-        // generate IR for the function body
-        if let Some(block) = fn_def.block() {
-            // build the scope containing the function's arguments
-            let mut func_scope = FunctionBodyScope::new(Some(scope));
-            // TODO unwrap
-            if let Some(param_list) = fn_def.param_list() {
-                for (value, node) in arguments.iter().zip(param_list.parameters()) {
-                    if let Some(ident) = node.ident() {
-                        let arg = FunctionArgument {
-                            node,
-                            hir_value: *value,
-                        };
-                        func_scope.arguments.insert(ident.text().to_string(), arg);
+                    } else {
+                        ctxt.diag
+                            .error("no initializer provided in constant declaration")
+                            .primary_label(loc, "")
+                            .emit();
+                        // dummy
+                        ctxt.m.define_constant(ConstantData::Bool(false))
+                    };
+                    if let Some(prev_def) = scope.define_constant(name.clone(), Some(loc), value) {
+                        ctxt.diag.already_defined(&name, loc, prev_def.location).emit();
                     }
                 }
+                Some(kind @ ast::QualifierKind::In | ast::QualifierKind::Out | ast::QualifierKind::Uniform) => {
+                    if let Some(_) = global.initializer() {
+                        ctxt.diag
+                            .error("cannot initialize in/out/uniform variables")
+                            .primary_label(loc, "")
+                            .emit();
+                    }
+                    // Define global var in HIR
+                    let var = ctxt.m.define_global_variable(GlobalVariableData {
+                        name: name.text().to_string(),
+                        ty,
+                        storage_class: match kind {
+                            ast::QualifierKind::In => spirv::StorageClass::Input,
+                            ast::QualifierKind::Out => spirv::StorageClass::Output,
+                            ast::QualifierKind::Uniform => spirv::StorageClass::Uniform,
+                        },
+                        linkage: None,
+                    });
+                    // Define global var in scope
+                    if let Some(prev_def) = scope.define_global_variable(name.text(), Some(loc), var) {
+                        ctxt.diag.already_defined(name.text(), loc, prev_def.location).emit();
+                    }
+                }
+                None => {
+                    todo!("global variable with no qualifiers")
+                }
             }
-
-            let mut body_builder = b.build_region(body);
-            self.emit_block(&mut body_builder, block, &func_scope);
+        }
+        ast::Item::StructDef(def) => {
+            todo!()
+        }
+        ast::Item::ImportDecl(imp) => {
+            todo!()
         }
     }
 }
 
-pub fn lower_module(
-    hir: &mut HirCtxt,
-    m: ast::Module,
+#[derive(Debug)]
+struct ImplicitConversionError;
+
+enum ImplicitConversionContext {
+    Assignment,
+    Operation,
+}
+
+/// Generates IR for an implicit conversion.
+fn lower_implicit_conversion(
+    ctxt: &mut LowerCtxt,
+    b: &mut hir::FunctionBuilder,
+    value: TypedValue,
+    ty: hir::Type,
+) -> TypedValue {
+    if ty == value.ty {
+        // same types, no conversion
+        return value;
+    }
+
+    // all implicit conversions
+    let v = match (&ctxt.m.types[value.ty(&ctxt.m)], &ctxt.m.types[ty]) {
+        (TypeData::Scalar(tsrc), TypeData::Scalar(tdst)) => match (tsrc, tdst) {
+            (ScalarType::Int, ScalarType::UnsignedInt) => b.emit_bitcast(ty, value),
+            (ScalarType::Int, ScalarType::Float | ScalarType::Double) => b.emit_convert_s_to_f(ty, value),
+            (ScalarType::UnsignedInt, ScalarType::Float | ScalarType::Double) => b.emit_convert_u_to_f(ty, value),
+            (ScalarType::Float, ScalarType::Double) => b.emit_f_convert(ty, value),
+            _ => {
+                // TODO better error message
+                ctxt.diag.error("mismatched types").emit();
+                b.emit_undef(ty)
+            }
+        },
+        (TypeData::Vector(tsrc, n2), TypeData::Vector(tdst, n1)) if n1 == n2 => match (tsrc, tdst) {
+            (ScalarType::Int, ScalarType::UnsignedInt) => b.emit_bitcast(ty, value),
+            (ScalarType::Int, ScalarType::Float | ScalarType::Double) => b.emit_convert_s_to_f(ty, value),
+            (ScalarType::UnsignedInt, ScalarType::Float | ScalarType::Double) => b.emit_convert_u_to_f(ty, value),
+            (ScalarType::Float, ScalarType::Double) => b.emit_f_convert(ty, value),
+            _ => {
+                ctxt.diag.error("mismatched types").emit();
+                b.emit_undef(ty)
+            }
+        },
+        (TypeData::Matrix(tsrc, r1, c1), TypeData::Matrix(tdst, r2, c2)) if r1 == r2 && c1 == c2 => {
+            match (tsrc, tdst) {
+                (ScalarType::Float, ScalarType::Double) => b.emit_f_convert(ty, value),
+                _ => {
+                    ctxt.diag.error("mismatched types").emit();
+                    b.emit_undef(ty)
+                }
+            }
+        }
+        _ => {
+            ctxt.diag.error("mismatched types").emit();
+            b.emit_undef(ty)
+        }
+    };
+
+    TypedValue::new(v, ty)
+}
+
+/// Generates IR for an expression node, or returns undef if the expression is `None`.
+fn lower_expr_opt(
+    ctxt: &mut LowerCtxt,
+    b: &mut hir::FunctionBuilder,
+    expr: Option<ast::Expr>,
+    scope: &Scope,
+) -> TypedValue {
+    if let Some(expr) = expr {
+        lower_expr(ctxt, b, expr, scope)
+    } else {
+        let unk = ctxt.m.ty_unknown();
+        b.emit_undef(unk)
+    }
+}
+
+/// Emits IR for a rvalue binary operation.
+///
+/// # Arguments
+///
+/// * op_token the token of the operator; for the same BuiltinOperation, it can be either the operator (e.g. '+'), or the assignment-operator (e.g. '+=')
+fn lower_rvalue_bin_expr(
+    ctxt: &mut LowerCtxt,
+    b: &mut hir::FunctionBuilder,
+    operation: BuiltinOperation,
+    lhs: TypedValue,
+    rhs: TypedValue,
+    op_token: &SyntaxToken,
+) -> TypedValue {
+    match typecheck_builtin_operation(ctxt, operation, &[lhs.ty, rhs.ty]) {
+        Ok(result) => {
+            // emit implicit conversions
+            let converted_lhs = lower_implicit_conversion(ctxt, b, lhs, result.parameter_types[0]);
+            let converted_rhs = lower_implicit_conversion(ctxt, b, rhs, result.parameter_types[1]);
+            lower_builtin_operation(ctxt, b, operation, converted_lhs, converted_rhs)
+        }
+        Err(_) => {
+            // TODO: show operand types and expected signatures
+            let loc = ctxt.token_loc(op_token);
+            ctxt.diag
+                .error(format!(
+                    "invalid operand types to binary operation `{}`",
+                    op_token.text()
+                ))
+                .primary_label("", loc)
+                .emit();
+            TypedValue::new(b.emit_undef(lhs.ty), lhs.ty)
+        }
+    }
+}
+
+fn lower_bin_expr(
+    ctxt: &mut LowerCtxt,
+    b: &mut hir::FunctionBuilder,
+    bin_expr: ast::BinExpr,
+    scope: &Scope,
+) -> Option<TypedValue> {
+    let Some((op_token, ast_operator)) = bin_expr.op_details() else {
+        let unk = ctxt.m.ty_unknown();
+        return b.emit_undef(unk).into();
+    };
+
+    let conv_arith_op = |arith_op| match arith_op {
+        ArithOp::Add => BuiltinOperation::Add,
+        ArithOp::Mul => BuiltinOperation::Mul,
+        ArithOp::Sub => BuiltinOperation::Sub,
+        ArithOp::Div => BuiltinOperation::Div,
+        ArithOp::Rem => BuiltinOperation::Rem,
+        ArithOp::Shl => BuiltinOperation::Shl,
+        ArithOp::Shr => BuiltinOperation::Shr,
+        ArithOp::BitXor => BuiltinOperation::BitXor,
+        ArithOp::BitOr => BuiltinOperation::BitOr,
+        ArithOp::BitAnd => BuiltinOperation::BitAnd,
+    };
+
+    // determine if this is an assignment, and the associated operation if there's one
+    let is_assignment;
+    let operation;
+    match ast_operator {
+        BinaryOp::LogicOp(logic_op) => {
+            is_assignment = false;
+            operation = match logic_op {
+                LogicOp::And => Some(BuiltinOperation::And),
+                LogicOp::Or => Some(BuiltinOperation::Or),
+            };
+        }
+        BinaryOp::ArithOp(arith_op) => {
+            is_assignment = false;
+            operation = Some(conv_arith_op(arith_op));
+        }
+        BinaryOp::CmpOp(cmp_op) => {
+            is_assignment = false;
+            operation = match cmp_op {
+                CmpOp::Eq => Some(BuiltinOperation::Eq),
+                CmpOp::Ne => Some(BuiltinOperation::Ne),
+                CmpOp::Gt => Some(BuiltinOperation::Gt),
+                CmpOp::Ge => Some(BuiltinOperation::Ge),
+                CmpOp::Lt => Some(BuiltinOperation::Lt),
+                CmpOp::Le => Some(BuiltinOperation::Le),
+            };
+        }
+        BinaryOp::Assignment(assign_op) => {
+            is_assignment = true;
+            operation = match assign_op {
+                None => None,
+                Some(arith_op) => {
+                    operator = Some(conv_arith_op(arith_op));
+                }
+            };
+        }
+    };
+
+    let mut rhs = lower_expr_opt(ctxt, b, bin_expr.rhs(), scope);
+    if is_assignment {
+        let place = lower_place_expr_opt(ctxt, b, bin_expr.lhs(), scope);
+        let place_ptr = b.access_chain(place.ty, place.base, &place.indices);
+        if let Some(operation) = operation {
+            // emit the arithmetic part of the assignment
+            // load lhs
+            // rhs = lhs + rhs
+            let lhs = b.emit_load(place.ty, place_ptr, None);
+            rhs = lower_rvalue_bin_expr(ctxt, b, operation, TypedValue::new(lhs, place.ty), rhs, &op_token);
+        }
+        // implicit conversion to lhs type of assignment
+        rhs = lower_implicit_conversion(ctxt, b, rhs, place.ty);
+        // emit assignment
+        b.emit_store(place_ptr, rhs, None);
+        // this expression produces no value
+        None
+    } else if let Some(operation) = operation {
+        Some(lower_rvalue_bin_expr(ctxt, b, operation, lhs, rhs, &op_token))
+    } else {
+        // should not happen
+        unreachable!("no assignment and no operation")
+    }
+}
+
+fn lower_index_expr(
+    ctxt: &mut LowerCtxt,
+    b: &mut hir::FunctionBuilder,
+    expr: ast::IndexExpr,
+    lvalue: bool,
+    scope: &Scope,
+) -> hir::Value {
+    todo!()
+}
+
+enum AccessIndex {
+    Constant(hir::Constant),
+    Value(hir::Value),
+}
+
+// TODO this might move to the HIR builder
+struct Place {
+    base: hir::Value,
+    /// Access chain
+    indices: Vec<ValueOrConstant>,
+    ty: hir::Type,
+}
+
+fn error_place(ctxt: &mut LowerCtxt, b: &mut hir::FunctionBuilder) -> Place {
+    let err_ty = ctxt.m.error_type();
+    let base = b.emit_undef(ctxt.error_place_type);
+    Place {
+        base,
+        indices: vec![],
+        ty: err_ty,
+    }
+}
+
+/// Generates IR for a place expression (lvalue).
+///
+/// `expr` should be a `IndexExpr`, `PathExpr`, or `FieldExpr`.
+///
+/// # Return value
+///
+/// A pointer-typed HIR value representing the place.
+fn lower_place_expr(ctxt: &mut LowerCtxt, b: &mut hir::FunctionBuilder, expr: ast::Expr, scope: &Scope) -> Place {
+    match expr {
+        ast::Expr::IndexExpr(index_expr) => {
+            let Some(array) = index_expr.array() else { return error_place(ctxt, b); };
+            let Some(index) = index_expr.index() else { return error_place(ctxt, b); };
+
+            let mut array_place = lower_place_expr(ctxt, b, array, scope);
+
+            let elem_type = match ctxt.m.types[array_place.ty] {
+                TypeData::Array(t, _) => t,
+                TypeData::RuntimeArray(t) => t,
+                _ => {
+                    ctxt.diag
+                        .error("cannot index into value")
+                        .primary_label(ctxt.node_loc(&array.syntax()), "")
+                        .emit();
+                    return error_place(ctxt, b);
+                }
+            };
+
+            if let Some(const_index) = try_evaluate_constant_expression(ctx, &index, scope, None) {
+                let i = ctxt.m.define_constant(const_index);
+                array_place.indices.push(ValueOrConstant::Constant(i));
+                array_place.ty = elem_type;
+            } else {
+                // Non-const
+                let i = lower_expr(ctxt, b, index, scope);
+                eprintln!("**TODO** check type of indices");
+                array_place.indices.push(ValueOrConstant::Value(i.val));
+                array_place.ty = elem_type;
+            }
+
+            array_place
+        }
+        ast::Expr::PathExpr(path_expr) => {
+            let loc = ctxt.node_loc(path_expr.syntax());
+            let Some(ident) = path_expr.ident() else { return error_place(ctxt, b); };
+            let decl = match scope.resolve(DefNameKind::Variable, ident.text()) {
+                Some(def) => {
+                    match def.kind {
+                        DefKind::Constant(_) => {
+                            ctxt.diag
+                                .error("cannot use a constant as an lvalue")
+                                .primary_label(loc, "")
+                                .emit();
+                            return error_place(ctxt, b);
+                        }
+                        DefKind::GlobalVariable(global_variable) => {
+                            eprintln!("**TODO** check global variables as place expressions");
+                            let ty = ctxt.m.globals[global_variable].ty;
+                            // TODO storage class?
+                            let result_type = ctxt.m.define_type(TypeData::Pointer {
+                                pointee_type: ty,
+                                storage_class: spirv::StorageClass::Uniform,
+                            });
+                            let ptr = b.access_global(result_type, global_variable);
+                            Place {
+                                ty,
+                                indices: vec![],
+                                base: ptr,
+                            }
+                        }
+                        DefKind::BlockVariable(_) => {}
+                        _ => unreachable!(),
+                    }
+                }
+                None => {
+                    ctxt.diag
+                        .error(format!("could not find variable `{}` in scope", ident.text()))
+                        .primary_label(loc, "")
+                        .emit();
+                }
+            };
+
+            todo!("path place expr")
+        }
+        ast::Expr::FieldExpr(field_expr) => {
+            todo!("field place expr")
+        }
+        _ => {
+            // not a valid place expression, create a value of type "pointer to unknown" so that compilation can proceed
+            todo!("dummy place expr")
+        }
+    }
+}
+
+fn lower_place_expr_opt(
+    ctxt: &mut LowerCtxt,
+    b: &mut hir::FunctionBuilder,
+    expr: Option<ast::Expr>,
+    scope: &Scope,
+) -> Place {
+    if let Some(expr) = expr {
+        lower_place_expr(ctxt, b, expr, scope)
+    } else {
+        error_place(ctxt, b)
+    }
+}
+
+/// Generates IR for an expression node.
+///
+/// # Return value
+///
+/// The IR value of the expression
+fn lower_expr(ctxt: &mut LowerCtxt, b: &mut hir::FunctionBuilder, expr: ast::Expr, scope: &Scope) -> TypedValue {
+    let loc = ctxt.node_loc(expr.syntax());
+    match expr {
+        ast::Expr::BinExpr(bin_expr) => lower_bin_expr(ctxt, b, bin_expr, scope),
+        ast::Expr::CallExpr(call_expr) => {
+            let func = lower_expr_opt(ctxt, b, call_expr.func(), scope);
+            let mut args = Vec::new();
+            if let Some(arg_list) = call_expr.arg_list() {
+                for arg in arg_list.arguments() {
+                    args.push(lower_expr(ctxt, b, arg, scope));
+                }
+            }
+            b.emit_call(func, args, ctxt.node_loc(call_expr.syntax()))
+        }
+        ast::Expr::IndexExpr(_) | ast::Expr::PathExpr(_) | ast::Expr::FieldExpr(_) => {
+            // lower place expression and dereference
+            let place = lower_place_expr(ctxt, b, expr, scope);
+            let (ty, _storage_class) = place
+                .ty(ctxt.m)
+                .pointee_type(ctxt.m)
+                .expect("lower_place_expr did not produce a pointer value");
+            b.emit_load(ty, place, None)
+        }
+        ast::Expr::ParenExpr(expr) => lower_expr_opt(ctxt, b, expr.expr(), scope),
+        ast::Expr::LitExpr(lit) => match lit.kind() {
+            ast::LiteralKind::String(str) => {
+                todo!()
+            }
+            ast::LiteralKind::IntNumber(v) => {
+                if let Some(value) = v.value() {
+                    let c = b.int_const(value as i64);
+                    b.emit_constant(c, loc)
+                } else {
+                    b.undef()
+                }
+            }
+            ast::LiteralKind::FloatNumber(v) => {
+                if let Some(value) = v.value() {
+                    let c = b.fp_const(value);
+                    b.emit_constant(c, loc)
+                } else {
+                    b.undef()
+                }
+            }
+            ast::LiteralKind::Bool(v) => {
+                let c = b.bool_const(v);
+                b.emit_constant(c, loc)
+            }
+        },
+        ast::Expr::TupleExpr(_) => {
+            todo!("tuple expressions")
+        }
+        ast::Expr::ArrayExpr(_) => {
+            todo!("array expressions")
+        }
+        ast::Expr::PrefixExpr(_) => {}
+    }
+}
+
+fn evaluate_constant_expression(
+    ctx: &mut LowerCtxt,
+    expr: &ast::Expr,
+    scope: &Scope,
+    expected_type: Option<hir::Type>,
+) -> ConstantData {
+    if let Some(data) = try_evaluate_constant_expression(ctx, expr, scope, expected_type) {
+        data
+    } else {
+        let node_loc = ctx.node_loc(expr.syntax());
+        ctx.diag.consteval_failure(node_loc)
+    }
+}
+
+/// Emits IR for a type reference.
+fn lower_type(ctxt: &mut LowerCtxt, ty: ast::Type, scope: &Scope) -> hir::Type {
+    match ty {
+        ast::Type::TypeRef(tyref) => {
+            let Some(ident) = tyref.ident() else { return ctxt.m.error_type(); };
+            if let Some(def) = scope.resolve(DefNameKind::Type, ident.text()) {
+                match def.kind {
+                    DefKind::Type(ty) => ty,
+                    _ => unreachable!(),
+                }
+            } else {
+                ctxt.diag.cannot_find_type(ident.text(), ctxt.node_loc(tyref.syntax()));
+                m.error_type()
+            }
+        }
+        ast::Type::TupleType(tuple_ty) => {
+            let fields = tuple_ty.fields().map(|f| lower_type(ctxt, f, scope));
+            m.define_struct_type(None, fields)
+        }
+        ast::Type::ArrayType(array_type) => {
+            let element_type = lower_type_opt(ctxt, array_type.element_type(), scope);
+            if let Some(expr) = array_type.length() {
+                let len_ty = m.define_type(TypeData::Scalar(ScalarType::UnsignedInt));
+                let length = evaluate_constant_expression(ctxt, &expr, scope, Some(len_ty));
+                let length = match length {
+                    ConstantData::U32(len) => len,
+                    _ => {
+                        return m.error_type();
+                    }
+                };
+                m.define_type(TypeData::Array(element_type, length))
+            } else {
+                // no length
+                m.define_type(TypeData::RuntimeArray(element_type))
+            }
+        }
+        ast::Type::ClosureType(closure_type) => {
+            todo!("closure types")
+        }
+    }
+}
+
+fn lower_type_opt(ctxt: &mut LowerCtxt, ty: Option<ast::Type>, scope: &Scope) -> hir::Type {
+    if let Some(ty) = ty {
+        lower_type(ctxt, ty, scope)
+    } else {
+        b.ty_unknown()
+    }
+}
+
+/// Emits IR for a block statement.
+fn lower_stmt(ctxt: &mut LowerCtxt, b: &mut hir::FunctionBuilder, stmt: ast::Stmt, scope: &mut Scope) {
+    match stmt {
+        ast::Stmt::ExprStmt(expr) => {
+            lower_expr_opt(ctxt, b, expr.expr(), scope);
+        }
+        ast::Stmt::ReturnStmt(stmt) => {
+            if let Some(expr) = stmt.expr() {
+                let value = lower_expr(ctxt, b, expr, scope);
+                b.ret_value(value);
+            } else {
+                // return void
+                b.ret();
+            }
+        }
+        ast::Stmt::WhileStmt(stmt) => {}
+        ast::Stmt::BreakStmt(stmt) => {}
+        ast::Stmt::ContinueStmt(stmt) => {}
+        ast::Stmt::DiscardStmt(stmt) => {}
+        ast::Stmt::LocalVariable(v) => {}
+        ast::Stmt::IfStmt(if_stmt) => {}
+    }
+}
+
+/// Emits IR for a block.
+fn lower_block(ctxt: &mut LowerCtxt, b: &mut hir::FunctionBuilder, block: ast::Block, scope: &Scope) {
+    // start block scope
+    let mut block_scope = Scope::new(Some(scope));
+    for stmt in block.stmts() {
+        lower_stmt(ctxt, b, stmt, &mut block_scope)
+    }
+}
+
+/// Lowers a function definition or declaration
+fn lower_function(
+    ctxt: &mut LowerCtxt,
+    name: String,
+    loc: SourceLocation,
+    extern_: Option<ast::Extern>,
+    param_list: Option<ast::ParamList>,
+    ret_type: Option<ast::RetType>,
+    block: Option<ast::Block>,
+    scope: &mut Scope,
+) -> hir::Function {
+    // build parameter list
+    let mut params = vec![];
+    let mut arg_types = vec![];
+    if let Some(param_list) = param_list {
+        for param in param_list.parameters() {
+            let arg_ty = lower_type_opt(ctxt, param.ty(), scope);
+            arg_types.push(arg_ty);
+            params.push(hir::FunctionParameter {
+                name: param.ident().map(|id| id.text().to_string()).unwrap_or_default(),
+                ty,
+            });
+        }
+    }
+
+    // return type
+    let return_type = if let Some(ret_type) = ret_type {
+        lower_type_opt(ctxt, ret_type.ty(), scope)
+    } else {
+        // no trailing return type in the AST (`-> Type`), so return unit.
+        ctxt.types.void
+    };
+
+    // create function type
+    // TODO: we're allocating an Arc even if the function type is already interned; if that has
+    // a measurable impact, figure out a way to intern a type from a non-owned TypeData.
+    let func_type = ctxt
+        .m
+        .define_type(TypeData::Function(Arc::new(FunctionType { arg_types, return_type })));
+
+    // function linkage
+    let linkage = if extern_.is_some() {
+        if block.is_some() {
+            // "extern" on a function definition => export
+            Some(spirv::LinkageType::Export)
+        } else {
+            // "extern" on a function declaration => import
+            Some(spirv::LinkageType::Import)
+        }
+    } else {
+        None
+    };
+
+    // if there's a block, then it's a function definition, otherwise it's just a declaration
+    let func_data = if let Some(block) = block {
+        let (mut func_data, entry_block_id) =
+            FunctionData::new(name.clone(), func_type, params, linkage, spirv::FunctionControl::NONE);
+        let mut builder = FunctionBuilder::new(&mut func_data, entry_block_id);
+        lower_block(ctxt, &mut builder, block, scope);
+        func_data
+    } else {
+        FunctionData::new_declaration(name.clone(), func_type, params, linkage, spirv::FunctionControl::NONE)
+    };
+
+    let func = ctxt.m.add_function(func_data);
+
+    // insert function in scope
+    scope.define_function(name, Some(loc), FuncRef::User(func));
+    func
+}
+
+/// Lowers a function declaration.
+fn lower_fn_decl(ctxt: &mut LowerCtxt, fn_decl: ast::FnDecl, scope: &mut Scope) -> hir::Function {
+    let loc = ctxt.node_loc(fn_decl.syntax());
+    let name = ident_to_string_opt(fn_decl.name());
+    lower_function(
+        ctxt,
+        name,
+        loc,
+        fn_decl.extern_(),
+        fn_decl.param_list(),
+        fn_decl.ret_type(),
+        fn_decl.block(),
+        scope,
+    )
+}
+
+/// Emits IR for a function definition.
+fn lower_fn_def(ctxt: &mut LowerCtxt, fn_def: ast::FnDef, scope: &mut Scope) -> hir::Function {
+    let loc = ctxt.node_loc(fn_def.syntax());
+    let name = ident_to_string_opt(fn_def.name());
+    lower_function(
+        ctxt,
+        name,
+        loc,
+        fn_def.extern_(),
+        fn_def.param_list(),
+        fn_def.ret_type(),
+        fn_def.block(),
+        scope,
+    )
+}
+
+pub fn lower(
+    m: &mut hir::Module,
+    ast: ast::Module,
     file: SourceId,
     source_files: SourceFileProvider,
     diag_writer: &mut dyn WriteColor,
-) -> RegionId {
+) {
     let diag = Diagnostics::new(source_files, diag_writer, term::Config::default());
-    let root_region = hir.create_region();
-    let mut lower_ctxt = LowerCtxt::new(hir, file, diag);
-    lower_ctxt.emit_module(Cursor::End(root_region), m);
-    root_region
+    let mut root_scope = Scope::new(None);
+    let builtin_types = register_builtins(m, &mut root_scope);
+    let mut ctxt = LowerCtxt {
+        m,
+        diag: &diag,
+        current_file: file,
+        types: builtin_types,
+    };
 }
 
 #[cfg(test)]

@@ -1117,3 +1117,57 @@ uniform texture2D normal_map; // "export uniform"
 * In the shader, click-drag the "Vertex Color" component onto the pipeline
 
 
+# Is there a way to get rid of the custom language entirely?
+
+Need to find a shader library, in rust, which outputs a kind of typed AST, 
+or directly outputs SPIR-V with linkage attributes, and is lenient with (or simply ignores) Vulkan restrictions on input types
+
+* Naga frontend with relaxed verification rules and "extern" functions.
+    * GLSL is still dumb, though
+
+* Base the syntax on WGSL, follow its semantics
+
+# Problem: the IR types are not enough to represent AbstractFloat and AbstractInt
+
+AbstractFloat & AbstractInt: type of numeric literals before they are "materialized" to a concrete type. They have different
+implicit conversion rules than the rest of types. Can't represent them in TypeImpl. 
+
+For instance: AbstractFloat (64-bit float value, possibly more) can implicitly convert to f32 (when used as an operand or function argument),
+but a value of type `double` (64-bit float value, materialized in the IR) cannot.
+
+Q: Are there "AbstractVecN", "AbstractIVecN" types? 
+A: Possibly, not directly constructible in code though
+=> This means that `ScalarType` itself is not sufficient: must have a new `AbstractScalarType`, and variants for Vecs, Matrices, etc.
+
+Q: Add `AbstractFloat`, `AbstractInt` to the IR?
+A: ???
+
+Q: Should operators operate on `Abstract` types?
+A: Yes
+
+## Alternative: no abstract types
+
+Literals are i32 or f32, respectively.
+Constant evaluation is done on f32 values.
+
+
+# Overload resolution
+
+1. Determine all candidates
+  For each argument, find an implicit conversion from the 
+
+
+`hir::Type` is not convenient for overload resolution: if we represent a built-in signature with `[hir::Type]`, all possible
+types in the overloads end up in the arena, even if the overload is not selected. The HIR module is polluted with all possible vector and matrix types, all the time.
+
+Q: Maybe we can use `hir::TypeData` to represent signatures instead of `hir::Type`?
+A: This could work, except that we may have struct and image types in signatures, and thus requires allocation.
+  For example, when checking image sampling ops, it will allocate a dozen times to build TypeData for each `imageXXX` or `textureXXX` in the overloads. 
+
+Q: In this case, have our own `AbstractType` that we use during lowering, with the built-in image types?
+A: Now we have to store user function signatures as `AbstractType` 
+
+1. Store images directly in `hir::TypeData`, no need for allocations
+2. Somehow, have a `hir::TypeData` that is not allocated? With `Cow` maybe?
+
+As a rule of thumb, don't intern a type to `hir::Type` if not going to use it in an instruction. 

@@ -1,3 +1,4 @@
+use std::num::{ParseFloatError, ParseIntError};
 use crate::{
     syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken},
     T,
@@ -147,7 +148,15 @@ impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
 impl_ast_node!(ClosureParamList   <CLOSURE_PARAM_LIST>   [nodes parameters: Type]);
 
 impl_ast_node!(FnDef<FN_DEF>
-               [node ret_type: RetType,
+               [node extern_: Extern,
+                node ret_type: RetType,
+                node param_list: ParamList,
+                node block: Block,
+                token name: Ident]);
+
+impl_ast_node!(FnDecl<FN_DECL>
+               [node extern_: Extern,
+                node ret_type: RetType,
                 node param_list: ParamList,
                 node block: Block,
                 token name: Ident]);
@@ -174,11 +183,12 @@ impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
 impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Qualifier     <QUALIFIER>   []);
-impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(Extern        <EXTERN>      []);
+impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node extern_: Extern, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType, ARRAY_TYPE => ArrayType, CLOSURE_TYPE => ClosureType ]);
-impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global, STRUCT_DEF => StructDef, IMPORT_DECL => ImportDecl ]);
+impl_ast_variant_node!(Item, [ FN_DEF => FnDef, FN_DECL => FnDecl, GLOBAL => Global, STRUCT_DEF => StructDef, IMPORT_DECL => ImportDecl ]);
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
     RETURN_STMT => ReturnStmt,
@@ -191,13 +201,15 @@ impl_ast_variant_node!(Stmt, [
 ]);
 impl_ast_variant_node!(Expr, [
     BIN_EXPR => BinExpr,
+    PREFIX_EXPR => PrefixExpr,
     CALL_EXPR => CallExpr,
     INDEX_EXPR => IndexExpr,
     PAREN_EXPR => ParenExpr,
     LIT_EXPR => LitExpr,
     PATH_EXPR => PathExpr,
     TUPLE_EXPR => TupleExpr,
-    ARRAY_EXPR => ArrayExpr
+    ARRAY_EXPR => ArrayExpr,
+    FIELD_EXPR => FieldExpr
 ]);
 
 //--------------------------------------------------------------------------------------------------
@@ -255,10 +267,9 @@ impl IntNumber {
         (prefix, text, suffix)
     }
 
-    pub fn value(&self) -> Option<u128> {
+    pub fn value(&self) -> Result<i64, ParseIntError> {
         let (_, text, _) = self.split_into_parts();
-        let value = u128::from_str_radix(&text.replace('_', ""), self.radix() as u32).ok()?;
-        Some(value)
+        i64::from_str_radix(&text.replace('_', ""), self.radix() as u32)
     }
 
     pub fn suffix(&self) -> Option<&str> {
@@ -277,9 +288,9 @@ impl IntNumber {
 }
 
 impl FloatNumber {
-    pub fn value(&self) -> Option<f64> {
+    pub fn value(&self) -> Result<f64, ParseFloatError> {
         // TODO hex floats
-        self.text().parse::<f64>().ok()
+        self.text().parse::<f64>()
     }
 }
 
@@ -380,39 +391,43 @@ impl BinExpr {
 }
 
 impl IndexExpr {
-    pub fn array_expr(&self) -> Option<Expr> {
+    pub fn array(&self) -> Option<Expr> {
         self.syntax.children().filter_map(Expr::cast).nth(1)
     }
 
-    pub fn index_expr(&self) -> Option<Expr> {
+    pub fn index(&self) -> Option<Expr> {
         self.syntax.children().filter_map(Expr::cast).nth(2)
     }
 }
 
 /// Describes the kind of a global program variable.
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum GlobalKind {
+pub enum QualifierKind {
     Uniform,
     Const,
     In,
     Out,
 }
 
+fn first_token(node: &SyntaxNode) -> SyntaxToken {
+    node
+        .children_with_tokens()
+        .find(|e| !e.kind().is_trivia())
+        .and_then(|e| e.into_token())
+        .unwrap()
+}
+
 impl Qualifier {
     pub fn token(&self) -> SyntaxToken {
-        self.syntax()
-            .children_with_tokens()
-            .find(|e| !e.kind().is_trivia())
-            .and_then(|e| e.into_token())
-            .unwrap()
+        first_token(self.syntax())
     }
 
-    pub fn global_kind(&self) -> Option<GlobalKind> {
+    pub fn global_kind(&self) -> Option<QualifierKind> {
         match self.token().kind() {
-            SyntaxKind::UNIFORM_KW => Some(GlobalKind::Uniform),
-            SyntaxKind::IN_KW => Some(GlobalKind::In),
-            SyntaxKind::OUT_KW => Some(GlobalKind::Out),
-            SyntaxKind::CONST_KW => Some(GlobalKind::Const),
+            SyntaxKind::UNIFORM_KW => Some(QualifierKind::Uniform),
+            SyntaxKind::IN_KW => Some(QualifierKind::In),
+            SyntaxKind::OUT_KW => Some(QualifierKind::Out),
+            SyntaxKind::CONST_KW => Some(QualifierKind::Const),
             _ => None,
         }
     }

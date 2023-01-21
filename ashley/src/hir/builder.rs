@@ -1,22 +1,21 @@
 use crate::{
     diagnostic::Diagnostics,
     hir::{
-        constant::ConstantData, Block, BlockData, Constant, FunctionData, Function, FunctionParameter,
-        InstructionData, Module, Operand, Operation, OperationId, Type, TypeData, Value,
-        ValueData, ValueKind,
+        constant::ConstantData, Block, BlockData, Constant, Function, FunctionData, FunctionParameter, InstructionData,
+        Module, Operand, Operation, OperationId, Type, TypeData, Value, ValueData, ValueOrConstant,
     },
 };
-use ashley::hir::TerminatingInstruction;
+use ashley::hir::{types::ScalarType, TerminatingInstruction};
 use bumpalo::Bump;
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::spirv;
 use smallvec::SmallVec;
 use std::{collections::HashMap, fmt, hash::Hash, ops::Deref};
-
+use crate::hir::GlobalVariable;
 
 struct InstBuilder {
-    opcode: u32,
+    opcode: spirv::Op,
     result_type: Option<Type>,
     operands: SmallVec<[Operand; 3]>,
 }
@@ -24,7 +23,7 @@ struct InstBuilder {
 impl InstBuilder {
     fn new(opcode: spirv::Op) -> InstBuilder {
         InstBuilder {
-            opcode: opcode as u32,
+            opcode,
             result_type: None,
             operands: Default::default(),
         }
@@ -41,40 +40,40 @@ trait IntoOperand {
 
 impl IntoOperand for Value {
     fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::Value(*self))
+        builder.operands.push(Operand::ValueRef(*self))
     }
 }
 
 impl IntoOperand for (Value, Value) {
     fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::Value(self.0));
-        builder.operands.push(Operand::Value(self.1));
+        builder.operands.push(Operand::ValueRef(self.0));
+        builder.operands.push(Operand::ValueRef(self.1));
     }
 }
 
 impl<'a> IntoOperand for &'a [Value] {
     fn write_operand(&self, builder: &mut InstBuilder) {
         for v in self {
-            builder.operands.push(Operand::Value(v));
+            builder.operands.push(Operand::ValueRef(v));
         }
     }
 }
 
 impl IntoOperand for Function {
     fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::Function(*self))
+        builder.operands.push(Operand::FunctionRef(*self))
     }
 }
 
 impl IntoOperand for Constant {
     fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::Constant(*self))
+        builder.operands.push(Operand::ConstantRef(*self))
     }
 }
 
 impl IntoOperand for Type {
     fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::Type(*self))
+        builder.operands.push(Operand::TypeRef(*self))
     }
 }
 
@@ -82,7 +81,7 @@ pub struct ImageOperands {
     //pub bits: spirv::ImageOperands,
     pub bias: Option<Value>,
     pub lod: Option<Value>,
-    pub grad: Option<(Value, Value)>,       // dx, dy
+    pub grad: Option<(Value, Value)>, // dx, dy
     pub const_offset: Option<Constant>,
     pub offset: Option<Value>,
     pub const_offsets: Option<Constant>,
@@ -158,66 +157,19 @@ impl IntoOperand for ImageOperands {
 }
 
 /// Used to build a HIR function.
-pub struct FunctionBuilder {
-    function: FunctionData,
+
+// FIXME: this is a bit crap: since we have no reference to the parent module, we can't infer the type
+// of operations that reference globals or constants
+// TODO: borrow module instead
+pub struct FunctionBuilder<'a> {
+    function: &'a mut FunctionData,
     block: Block,
 }
 
-impl FunctionBuilder {
+impl<'a> FunctionBuilder<'a> {
     ///
-    pub fn new(
-        return_ty: Type,
-        parameters: Vec<FunctionParameter>,
-        linkage: Option<spirv::LinkageType>
-    ) -> FunctionBuilder
-    {
-        let mut blocks = Arena::new();
-        let mut values = Arena::new();
-
-        let arguments: Vec<_> = parameters
-            .iter()
-            .map(|param| {
-                values
-                    .alloc(ValueData::new(param.ty))
-            })
-            .collect();
-        let entry_block = blocks.alloc(BlockData::new());
-        let function = FunctionData {
-            parameters,
-            arguments,
-            return_ty,
-            name: "".to_string(), // TODO
-            linkage,
-            values: Default::default(),
-            blocks,
-            entry_block,
-        };
-
-        FunctionBuilder {
-            function,
-            block: entry_block,
-        }
-    }
-
-    /// Returns the underlying module.
-    pub fn module_mut(&mut self) -> &mut Module {
-        self.module
-    }
-
-    /// Emits a floating-point constant.
-    pub fn fp_const(&mut self, value: f64) -> Constant {
-        self.module
-            .define_constant(ConstantData::F64(OrderedFloat::from(value)))
-    }
-
-    /// Emits an integer constant.
-    pub fn int_const(&mut self, value: i64) -> Constant {
-        self.module.define_constant(ConstantData::I64(value))
-    }
-
-    /// Emits a boolean constant.
-    pub fn bool_const(&mut self, value: bool) -> Constant {
-        self.module.define_constant(ConstantData::Boolean(value))
+    pub fn new(function: &'a mut FunctionData, block: Block) -> FunctionBuilder {
+        FunctionBuilder { function, block }
     }
 
     /// Inserts an operation at the current cursor position.
@@ -229,12 +181,13 @@ impl FunctionBuilder {
             None
         };
 
-        self.function.instructions.push(InstructionData {
+        self.function.blocks[self.block].instructions.push(InstructionData {
             opcode: inst.opcode,
             result,
             operands: inst.operands,
         });
-        result.map(|r| r.value)
+
+        result
     }
 
     /// Enters a new block.
@@ -245,6 +198,37 @@ impl FunctionBuilder {
         });
         self.block = block;
         block
+    }
+
+    /// References the specified constant.
+    pub fn use_const(&mut self, result_type: Type, constant: Constant) -> Value {
+        let mut i = InstBuilder::new(spirv::Op::CopyObject);
+        i.result_type = Some(result_type);
+        i.operands.push(Operand::ConstantRef(constant));
+        self.append_inst(i).unwrap()
+    }
+
+    // TODO: infer result_type
+    pub fn access_global(&mut self, result_type: Type, global_var: GlobalVariable) -> Value {
+        let mut i = InstBuilder::new(spirv::Op::CopyObject);
+        i.result_type = Some(result_type);
+        i.operands.push(Operand::GlobalRef(global_var));
+        self.append_inst(i).unwrap()
+    }
+
+    pub fn access_chain(&mut self, result_type: Type, base: Value, indices: &[ValueOrConstant]) -> Value {
+        let mut i = InstBuilder::new(spirv::Op::AccessChain);
+        i.result_type = Some(result_type);
+        i.operands.push(base.into());
+        for idx in indices {
+            i.operands.push(idx.into());
+        }
+        self.append_inst(i).unwrap()
+    }
+
+    /// Returns the type of the specified value.
+    pub fn ty(&mut self, v: Value) -> Type {
+        self.function.values[v].ty
     }
 
     /// Switch to the specified block in the current function.
@@ -264,14 +248,14 @@ impl FunctionBuilder {
 
     pub fn emit_selection_merge(&mut self, merge_block: Block) {
         let mut i = InstBuilder::new(spirv::Op::SelectionMerge);
-        i.operands.push(Operand::Block(merge_block));
+        i.operands.push(Operand::BlockRef(merge_block));
         self.append_inst(i);
     }
 
     pub fn emit_loop_merge(&mut self, merge_block: Block, continue_target: Block) {
         let mut i = InstBuilder::new(spirv::Op::LoopMerge);
-        i.operands.push(Operand::Block(merge_block));
-        i.operands.push(Operand::Block(continue_target));
+        i.operands.push(Operand::BlockRef(merge_block));
+        i.operands.push(Operand::BlockRef(continue_target));
         self.append_inst(i);
     }
 
@@ -285,6 +269,18 @@ impl FunctionBuilder {
             true_block,
             false_block,
         });
+    }
+
+    pub fn ret(&mut self) {
+        self.terminate_block(TerminatingInstruction::Return);
+    }
+
+    pub fn ret_value(&mut self, value: impl Into<ValueOrConstant>) {
+        self.terminate_block(TerminatingInstruction::ReturnValue(value))
+    }
+
+    pub fn finish(self) -> FunctionData {
+        self.function
     }
 }
 

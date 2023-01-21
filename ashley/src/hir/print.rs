@@ -1,8 +1,8 @@
 use crate::{
     diagnostic::{SourceFileProvider, SourceId, SourceLocation},
     hir::{
-        types::{ImageDimension, ImageType, SampledImageType, ScalarType, StructType, FunctionType},
-        HirCtxt, Location, Operation, InstructionData, OperationId, RegionId, Type, TypeData,
+        types::{ImageType, ScalarType, StructType, FunctionType},
+        Operation, InstructionData, OperationId, Type, TypeData,
         Value,
     },
 };

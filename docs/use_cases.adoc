@@ -15,7 +15,7 @@ graph TD;
 
 Maybe a graph is not the best representation? After all, the order of some components do not matter (e.g. if there are multiple vertex color available, the order in which they appear in the pipeline is irrelevant). Also, "Vertex Color" is a combination of a vertex shader, an interpolation node, and a fragment shader, it does not "execute" at a particular point in the pipeline.
 
-In terms of interaction, a "checkbox" would be sufficient. Click on the checkbox to import a subgraph that provides a vertex color value.
+In terms of interaction, a checkbox would be sufficient. Click on the checkbox to import a subgraph that provides a vertex color value.
 
 
 [mermaid]

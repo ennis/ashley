@@ -11,7 +11,7 @@ use crate::{
     T,
 };
 use codespan_reporting::{term, term::termcolor::WriteColor};
-use rowan::{GreenNode, GreenNodeBuilder, TextRange, TextSize};
+use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextRange, TextSize};
 use std::ops::Range;
 
 //--------------------------------------------------------------------------------------------------
@@ -46,10 +46,12 @@ pub(crate) fn parse_inner(text: &str, source_id: SourceId, diag: &Diagnostics) -
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let current = lex.next();
+    let lookahead = lex.next();
     let mut parser = Parser {
         source_id,
         text,
         current,
+        lookahead,
         lex,
         b,
         diag,
@@ -62,6 +64,8 @@ struct Parser<'a> {
     source_id: SourceId,
     /// Current token & span
     current: Option<(SyntaxKind, Range<usize>)>,
+    /// Lookahead
+    lookahead: Option<(SyntaxKind, Range<usize>)>,
     /// lexer for the input text
     lex: Lexer<'a>,
     /// the in-progress tree.
@@ -89,12 +93,18 @@ impl<'a> Parser<'a> {
     fn bump(&mut self) {
         let (kind, span) = self.current.clone().unwrap();
         self.b.token(kind.into(), &self.text[span]);
-        self.current = self.lex.next();
+        self.current = self.lookahead.clone();
+        self.lookahead = self.lex.next();
     }
 
     /// Peek at the first unprocessed token
     fn current(&self) -> Option<SyntaxKind> {
         self.current.clone().map(|(kind, _)| kind)
+    }
+
+    ///
+    fn lookahead1(&self) -> Option<SyntaxKind> {
+        self.lookahead.clone().map(|(kind, _)| kind)
     }
 
     fn skip_ws(&mut self) {
@@ -176,6 +186,14 @@ impl<'a> Parser<'a> {
                 }
                 Some(STRUCT_KW) => {
                     self.parse_struct_def();
+                }
+                Some(EXTERN_KW) => {
+                    if self.lookahead1() == Some(FN_KW) {
+                        // extern fn
+                        self.parse_fn();
+                    } else {
+                        self.parse_global_variable();
+                    }
                 }
                 Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW) => {
                     self.parse_global_variable();
@@ -262,7 +280,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_fn(&mut self) {
-        self.start_node(FN_DEF);
+        let cp = self.b.checkpoint();
+        //self.start_node(FN_DEF);
+        if self.current() == Some(EXTERN_KW) {
+            self.start_node(EXTERN);
+            self.bump();
+            self.finish_node();     // EXTERN
+            self.skip_ws();
+        }
         self.expect(FN_KW);
         self.skip_ws();
         self.expect_ident("function name");
@@ -277,7 +302,24 @@ impl<'a> Parser<'a> {
             self.finish_node();
             self.skip_ws();
         }
-        self.parse_block();
+
+        match self.current {
+            Some(Token!['{']) => {
+                self.b.start_node_at(cp, FN_DEF.into());
+                self.parse_block();
+            }
+            Some(Token![;]) => {
+                self.b.start_node_at(cp, FN_DECL.into());
+                self.bump();
+            }
+            _ => {
+                // TODO better recovery
+                let span = self.span();
+                self.diag.error("unexpected token").primary_label(span, "").emit();
+                self.b.start_node_at(cp, FN_DEF.into());
+                self.bump();
+            }
+        }
         self.finish_node();
     }
 
@@ -749,6 +791,12 @@ impl<'a> Parser<'a> {
 
     fn parse_global_variable(&mut self) {
         self.start_node(GLOBAL);
+        if self.current() == Some(EXTERN_KW) {
+            self.start_node(EXTERN);
+            self.bump();
+            self.finish_node();     // EXTERN
+            self.skip_ws();
+        }
         self.start_node(QUALIFIER);
         self.expect_any(&[IN_KW, OUT_KW, CONST_KW, UNIFORM_KW]);
         self.finish_node(); // QUALIFIER
@@ -1113,6 +1161,17 @@ import package2 as p;
 import package3("test") as p1;
 import package3  (   "test"   )  as p1  ;
 import package4  ;
+"#
+        ));
+    }
+
+    #[test]
+    fn function_decl() {
+        insta::assert_debug_snapshot!(parse_source_text(
+            r#"
+extern fn main ( ) ;
+       fn main ( ) ;
+extern fn main ( ) { }
 "#
         ));
     }

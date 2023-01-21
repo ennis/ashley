@@ -6,6 +6,7 @@ pub mod hir;
 pub mod lower;
 pub mod syntax;
 mod utils;
+mod package;
 //mod lower;
 //mod lower;
 

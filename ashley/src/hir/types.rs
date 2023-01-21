@@ -1,9 +1,13 @@
-use std::sync::Arc;
-use rspirv::spirv;
-use crate::hir::{Type};
+use crate::hir::Type;
+use rspirv::{
+    spirv,
+    spirv::{AccessQualifier, ImageFormat},
+};
+use serde::{Deserialize, Serialize};
+use std::{borrow::Cow, sync::Arc};
 
 /// Scalar type kind.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ScalarType {
     Int,
     UnsignedInt,
@@ -25,17 +29,35 @@ impl ScalarType {
 }
 
 /// Field of a struct type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Field {
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct Field<'a> {
     pub ty: Type,
-    pub name: String,
+    pub name: Option<Cow<'a, str>>,
+}
+
+impl<'a> Field<'a> {
+    pub fn into_static(self) -> Field<'static> {
+        Field {
+            ty: self.ty,
+            name: self.name.map(|name| Cow::Owned(name.into_owned())),
+        }
+    }
 }
 
 /// Structure type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct StructType {
-    pub name: String,
-    pub fields: Vec<Field>,
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct StructType<'a> {
+    pub name: Option<Cow<'a, str>>,
+    pub fields: Cow<'a, [Field<'a>]>,
+}
+
+impl<'a> StructType<'a> {
+    pub fn into_static(self) -> StructType<'static> {
+        StructType {
+            name: self.name.map(|name| Cow::Owned(name.into_owned())),
+            fields: Cow::Owned(self.fields.iter().map(|f| f.to_static()).collect::<Box<[Field]>>()),
+        }
+    }
 }
 
 impl StructType {
@@ -50,39 +72,47 @@ impl StructType {
     }
 }
 
-/// Tuple type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct TupleType(pub Vec<Type>);
-
 //--------------------------------------------------------------------------------------------------
 
 /// Function or closure type.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct FunctionType {
-    pub return_ty: Type,
-    pub arg_types: Vec<Type>,
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct FunctionType<'a> {
+    pub return_type: Type,
+    pub arg_types: Cow<'a, [Type]>,
 }
 
-/// Sampled image type
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SampledImageType {
-    pub sampled_ty: ScalarType,
-    pub dim: spirv::Dim,
-    pub ms: bool,
+impl<'a> FunctionType<'a> {
+    pub fn into_static(self) -> FunctionType<'static> {
+        FunctionType {
+            return_type: self.return_type,
+            arg_types: Cow::Owned(self.arg_types.into_owned()),
+        }
+    }
 }
 
-/// Unsampled image type
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ImageSampling {
+    Unknown,
+    Sampled,
+    ReadWrite,
+}
+
+/// Image type
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ImageType {
-    pub element_ty: ScalarType,
+    pub sampled_type: ScalarType,
     pub dim: spirv::Dim,
+    pub arrayed: bool,
+    pub depth: Option<bool>,
     pub ms: bool,
+    pub sampled: ImageSampling,
+    pub image_format: ImageFormat,
+    pub access: Option<AccessQualifier>,
 }
-
 
 /// Describes the data type of a value.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum TypeData {
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum TypeData<'a> {
     /// Void (or unit) type.
     Unit,
     /// Scalar type.
@@ -96,24 +126,51 @@ pub enum TypeData {
     /// Runtime array type. Array without a known length.
     RuntimeArray(Type),
     /// Structure type (array of (offset, type) tuples).
-    Struct(Arc<StructType>),
+    Struct(StructType<'a>),
     /// Sampled image type (e.g. `texture2D`).
-    SampledImage(Arc<SampledImageType>),
+    SampledImage(ImageType),
     /// Unsampled image type (e.g. `image2D`).
-    Image(Arc<ImageType>),
-    /// Pointer to data.
-    Pointer(Type),
+    Image(ImageType),
+    /// Pointer.
+    Pointer {
+        pointee_type: Type,
+        storage_class: spirv::StorageClass,
+    },
     /// Function or closure type.
-    Function(Arc<FunctionType>),
+    Function(FunctionType<'a>),
     /// Sampler.
     Sampler,
-    /// Shadow sampler (`samplerShadow`)
-    ShadowSampler,
     /// Strings.
     String,
     Unknown,
 }
 
+impl<'a> TypeData<'a> {
+    pub fn into_static(self) -> TypeData<'static> {
+        match self {
+            TypeData::Struct(struct_type) => TypeData::Struct(struct_type.into_static()),
+            TypeData::Function(func) => TypeData::Function(func.into_static()),
+            TypeData::Unit => TypeData::Unit,
+            TypeData::Scalar(t) => TypeData::Scalar(t),
+            TypeData::Vector(t, n) => TypeData::Vector(t, n),
+            TypeData::Matrix(t, r, c) => TypeData::Matrix(t, r, c),
+            TypeData::Array(t, n) => TypeData::Array(t, n),
+            TypeData::RuntimeArray(t) => TypeData::RuntimeArray(t),
+            TypeData::SampledImage(i) => TypeData::SampledImage(i),
+            TypeData::Image(i) => TypeData::Image(i),
+            TypeData::Pointer {
+                pointee_type,
+                storage_class,
+            } => TypeData::Pointer {
+                pointee_type,
+                storage_class,
+            },
+            TypeData::Sampler => TypeData::Sampler,
+            TypeData::String => TypeData::String,
+            TypeData::Unknown => TypeData::Unknown,
+        }
+    }
+}
 
 /*impl TypeDesc {
     pub const VOID: TypeDesc = TypeDesc::Void;

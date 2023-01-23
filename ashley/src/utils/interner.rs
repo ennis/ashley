@@ -18,7 +18,7 @@ impl<T: Eq + Hash, H: Clone> Interner<T, H> {
 
     /// Returns whether this interner contains the specified value.
     pub fn get_handle(&self, value: &T) -> Option<H> {
-        self.items.borrow().get(value)
+        self.items.borrow().get(value).cloned()
     }
 
     /// Interns the specified value.

@@ -1,3 +1,4 @@
+use crate::utils::rustfmt_file;
 use serde::Deserialize;
 use serde_json as json;
 use std::{
@@ -48,7 +49,8 @@ fn write_formatted(path: &Path, contents: impl ToString) {
 fn main() {
     // --- HIR instruction builders ---
     {
-        let mut output = File::create("ashley/src/hir/autogen/builder.rs").expect("failed to open output file");
+        let path = "ashley/src/hir/autogen/builder.rs";
+        let mut output = File::create(path).expect("failed to open output file");
         {
             let core_grammar = load_json(CORE_GRAMMAR);
             let impl_block = hir::generate_impl_block(&core_grammar);
@@ -60,6 +62,7 @@ fn main() {
             let impl_block = hir::generate_ext_impl_block(&ext_grammar, ext, ext_prefix);
             write!(output, "\n// --- {} --- \n{impl_block}\n", ext).unwrap();
         }
+        rustfmt_file(Path::new(path))
     }
 
     // --- GLSL builtin instruction signatures ---

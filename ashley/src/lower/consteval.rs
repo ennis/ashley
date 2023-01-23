@@ -1,17 +1,15 @@
 //! Constant evaluation
-use std::num::ParseIntError;
 use crate::{
-    diagnostic::Diagnostic,
+    diagnostic::{Diagnostic, Diagnostics},
     hir,
     lower::{LowerCtxt, Scope},
-    syntax::ast,
+    syntax::{ast, ast::AstToken},
 };
 use ashley::syntax::ast::{Expr, LiteralKind};
+use std::num::ParseIntError;
 use thiserror::Error;
-use crate::syntax::ast::AstToken;
 
 //use crate::hir::ConstantData;
-
 
 #[derive(Debug, Error)]
 pub(super) enum ConstEvalError {}
@@ -26,7 +24,7 @@ pub(super) enum ConstEvalError {}
 // -> type checking is done on these "AbstractValue"
 
 pub(super) fn try_evaluate_constant_expression(
-    ctx: &mut LowerCtxt,
+    diag: &Diagnostics,
     expr: &ast::Expr,
     scope: &Scope,
     expected_type: Option<hir::Type>,
@@ -36,10 +34,9 @@ pub(super) fn try_evaluate_constant_expression(
         Expr::ArrayExpr(array) => {
             let mut elements = vec![];
             for e in array.elements() {
-                elements.push(try_evaluate_constant_expression(ctx, &e, scope, None)?);
+                elements.push(try_evaluate_constant_expression(diag, &e, scope, None)?);
             }
             // infer the types of the element in the array
-
         }
 
         Expr::BinExpr(_) => {
@@ -72,7 +69,7 @@ pub(super) fn try_evaluate_constant_expression(
         }
         Expr::ParenExpr(inner) => {
             if let Some(expr) = inner.expr() {
-                try_evaluate_constant_expression(ctx, &expr, scope, expected_type)
+                try_evaluate_constant_expression(diag, &expr, scope, expected_type)
             } else {
                 None
             }
@@ -84,31 +81,49 @@ pub(super) fn try_evaluate_constant_expression(
             }
             LiteralKind::IntNumber(v) => {
                 match v.value() {
-                    Ok(v) => { ConstValue::AbstractInt(v) }
+                    Ok(i) => {
+                        // convert to i32
+                        match i.try_into() {
+                            Ok(i) => hir::ConstantData::I32(i),
+                            Err(err) => diag
+                                .error(format!("error parsing integer: {err}"))
+                                .primary_label(&v, "")
+                                .emit(),
+                        }
+                    }
                     Err(err) => {
-                        let loc = ctx.token_loc(v.syntax());
-                        ctx.diag.error(format!("error parsing integer: {err}")).primary_label("", loc).emit();
+                        diag.error(format!("error parsing integer: {err}"))
+                            .primary_label(&v, "")
+                            .emit();
                         None
                     }
                 }
             }
             LiteralKind::FloatNumber(v) => {
                 match v.value() {
-                    Ok(v) => { ConstValue::AbstractFloat(v) }
+                    Ok(f) => {
+                        // convert to i32
+                        match f.try_into() {
+                            Ok(f) => hir::ConstantData::F32(f),
+                            Err(err) => diag
+                                .error(format!("error parsing floating-point number: {err}"))
+                                .primary_label(&v, "")
+                                .emit(),
+                        }
+                    }
                     Err(err) => {
-                        let loc = ctx.token_loc(v.syntax());
-                        ctx.diag.error(format!("error parsing floating-point number: {err}")).primary_label("", loc).emit();
+                        diag.error(format!("error parsing floating-point number: {err}"))
+                            .primary_label(v, "")
+                            .emit();
                         None
                     }
                 }
             }
             LiteralKind::Bool(v) => {
-                ConstValue::Bool(v)
+                hir::ConstantData::Bool(v)
             }
         },
     };
-
-
 
     if let Some(expected_type) = expected_type {}
 

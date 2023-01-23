@@ -141,7 +141,7 @@ pub enum SyntaxKind {
     #[token("struct")]
     STRUCT_KW,
     #[token("as")]
-    AS,
+    AS_KW,
 
     #[regex(r#"[a-zA-Z_][a-zA-Z0-9_]*"#)]
     IDENT,

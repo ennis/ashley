@@ -136,15 +136,31 @@ impl<'a> Files<'a> for SourceFileProvider {
 /// Describes a source location.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SourceLocation {
-    /// Source file ID, as returned by `SourceFileProvider`.
-    pub file: SourceId,
+    /// Source file ID, as returned by `SourceFileProvider`, or `None` to use the default source.
+    pub file: Option<SourceId>,
     /// Byte range start
     pub range: TextRange,
 }
 
 impl SourceLocation {
-    pub fn new(file: SourceId, range: TextRange) -> SourceLocation {
+    pub fn new(file: Option<SourceId>, range: TextRange) -> SourceLocation {
         SourceLocation { file, range }
+    }
+}
+
+pub trait AsSourceLocation {
+    fn source_location(&self) -> SourceLocation;
+}
+
+impl AsSourceLocation for SourceLocation {
+    fn source_location(&self) -> SourceLocation {
+        *self
+    }
+}
+
+impl<T> AsSourceLocation for &T where T: AsSourceLocation {
+    fn source_location(&self) -> SourceLocation {
+        (*self).source_location()
     }
 }
 
@@ -160,6 +176,7 @@ impl SourceLocation {
 
 struct DiagnosticsInner {
     writer: Box<dyn WriteColor>,
+    //current_source:
     bug_count: usize,
     error_count: usize,
     warning_count: usize,
@@ -168,14 +185,21 @@ struct DiagnosticsInner {
 pub struct Diagnostics {
     config: term::Config,
     files: SourceFileProvider,
+    default_source: SourceId,
     inner: parking_lot::Mutex<DiagnosticsInner>,
 }
 
 impl Diagnostics {
-    pub(crate) fn new(files: SourceFileProvider, writer: impl WriteColor + 'static, config: term::Config) -> Diagnostics {
+    pub(crate) fn new(
+        files: SourceFileProvider,
+        default_source: SourceId,
+        writer: impl WriteColor + 'static,
+        config: term::Config,
+    ) -> Diagnostics {
         Diagnostics {
             files,
             config,
+            default_source,
             inner: parking_lot::Mutex::new(DiagnosticsInner {
                 writer: Box::new(writer),
                 bug_count: 0,
@@ -247,40 +271,39 @@ pub struct DiagnosticBuilder<'a> {
 }
 
 impl<'a> DiagnosticBuilder<'a> {
-    fn label(
+    fn label<L: AsSourceLocation>(
         mut self,
-        span: impl Into<Option<SourceLocation>>,
+        loc: L,
         style: LabelStyle,
         message: impl Into<String>,
     ) -> DiagnosticBuilder<'a> {
-        if let Some(span) = span.into() {
-            self.diag.labels.push(Label {
-                style,
-                file_id: span.file,
-                range: span.range.start().into()..span.range.end().into(),
-                message: message.into(),
-            });
-        } else {
-            self.diag.notes.push(message.into());
-        }
+        let span = loc.source_location();
+        let file_id = span.file.unwrap_or(self.sink.default_source);
+        self.diag.labels.push(Label {
+            style,
+            file_id,
+            range: span.range.start().into()..span.range.end().into(),
+            message: message.into(),
+        });
         self
     }
 
     /// Sets the primary label of the diagnostic.
-    pub fn primary_label(
-        self,
-        span: impl Into<Option<SourceLocation>>,
-        message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a> {
-        self.label(span, LabelStyle::Primary, message)
+    pub fn primary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+        self.label(loc, LabelStyle::Primary, message)
     }
 
-    pub fn secondary_label(
-        self,
-        span: impl Into<Option<SourceLocation>>,
-        message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a> {
-        self.label(span, LabelStyle::Secondary, message)
+    /// Sets the primary label of the diagnostic, only if `loc` is not `None`.
+    pub fn primary_label_opt(mut self, loc: Option<SourceLocation>, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+        if let Some(loc) = loc {
+            self.label(loc, LabelStyle::Primary, message)
+        } else {
+            self
+        }
+    }
+
+    pub fn secondary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+        self.label(loc, LabelStyle::Secondary, message)
     }
 
     pub fn note(mut self, message: impl Into<String>) -> DiagnosticBuilder<'a> {

@@ -1,18 +1,22 @@
 use crate::{
     diagnostic::Diagnostics,
     hir::{
-        constant::ConstantData, Block, BlockData, Constant, Function, FunctionData, FunctionParameter, InstructionData,
-        Module, Operand, Operation, OperationId, Type, TypeData, Value, ValueData, ValueOrConstant,
+        constant::ConstantData, types::ScalarType, Block, BlockData, Constant, ExtendedInstructionSetId, Function,
+        FunctionData, FunctionParameter, GlobalVariable, IdRef, InstructionData, Module, Operand, PackedVectorFormat,
+        TerminatingInstruction, Type, TypeData, Value, ValueData, ValueOrConstant,
     },
 };
-use ashley::hir::{types::ScalarType, TerminatingInstruction};
 use bumpalo::Bump;
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
-use rspirv::spirv;
+use rspirv::{grammar::ExtendedInstruction, spirv};
 use smallvec::SmallVec;
-use std::{collections::HashMap, fmt, hash::Hash, ops::Deref};
-use crate::hir::GlobalVariable;
+use std::{
+    collections::HashMap,
+    fmt,
+    hash::Hash,
+    ops::{Deref, DerefMut},
+};
 
 struct InstBuilder {
     opcode: spirv::Op,
@@ -29,51 +33,83 @@ impl InstBuilder {
         }
     }
 
+    fn new_ext_inst(set: ExtendedInstructionSetId, opcode: spirv::Word) -> InstBuilder {
+        todo!()
+    }
+
     fn set_result(&mut self, result_type: Type) {
-        self.result = Some(result_type);
+        self.result_type = Some(result_type);
     }
 }
 
 trait IntoOperand {
-    fn write_operand(&self, builder: &mut InstBuilder);
+    fn write_operand(self, builder: &mut InstBuilder);
 }
 
-impl IntoOperand for Value {
-    fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::ValueRef(*self))
+impl IntoOperand for i32 {
+    fn write_operand(self, builder: &mut InstBuilder) {
+        builder.operands.push(Operand::LiteralInt32(self as u32))
+    }
+}
+
+impl IntoOperand for &str {
+    fn write_operand(self, builder: &mut InstBuilder) {
+        builder.operands.push(Operand::LiteralString(self.to_string()))
     }
 }
 
 impl IntoOperand for (Value, Value) {
-    fn write_operand(&self, builder: &mut InstBuilder) {
+    fn write_operand(self, builder: &mut InstBuilder) {
         builder.operands.push(Operand::ValueRef(self.0));
         builder.operands.push(Operand::ValueRef(self.1));
     }
 }
 
 impl<'a> IntoOperand for &'a [Value] {
-    fn write_operand(&self, builder: &mut InstBuilder) {
+    fn write_operand(self, builder: &mut InstBuilder) {
         for v in self {
-            builder.operands.push(Operand::ValueRef(v));
+            builder.operands.push(Operand::ValueRef(*v));
+        }
+    }
+}
+
+impl<'a> IntoOperand for &'a [IdRef] {
+    fn write_operand(self, builder: &mut InstBuilder) {
+        for &v in self {
+            builder.operands.push(v.into());
         }
     }
 }
 
 impl IntoOperand for Function {
-    fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::FunctionRef(*self))
-    }
-}
-
-impl IntoOperand for Constant {
-    fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::ConstantRef(*self))
+    fn write_operand(self, builder: &mut InstBuilder) {
+        builder.operands.push(Operand::FunctionRef(self))
     }
 }
 
 impl IntoOperand for Type {
-    fn write_operand(&self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::TypeRef(*self))
+    fn write_operand(self, builder: &mut InstBuilder) {
+        builder.operands.push(Operand::TypeRef(self))
+    }
+}
+
+impl<T> IntoOperand for T
+where
+    T: Into<Operand>,
+{
+    fn write_operand(self, builder: &mut InstBuilder) {
+        builder.operands.push(self.into())
+    }
+}
+
+impl<T> IntoOperand for Option<T>
+where
+    T: IntoOperand,
+{
+    fn write_operand(self, builder: &mut InstBuilder) {
+        if let Some(v) = self {
+            v.write_operand(builder)
+        }
     }
 }
 
@@ -109,52 +145,56 @@ impl Default for ImageOperands {
 }
 
 impl IntoOperand for ImageOperands {
-    fn write_operand(&self, builder: &mut InstBuilder) {
+    fn write_operand(self, builder: &mut InstBuilder) {
         let mut bits = spirv::ImageOperands::empty();
         // NOTE: the order is important: operands indicated by smaller-numbered bits should appear first
+        bits.set(spirv::ImageOperands::BIAS, self.bias.is_some());
+        bits.set(spirv::ImageOperands::LOD, self.lod.is_some());
+        bits.set(spirv::ImageOperands::GRAD, self.grad.is_some());
+        bits.set(spirv::ImageOperands::CONST_OFFSET, self.const_offset.is_some());
+        bits.set(spirv::ImageOperands::OFFSET, self.offset.is_some());
+        bits.set(spirv::ImageOperands::CONST_OFFSETS, self.const_offsets.is_some());
+        bits.set(spirv::ImageOperands::SAMPLE, self.sample.is_some());
+        bits.set(spirv::ImageOperands::MIN_LOD, self.min_lod.is_some());
+        bits.set(spirv::ImageOperands::SIGN_EXTEND, self.sign_extend);
+        bits.set(spirv::ImageOperands::ZERO_EXTEND, self.zero_extend);
+        bits.write_operand(builder);
+
         if let Some(bias) = self.bias {
-            bits.set(spirv::ImageOperands::BIAS, true);
             bias.write_operand(builder);
         }
         if let Some(lod) = self.lod {
-            bits.set(spirv::ImageOperands::LOD, true);
             lod.write_operand(builder);
         }
         if let Some(grad) = self.grad {
-            bits.set(spirv::ImageOperands::GRAD, true);
             grad.0.write_operand(builder);
             grad.1.write_operand(builder);
         }
         if let Some(const_offset) = self.const_offset {
-            bits.set(spirv::ImageOperands::CONST_OFFSET, true);
             const_offset.write_operand(builder);
         }
         if let Some(offset) = self.offset {
-            bits.set(spirv::ImageOperands::OFFSET, true);
             offset.write_operand(builder);
         }
         if let Some(const_offsets) = self.const_offsets {
-            bits.set(spirv::ImageOperands::CONST_OFFSETS, true);
             const_offsets.write_operand(builder);
         }
         if let Some(sample) = self.sample {
-            bits.set(spirv::ImageOperands::SAMPLE, true);
             sample.write_operand(builder);
         }
         if let Some(min_lod) = self.min_lod {
-            bits.set(spirv::ImageOperands::MIN_LOD, true);
             min_lod.write_operand(builder);
-        }
-        if let Some(sign_extend) = self.sign_extend {
-            bits.set(spirv::ImageOperands::SIGN_EXTEND, true);
-            sign_extend.write_operand(builder);
-        }
-        if let Some(zero_extend) = self.zero_extend {
-            bits.set(spirv::ImageOperands::ZERO_EXTEND, true);
-            zero_extend.write_operand(builder);
         }
     }
 }
+
+/// Trait for types that refer to an object ID.
+trait IntoIdRef: Into<Operand> {}
+
+impl IntoIdRef for Constant {}
+impl IntoIdRef for Value {}
+impl IntoIdRef for GlobalVariable {}
+impl IntoIdRef for IdRef {}
 
 /// Used to build a HIR function.
 
@@ -162,14 +202,33 @@ impl IntoOperand for ImageOperands {
 // of operations that reference globals or constants
 // TODO: borrow module instead
 pub struct FunctionBuilder<'a> {
+    pub module: &'a mut Module,
     function: &'a mut FunctionData,
     block: Block,
 }
 
+impl<'a> Deref for FunctionBuilder<'a> {
+    type Target = Module;
+
+    fn deref(&self) -> &Self::Target {
+        self.module
+    }
+}
+
+impl<'a> DerefMut for FunctionBuilder<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.module
+    }
+}
+
 impl<'a> FunctionBuilder<'a> {
     ///
-    pub fn new(function: &'a mut FunctionData, block: Block) -> FunctionBuilder {
-        FunctionBuilder { function, block }
+    pub fn new(module: &'a mut Module, function: &'a mut FunctionData, block: Block) -> FunctionBuilder<'a> {
+        FunctionBuilder {
+            module,
+            function,
+            block,
+        }
     }
 
     /// Inserts an operation at the current cursor position.
@@ -188,6 +247,10 @@ impl<'a> FunctionBuilder<'a> {
         });
 
         result
+    }
+
+    pub fn import_extended_instruction_set(&mut self, _set: &str) -> ExtendedInstructionSetId {
+        todo!()
     }
 
     /// Enters a new block.
@@ -216,12 +279,12 @@ impl<'a> FunctionBuilder<'a> {
         self.append_inst(i).unwrap()
     }
 
-    pub fn access_chain(&mut self, result_type: Type, base: Value, indices: &[ValueOrConstant]) -> Value {
+    pub fn access_chain(&mut self, result_type: Type, base: impl IntoIdRef, indices: &[IdRef]) -> Value {
         let mut i = InstBuilder::new(spirv::Op::AccessChain);
         i.result_type = Some(result_type);
         i.operands.push(base.into());
         for idx in indices {
-            i.operands.push(idx.into());
+            i.operands.push((*idx).into())
         }
         self.append_inst(i).unwrap()
     }
@@ -263,7 +326,7 @@ impl<'a> FunctionBuilder<'a> {
         self.terminate_block(TerminatingInstruction::Branch(target));
     }
 
-    pub fn branch_conditional(&mut self, condition: Value, true_block: Block, false_block: Block) {
+    pub fn branch_conditional(&mut self, condition: ValueOrConstant, true_block: Block, false_block: Block) {
         self.terminate_block(TerminatingInstruction::BranchConditional {
             condition,
             true_block,
@@ -275,12 +338,8 @@ impl<'a> FunctionBuilder<'a> {
         self.terminate_block(TerminatingInstruction::Return);
     }
 
-    pub fn ret_value(&mut self, value: impl Into<ValueOrConstant>) {
-        self.terminate_block(TerminatingInstruction::ReturnValue(value))
-    }
-
-    pub fn finish(self) -> FunctionData {
-        self.function
+    pub fn ret_value(&mut self, value: impl IntoIdRef) {
+        self.terminate_block(TerminatingInstruction::ReturnValue(value.into()))
     }
 }
 

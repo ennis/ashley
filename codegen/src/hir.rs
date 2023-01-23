@@ -10,6 +10,29 @@ use std::{
     io::{BufReader, Write},
 };
 
+//--------------------------------------------------------------------------------------------------
+
+// TODO: use rspirv::grammar!
+
+/// Instructions excluded from automatic builder method generation.
+///
+/// These should be implemented by hand in `hir::FunctionBuilder` or `hir::Module`
+const EXCLUDED_INSTRUCTIONS: &[&str] = &[
+    "OpLoopMerge",
+    "OpSelectionMerge",
+    "OpString",
+    "OpExtInstImport",
+    "OpDecorationGroup",
+    "OpLabel",
+    "OpTypeRayQueryKHR",
+    "OpTypeHitObjectNV",
+    "OpTypeAccelerationStructureNV",
+    "OpTypeAccelerationStructureKHR",
+    "OpTypeCooperativeMatrixNV",
+];
+
+//--------------------------------------------------------------------------------------------------
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize)]
 enum OperandCategory {
     BitEnum,
@@ -211,7 +234,7 @@ struct Operand {
 struct Instruction {
     opname: String,
     class: Option<InstructionClass>,
-    opcode: i64,
+    opcode: u32,
     #[serde(default)]
     operands: Vec<Operand>,
 }
@@ -435,17 +458,22 @@ fn generate_instruction(inst: &Instruction, ext: Option<(&str, &str)>) -> proc_m
                 quote!(spirv::RayQueryCandidateIntersectionType)
             }
             OperandKind::PackedVectorFormat => {
-                quote!(spirv::PackedVectorFormat)
+                quote!(crate::hir::PackedVectorFormat)
             }
             OperandKind::IdMemorySemantics => {
-                quote!(impl Into<ValueOrConstant>)
+                quote!(ValueOrConstant)
             }
             OperandKind::IdScope => {
-                quote!(impl Into<ValueOrConstant>)
+                quote!(ValueOrConstant)
             }
-            OperandKind::IdRef => {
-                quote!(impl Into<ValueOrConstant>)
-            }
+            OperandKind::IdRef => match op.quantifier {
+                None | Some(Quantifier::ZeroOrOne) => {
+                    quote!(impl IntoIdRef)
+                }
+                Some(Quantifier::ZeroOrMore) => {
+                    quote!(IdRef)
+                }
+            },
             OperandKind::IdResultType => {
                 quote!(Type)
             }
@@ -552,6 +580,11 @@ fn generate_instruction_methods(insts: &[Instruction], ext: Option<(&str, &str)>
         ) {
             continue;
         }
+        // filter out excluded instructions
+        if EXCLUDED_INSTRUCTIONS.contains(&&*inst.opname) {
+            continue;
+        }
+
         methods.push(generate_instruction(inst, ext));
     }
 

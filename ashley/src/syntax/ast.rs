@@ -1,8 +1,9 @@
-use std::num::{ParseFloatError, ParseIntError};
 use crate::{
+    diagnostic::{AsSourceLocation, SourceLocation},
     syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken},
     T,
 };
+use std::num::{ParseFloatError, ParseIntError};
 
 pub trait AstNode {
     fn cast(syntax: SyntaxNode) -> Option<Self>
@@ -41,6 +42,12 @@ macro_rules! impl_ast_token {
 
             fn text(&self) -> &str {
                 self.syntax.text()
+            }
+        }
+
+        impl AsSourceLocation for $name {
+            fn source_location(&self) -> SourceLocation {
+                self.syntax().source_location()
             }
         }
     };
@@ -86,6 +93,12 @@ macro_rules! impl_ast_node {
                 impl_ast_node!(@getter $kind $method: $ast);
             )*
         }
+
+        impl AsSourceLocation for $name {
+            fn source_location(&self) -> SourceLocation {
+                self.syntax().source_location()
+            }
+        }
     };
 
     /*($name:ident <$syntax_kind:ident>) => {
@@ -120,6 +133,12 @@ macro_rules! impl_ast_variant_node {
                 match self {
                     $(Self::$variant(x) => &x.syntax(),)*
                 }
+            }
+        }
+
+        impl AsSourceLocation for $name {
+            fn source_location(&self) -> SourceLocation {
+                self.syntax().source_location()
             }
         }
     };
@@ -410,8 +429,7 @@ pub enum QualifierKind {
 }
 
 fn first_token(node: &SyntaxNode) -> SyntaxToken {
-    node
-        .children_with_tokens()
+    node.children_with_tokens()
         .find(|e| !e.kind().is_trivia())
         .and_then(|e| e.into_token())
         .unwrap()

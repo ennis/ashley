@@ -1,20 +1,20 @@
 use crate::{
     hir::{
         types::{ImageSampling, ImageType, ScalarType, StructType},
-        Block, ConstantData, Function, GlobalVariable, Module, Operand, TerminatingInstruction, Type, TypeData, Value,
+        Block, Constant, ConstantData, Function, GlobalVariable, Module, Operand, TerminatingInstruction, Type,
+        TypeData, Value, ValueOrConstant,
     },
     utils::IdMap,
 };
-use ashley::hir::ValueOrConstant;
 use rspirv::{
     binary::Assemble,
     dr::InsertPoint,
     spirv,
     spirv::{AddressingModel, Capability, LinkageType, MemoryModel, Word},
-    sr::Constant,
 };
 use std::collections::HashMap;
 use tracing::error;
+use crate::hir::IdRef;
 
 type TypeMap = IdMap<Type, Word>;
 type ConstantMap = IdMap<Constant, Word>;
@@ -34,8 +34,8 @@ fn emit_scalar_type(builder: &mut rspirv::dr::Builder, scalar_type: ScalarType) 
 fn emit_image_type(builder: &mut rspirv::dr::Builder, image_type: &ImageType) -> Word {
     let sampled = match image_type.sampled {
         ImageSampling::Unknown => 0,
-        ImageSampling::SamplingCompatible => 1,
-        ImageSampling::ReadWriteCompatible => 2,
+        ImageSampling::Sampled => 1,
+        ImageSampling::ReadWrite => 2,
     };
     let depth = match image_type.depth {
         Some(true) => 1,
@@ -68,7 +68,7 @@ fn emit_constants(module: &Module, builder: &mut rspirv::dr::Builder, type_ids: 
             }
             ConstantData::I32(v) => {
                 let ty = builder.type_int(32, 1);
-                builder.constant_i32(ty, v)
+                builder.constant_u32(ty, v as u32)
             }
             ConstantData::U32(v) => {
                 let ty = builder.type_int(32, 0);
@@ -80,7 +80,7 @@ fn emit_constants(module: &Module, builder: &mut rspirv::dr::Builder, type_ids: 
             }
             ConstantData::I64(v) => {
                 let ty = builder.type_int(64, 1);
-                builder.constant_i64(ty, v)
+                builder.constant_u64(ty, v as u64)
             }
             ConstantData::U64(v) => {
                 let ty = builder.type_int(64, 0);
@@ -96,7 +96,7 @@ fn emit_constants(module: &Module, builder: &mut rspirv::dr::Builder, type_ids: 
             }
             ConstantData::Composite { ty, constituents } => {
                 let ty = type_ids[ty];
-                builder.constant_composite(ty, constituents.iter().cloned())
+                builder.constant_composite(ty, constituents.iter().map(|c| map[*c]))
             }
         };
 
@@ -131,7 +131,9 @@ fn emit_types(module: &Module, builder: &mut rspirv::dr::Builder) -> TypeMap {
             TypeData::RuntimeArray(elem_ty) => builder.type_runtime_array(map[elem_ty]),
             TypeData::Struct(ty) => {
                 let id = builder.type_struct(ty.fields.iter().map(|f| map[f.ty]));
-                builder.name(id, &ty.name);
+                if let Some(ref name) = ty.name {
+                    builder.name(id, name.to_string());
+                }
                 id
             }
             TypeData::SampledImage(ty) => {
@@ -148,7 +150,7 @@ fn emit_types(module: &Module, builder: &mut rspirv::dr::Builder) -> TypeMap {
             }
             TypeData::Function(function_type) => {
                 let return_type = map[function_type.return_type];
-                builder.type_function(return_type, function_type.arg_types.iter().map(|arg| map[arg]))
+                builder.type_function(return_type, function_type.arg_types.iter().map(|arg| map[*arg]))
             }
             TypeData::Sampler => builder.type_sampler(),
             TypeData::String => {
@@ -160,6 +162,9 @@ fn emit_types(module: &Module, builder: &mut rspirv::dr::Builder) -> TypeMap {
             TypeData::Unknown => {
                 error!("unknown type encountered during SPIR-V translation");
                 builder.type_void()
+            }
+            _ => {
+                todo!()
             }
         };
 
@@ -193,7 +198,7 @@ fn emit_globals(
         if let Some(linkage) = gdata.linkage {
             emit_linkage_decoration(builder, id, &gdata.name, linkage);
         }
-        map[g.index()] = id;
+        map[g] = id;
     }
     map
 }
@@ -207,54 +212,56 @@ fn operand_to_rspirv(
     values: &IdMap<Value, Word>,
     labels: &IdMap<Block, Word>,
 ) -> rspirv::dr::Operand {
-    match op {
+    match *op {
         Operand::ConstantRef(constant) => rspirv::dr::Operand::IdRef(constant_map[constant]),
-        Operand::LiteralExtInstInteger(i) => rspirv::dr::Operand::LiteralExtInstInteger(*i),
+        Operand::LiteralExtInstInteger(i) => rspirv::dr::Operand::LiteralExtInstInteger(i),
         Operand::FunctionRef(function) => rspirv::dr::Operand::IdRef(functions[function]),
         Operand::ValueRef(value) => rspirv::dr::Operand::IdRef(values[value]),
         Operand::BlockRef(block) => rspirv::dr::Operand::IdRef(labels[block]),
         Operand::TypeRef(ty) => rspirv::dr::Operand::IdRef(type_map[ty]),
         Operand::GlobalRef(global) => rspirv::dr::Operand::IdRef(global_map[global]),
-        Operand::FPFastMathMode(v) => rspirv::dr::Operand::FPFastMathMode(*v),
-        Operand::SelectionControl(v) => rspirv::dr::Operand::SelectionControl(*v),
-        Operand::LoopControl(v) => rspirv::dr::Operand::LoopControl(*v),
-        Operand::FunctionControl(v) => rspirv::dr::Operand::FunctionControl(*v),
-        Operand::MemorySemantics(v) => rspirv::dr::Operand::MemorySemantics(*v),
-        Operand::MemoryAccess(v) => rspirv::dr::Operand::MemoryAccess(*v),
-        Operand::KernelProfilingInfo(v) => rspirv::dr::Operand::KernelProfilingInfo(*v),
-        Operand::RayFlags(v) => rspirv::dr::Operand::RayFlags(*v),
-        Operand::FragmentShadingRate(v) => rspirv::dr::Operand::FragmentShadingRate(*v),
-        Operand::SourceLanguage(v) => rspirv::dr::Operand::SourceLanguage(*v),
-        Operand::ExecutionModel(v) => rspirv::dr::Operand::ExecutionModel(*v),
-        Operand::AddressingModel(v) => rspirv::dr::Operand::AddressingModel(*v),
-        Operand::MemoryModel(v) => rspirv::dr::Operand::MemoryModel(*v),
-        Operand::ExecutionMode(v) => rspirv::dr::Operand::ExecutionMode(*v),
-        Operand::StorageClass(v) => rspirv::dr::Operand::StorageClass(*v),
-        Operand::Dim(v) => rspirv::dr::Operand::Dim(*v),
-        Operand::SamplerAddressingMode(v) => rspirv::dr::Operand::SamplerAddressingMode(*v),
-        Operand::SamplerFilterMode(v) => rspirv::dr::Operand::SamplerFilterMode(*v),
-        Operand::ImageFormat(v) => rspirv::dr::Operand::ImageFormat(*v),
-        Operand::ImageChannelOrder(v) => rspirv::dr::Operand::ImageChannelOrder(*v),
-        Operand::ImageChannelDataType(v) => rspirv::dr::Operand::ImageChannelDataType(*v),
-        Operand::FPRoundingMode(v) => rspirv::dr::Operand::FPRoundingMode(*v),
-        Operand::LinkageType(v) => rspirv::dr::Operand::LinkageType(*v),
-        Operand::AccessQualifier(v) => rspirv::dr::Operand::AccessQualifier(*v),
-        Operand::FunctionParameterAttribute(v) => rspirv::dr::Operand::FunctionParameterAttribute(*v),
-        Operand::Decoration(v) => rspirv::dr::Operand::Decoration(*v),
-        Operand::BuiltIn(v) => rspirv::dr::Operand::BuiltIn(*v),
-        Operand::Scope(v) => rspirv::dr::Operand::Scope(*v),
-        Operand::GroupOperation(v) => rspirv::dr::Operand::GroupOperation(*v),
-        Operand::KernelEnqueueFlags(v) => rspirv::dr::Operand::KernelEnqueueFlags(*v),
-        Operand::Capability(v) => rspirv::dr::Operand::Capability(*v),
-        Operand::RayQueryIntersection(v) => rspirv::dr::Operand::RayQueryIntersection(*v),
-        Operand::RayQueryCommittedIntersectionType(v) => rspirv::dr::Operand::RayQueryCommittedIntersectionType(*v),
-        Operand::RayQueryCandidateIntersectionType(v) => rspirv::dr::Operand::RayQueryCandidateIntersectionType(*v),
-        Operand::LiteralInt32(v) => rspirv::dr::Operand::LiteralInt32(*v),
-        Operand::LiteralInt64(v) => rspirv::dr::Operand::LiteralInt64(*v),
-        Operand::LiteralFloat32(v) => rspirv::dr::Operand::LiteralFloat32(*v),
-        Operand::LiteralFloat64(v) => rspirv::dr::Operand::LiteralFloat64(*v),
-        Operand::LiteralSpecConstantOpInteger(v) => rspirv::dr::Operand::LiteralSpecConstantOpInteger(*v),
-        Operand::LiteralString(v) => rspirv::dr::Operand::LiteralString(v.clone()),
+        Operand::FPFastMathMode(v) => rspirv::dr::Operand::FPFastMathMode(v),
+        Operand::SelectionControl(v) => rspirv::dr::Operand::SelectionControl(v),
+        Operand::LoopControl(v) => rspirv::dr::Operand::LoopControl(v),
+        Operand::FunctionControl(v) => rspirv::dr::Operand::FunctionControl(v),
+        Operand::MemorySemantics(v) => rspirv::dr::Operand::MemorySemantics(v),
+        Operand::MemoryAccess(v) => rspirv::dr::Operand::MemoryAccess(v),
+        Operand::KernelProfilingInfo(v) => rspirv::dr::Operand::KernelProfilingInfo(v),
+        Operand::RayFlags(v) => rspirv::dr::Operand::RayFlags(v),
+        Operand::FragmentShadingRate(v) => rspirv::dr::Operand::FragmentShadingRate(v),
+        Operand::SourceLanguage(v) => rspirv::dr::Operand::SourceLanguage(v),
+        Operand::ExecutionModel(v) => rspirv::dr::Operand::ExecutionModel(v),
+        Operand::AddressingModel(v) => rspirv::dr::Operand::AddressingModel(v),
+        Operand::MemoryModel(v) => rspirv::dr::Operand::MemoryModel(v),
+        Operand::ExecutionMode(v) => rspirv::dr::Operand::ExecutionMode(v),
+        Operand::StorageClass(v) => rspirv::dr::Operand::StorageClass(v),
+        Operand::Dim(v) => rspirv::dr::Operand::Dim(v),
+        Operand::SamplerAddressingMode(v) => rspirv::dr::Operand::SamplerAddressingMode(v),
+        Operand::SamplerFilterMode(v) => rspirv::dr::Operand::SamplerFilterMode(v),
+        Operand::ImageFormat(v) => rspirv::dr::Operand::ImageFormat(v),
+        Operand::ImageChannelOrder(v) => rspirv::dr::Operand::ImageChannelOrder(v),
+        Operand::ImageChannelDataType(v) => rspirv::dr::Operand::ImageChannelDataType(v),
+        Operand::FPRoundingMode(v) => rspirv::dr::Operand::FPRoundingMode(v),
+        Operand::LinkageType(v) => rspirv::dr::Operand::LinkageType(v),
+        Operand::AccessQualifier(v) => rspirv::dr::Operand::AccessQualifier(v),
+        Operand::FunctionParameterAttribute(v) => rspirv::dr::Operand::FunctionParameterAttribute(v),
+        Operand::Decoration(v) => rspirv::dr::Operand::Decoration(v),
+        Operand::BuiltIn(v) => rspirv::dr::Operand::BuiltIn(v),
+        Operand::Scope(v) => rspirv::dr::Operand::Scope(v),
+        Operand::GroupOperation(v) => rspirv::dr::Operand::GroupOperation(v),
+        Operand::KernelEnqueueFlags(v) => rspirv::dr::Operand::KernelEnqueueFlags(v),
+        Operand::Capability(v) => rspirv::dr::Operand::Capability(v),
+        Operand::RayQueryIntersection(v) => rspirv::dr::Operand::RayQueryIntersection(v),
+        Operand::RayQueryCommittedIntersectionType(v) => rspirv::dr::Operand::RayQueryCommittedIntersectionType(v),
+        Operand::RayQueryCandidateIntersectionType(v) => rspirv::dr::Operand::RayQueryCandidateIntersectionType(v),
+        Operand::LiteralInt32(v) => rspirv::dr::Operand::LiteralInt32(v),
+        Operand::LiteralInt64(v) => rspirv::dr::Operand::LiteralInt64(v),
+        Operand::LiteralFloat32(v) => rspirv::dr::Operand::LiteralFloat32(v),
+        Operand::LiteralFloat64(v) => rspirv::dr::Operand::LiteralFloat64(v),
+        Operand::LiteralSpecConstantOpInteger(v) => rspirv::dr::Operand::LiteralSpecConstantOpInteger(v),
+        Operand::LiteralString(ref v) => rspirv::dr::Operand::LiteralString(v.clone()),
+        Operand::ImageOperands(v) => rspirv::dr::Operand::ImageOperands(v),
+        Operand::PackedVectorFormat(v) => rspirv::dr::Operand::LiteralInt32(v as u32),
     }
 }
 
@@ -318,7 +325,7 @@ fn emit_functions(
                 }
                 Some(ref terminator) => match terminator {
                     TerminatingInstruction::Branch(target) => {
-                        builder.branch(labels[target]).unwrap();
+                        builder.branch(labels[*target]).unwrap();
                     }
                     TerminatingInstruction::BranchConditional {
                         condition,
@@ -326,11 +333,11 @@ fn emit_functions(
                         false_block,
                     } => {
                         let condition_id = match condition {
-                            ValueOrConstant::Value(v) => values[v],
-                            ValueOrConstant::Constant(c) => constant_map[c],
+                            ValueOrConstant::Value(v) => values[*v],
+                            ValueOrConstant::Constant(c) => constant_map[*c],
                         };
                         builder
-                            .branch_conditional(condition_id, labels[true_block], labels[false_block], [])
+                            .branch_conditional(condition_id, labels[*true_block], labels[*false_block], [])
                             .unwrap();
                     }
                     TerminatingInstruction::Switch {
@@ -345,8 +352,9 @@ fn emit_functions(
                     }
                     TerminatingInstruction::ReturnValue(v) => {
                         let id = match v {
-                            ValueOrConstant::Value(v) => values[v],
-                            ValueOrConstant::Constant(c) => constant_map[c],
+                            IdRef::Value(v) => values[*v],
+                            IdRef::Constant(c) => constant_map[*c],
+                            IdRef::Global(g) => global_map[*g],
                         };
                         builder.ret_value(id).unwrap();
                     }
@@ -364,7 +372,7 @@ fn emit_functions(
         if let Some(linkage) = fdata.linkage {
             emit_linkage_decoration(builder, id, &fdata.name, linkage);
         }
-        function_map[f.index()] = id;
+        function_map[f] = id;
     }
 }
 

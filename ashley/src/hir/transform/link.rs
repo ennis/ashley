@@ -17,7 +17,7 @@ fn replace_uses_in_function(module: &mut Module, function: Function, to_replace:
     for (_, block) in module.functions[function].blocks.iter_mut() {
         for inst in block.instructions.iter_mut() {
             for operand in inst.operands.iter_mut() {
-                if operand == to_replace {
+                if *operand == to_replace {
                     *operand = replace_with.clone();
                 }
             }
@@ -36,7 +36,7 @@ fn merge_constant(dst: &mut Module, mut cdata: ConstantData, map: &[usize]) -> C
 }
 
 fn merge_type(dst: &mut Module, mut tydata: TypeData, map: &[usize]) -> Type {
-    let remap = |ty| {
+    let remap = |ty: &mut Type| {
         *ty = Type::from_index(map[ty.index()]);
     };
     match tydata {
@@ -76,7 +76,7 @@ fn merge_function(
         Operand::ConstantRef(ref mut constant) => {
             *constant = Constant::from_index(constant_map[constant.index()]);
         }
-        Operand::ExtInst(_) => {}
+        //Operand::ExtInst(_) => {}
         Operand::FunctionRef(ref mut function) => {
             *function = Function::from_index(function_map[function.index()]);
         }
@@ -85,6 +85,7 @@ fn merge_function(
         Operand::TypeRef(ref mut ty) => {
             *ty = Type::from_index(type_map[ty.index()]);
         }
+        _ => {}
     };
 
     for (_, block) in fdata.blocks.iter_mut() {

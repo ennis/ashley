@@ -7,11 +7,11 @@ pub use self::operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp};
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::{Lexer, SyntaxKind::*};
 use crate::{
-    diagnostic::{Diagnostics, SourceFileProvider, SourceId, SourceLocation},
+    diagnostic::{AsSourceLocation, Diagnostics, SourceFileProvider, SourceId, SourceLocation},
     T,
 };
 use codespan_reporting::{term, term::termcolor::WriteColor};
-use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextRange, TextSize};
+use rowan::{GreenNodeBuilder, TextRange, TextSize};
 use std::ops::Range;
 
 //--------------------------------------------------------------------------------------------------
@@ -32,13 +32,25 @@ impl rowan::Language for Lang {
 pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 
+impl AsSourceLocation for SyntaxToken {
+    fn source_location(&self) -> SourceLocation {
+        SourceLocation::new(None, self.text_range())
+    }
+}
+
+impl AsSourceLocation for SyntaxNode {
+    fn source_location(&self) -> SourceLocation {
+        SourceLocation::new(None, self.text_range())
+    }
+}
+
 pub fn parse(
     text: &str,
     file: SourceId,
     source_provider: SourceFileProvider,
     diag_writer: impl WriteColor + 'static,
 ) -> SyntaxNode {
-    let diag = Diagnostics::new(source_provider, diag_writer, term::Config::default());
+    let diag = Diagnostics::new(source_provider, file, diag_writer, term::Config::default());
     parse_inner(text, file, &diag)
 }
 
@@ -117,7 +129,7 @@ impl<'a> Parser<'a> {
     fn span(&self) -> Option<SourceLocation> {
         if let Some((_, span)) = self.current.clone() {
             Some(SourceLocation {
-                file: self.source_id,
+                file: Some(self.source_id),
                 range: TextRange::new(TextSize::from(span.start as u32), TextSize::from(span.end as u32)),
             })
         } else {
@@ -138,7 +150,7 @@ impl<'a> Parser<'a> {
             let span = self.span();
             self.diag
                 .error(format!("expected {ident_kind}"))
-                .primary_label(span, "expected IDENT")
+                .primary_label_opt(span, "expected IDENT")
                 .emit();
             false
         } else {
@@ -151,7 +163,7 @@ impl<'a> Parser<'a> {
         if self.current() != Some(kind) {
             let span = self.span();
             let msg = format!("expected {kind:?}");
-            self.diag.error(msg.clone()).primary_label(span, msg).emit();
+            self.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
             false
         } else {
             self.bump();
@@ -169,7 +181,7 @@ impl<'a> Parser<'a> {
 
         let span = self.span();
         let msg = format!("expected one of {kinds:?}");
-        self.diag.error(msg.clone()).primary_label(span, msg).emit();
+        self.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
         false
     }
 
@@ -205,7 +217,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     // unexpected token
                     let span = self.span();
-                    self.diag.error("unexpected token").primary_label(span, "").emit();
+                    self.diag.error("unexpected token").primary_label_opt(span, "").emit();
                     self.bump();
                 }
             }
@@ -223,7 +235,7 @@ impl<'a> Parser<'a> {
                 let span = self.span();
                 self.diag
                     .error("expected package parameter")
-                    .primary_label(span, "")
+                    .primary_label_opt(span, "")
                     .emit();
             }
         }
@@ -254,7 +266,7 @@ impl<'a> Parser<'a> {
             self.skip_ws();
         }
         self.expect(T![;]);
-        self.finish_node();     // IMPORT_DECL
+        self.finish_node(); // IMPORT_DECL
     }
 
     fn parse_struct_def(&mut self) {
@@ -285,7 +297,7 @@ impl<'a> Parser<'a> {
         if self.current() == Some(EXTERN_KW) {
             self.start_node(EXTERN);
             self.bump();
-            self.finish_node();     // EXTERN
+            self.finish_node(); // EXTERN
             self.skip_ws();
         }
         self.expect(FN_KW);
@@ -303,19 +315,19 @@ impl<'a> Parser<'a> {
             self.skip_ws();
         }
 
-        match self.current {
-            Some(Token!['{']) => {
+        match self.current() {
+            Some(T!['{']) => {
                 self.b.start_node_at(cp, FN_DEF.into());
                 self.parse_block();
             }
-            Some(Token![;]) => {
+            Some(T![;]) => {
                 self.b.start_node_at(cp, FN_DECL.into());
                 self.bump();
             }
             _ => {
                 // TODO better recovery
                 let span = self.span();
-                self.diag.error("unexpected token").primary_label(span, "").emit();
+                self.diag.error("unexpected token").primary_label_opt(span, "").emit();
                 self.b.start_node_at(cp, FN_DEF.into());
                 self.bump();
             }
@@ -342,7 +354,7 @@ impl<'a> Parser<'a> {
                     let cur_span = self.span();
                     self.diag
                         .error("unexpected end of file")
-                        .primary_label(cur_span, "")
+                        .primary_label_opt(cur_span, "")
                         .emit();
                     break;
                 }
@@ -401,9 +413,7 @@ impl<'a> Parser<'a> {
                 self.expect(T!['}']);
                 self.finish_node();
             }
-            _ => {
-                self.parse_type()
-            }
+            _ => self.parse_type(),
         }
     }
 
@@ -436,14 +446,14 @@ impl<'a> Parser<'a> {
                 let cur_span = self.span();
                 self.diag
                     .error("unexpected end of file")
-                    .primary_label(cur_span, "")
+                    .primary_label_opt(cur_span, "")
                     .emit();
             }
             _ => {
                 let cur_span = self.span();
                 self.diag
                     .error("syntax error (TODO parse_type)")
-                    .primary_label(cur_span, "")
+                    .primary_label_opt(cur_span, "")
                     .emit();
             }
         }
@@ -467,7 +477,7 @@ impl<'a> Parser<'a> {
                     if trailing_sep && !allow_trailing {
                         self.diag
                             .error("trailing separator not allowed here")
-                            .primary_label(last_sep_span, "")
+                            .primary_label_opt(last_sep_span, "")
                             .emit()
                     }
                     break;
@@ -484,7 +494,7 @@ impl<'a> Parser<'a> {
                         // should end with a comma
                         self.diag
                             .error("single-element tuple types should have a trailing `,`")
-                            .primary_label(last_sep_span, "")
+                            .primary_label_opt(last_sep_span, "")
                             .emit()
                     }
                     break;
@@ -496,7 +506,10 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let span = self.span();
-                    self.diag.error("syntax error (TODO)").primary_label(span, "").emit();
+                    self.diag
+                        .error("syntax error (TODO)")
+                        .primary_label_opt(span, "")
+                        .emit();
                     trailing_sep = false;
                 }
             }
@@ -601,7 +614,7 @@ impl<'a> Parser<'a> {
                     }
                     _ => {
                         let span = self.span();
-                        self.diag.error("syntax error").primary_label(span, "").emit();
+                        self.diag.error("syntax error").primary_label_opt(span, "").emit();
                     }
                 }
             }
@@ -615,7 +628,7 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let span = self.span();
-                self.diag.error("syntax error").primary_label(span, "").emit();
+                self.diag.error("syntax error").primary_label_opt(span, "").emit();
                 self.bump();
             }
         }
@@ -781,7 +794,10 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let span = self.span();
-                    self.diag.error("syntax error (TODO)").primary_label(span, "").emit();
+                    self.diag
+                        .error("syntax error (TODO)")
+                        .primary_label_opt(span, "")
+                        .emit();
                 }
             }
         }
@@ -794,7 +810,7 @@ impl<'a> Parser<'a> {
         if self.current() == Some(EXTERN_KW) {
             self.start_node(EXTERN);
             self.bump();
-            self.finish_node();     // EXTERN
+            self.finish_node(); // EXTERN
             self.skip_ws();
         }
         self.start_node(QUALIFIER);
@@ -948,7 +964,11 @@ fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{diagnostic::SourceFileProvider, syntax::{parse_inner, Diagnostics, Lang, SyntaxNode}, syntax};
+    use crate::{
+        diagnostic::SourceFileProvider,
+        syntax,
+        syntax::{parse_inner, Diagnostics, Lang, SyntaxNode},
+    };
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
     use rowan::GreenNode;
 

@@ -1170,4 +1170,10 @@ A: Now we have to store user function signatures as `AbstractType`
 1. Store images directly in `hir::TypeData`, no need for allocations
 2. Somehow, have a `hir::TypeData` that is not allocated? With `Cow` maybe?
 
-As a rule of thumb, don't intern a type to `hir::Type` if not going to use it in an instruction. 
+As a rule of thumb, don't intern a type to `hir::Type` if not going to use it in an instruction.
+
+Contrary to SPIR-V, we have different types of IDs for different objects: `Constant`, `Value`, `Function`, `Global`.
+SPIR-V has only one ID type (`<id>` in the docs). Some ops can take `<id>` referring to different kinds of objects, as long as they have the expected type.
+
+Q: Should we require all constant & global references in functions to go through special instructions so that we only operate on `Value`s at the basic level?
+A: As much as possible, avoid polluting the result SPIR-V too much; if we can avoid the indirection, avoid it

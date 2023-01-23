@@ -9,7 +9,6 @@ mod visit;
 use crate::{
     diagnostic::{DiagnosticBuilder, Diagnostics, SourceLocation},
     hir::{
-        builder::ValueOrConstant,
         list::{List, ListNode},
         types::{Field, ScalarType, StructType},
     },
@@ -23,6 +22,7 @@ use rspirv::{
     spirv::{LinkageType, MemorySemantics},
 };
 use smallvec::SmallVec;
+use spirv::Op;
 use std::{
     fmt,
     hash::Hash,
@@ -78,8 +78,6 @@ macro_rules! id_types {
 
 // Define the handle types for elements in the context arrays
 id_types! {
-    /// Handle to a HIR operation.
-    pub struct OperationId;
 
     /// Handle to a HIR value.
     pub struct Value;
@@ -98,33 +96,95 @@ id_types! {
 
     /// Handle to a function basic block.
     pub struct Block;
+
+    /// ID representing an imported extended instruction set.
+    pub struct ExtendedInstructionSetId;
 }
 
 impl Type {
     /// Returns the pointee type (the type of the value produced by dereferencing the pointer).
     pub fn pointee_type(&self, m: &Module) -> Option<(Type, spirv::StorageClass)> {
         match m.types[*self] {
-            TypeData::Pointer { pointee_type, storage_class } => {
-                Some((pointee_type, storage_class))
-            }
-            _ => None
+            TypeData::Pointer {
+                pointee_type,
+                storage_class,
+            } => Some((pointee_type, storage_class)),
+            _ => None,
         }
     }
 }
 
-impl Value {
-    /// Returns the type of the value.
-    pub fn ty(&self, module: &Module) -> Type {
-        module.values[self.0].ty
+/// Reference to a value or a constant.
+#[derive(Copy, Clone, Debug)]
+pub enum ValueOrConstant {
+    Value(Value),
+    Constant(Constant),
+}
+
+impl From<Value> for ValueOrConstant {
+    fn from(value: Value) -> Self {
+        ValueOrConstant::Value(value)
+    }
+}
+
+impl From<Constant> for ValueOrConstant {
+    fn from(constant: Constant) -> Self {
+        ValueOrConstant::Constant(constant)
     }
 }
 
 //--------------------------------------------------------------------------------------------------
 
-/// Operation linked list nodes.
-pub type Operation = ListNode<OperationId, InstructionData>;
+/// A reference to an object.
+#[derive(Copy, Clone, Debug)]
+pub enum IdRef {
+    /// SSA value within the current function
+    Value(Value),
+    /// Constant
+    Constant(Constant),
+    /// Global variable
+    Global(GlobalVariable),
+}
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+impl IdRef {
+    pub fn to_value_or_constant(&self) -> Option<ValueOrConstant> {
+        match *self {
+            IdRef::Value(v) => Some(ValueOrConstant::Value(v)),
+            IdRef::Constant(v) => Some(ValueOrConstant::Constant(v)),
+            IdRef::Global(_) => None,
+        }
+    }
+}
+
+impl From<Value> for IdRef {
+    fn from(value: Value) -> Self {
+        IdRef::Value(value)
+    }
+}
+
+impl From<Constant> for IdRef {
+    fn from(constant: Constant) -> Self {
+        IdRef::Constant(constant)
+    }
+}
+
+impl From<GlobalVariable> for IdRef {
+    fn from(global: GlobalVariable) -> Self {
+        IdRef::Global(global)
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(u32)]
+pub enum PackedVectorFormat {
+    PackedVectorFormat4x8Bit,
+}
+
+// TODO we may not need so much variants: we only need to distinguish between IDs in different arenas,
+// the rest can go into a generic u32
+#[derive(Clone, Debug)]
 pub enum Operand {
     ConstantRef(Constant),
     GlobalRef(GlobalVariable),
@@ -151,6 +211,7 @@ pub enum Operand {
     Dim(spirv::Dim),
     SamplerAddressingMode(spirv::SamplerAddressingMode),
     SamplerFilterMode(spirv::SamplerFilterMode),
+    ImageOperands(spirv::ImageOperands),
     ImageFormat(spirv::ImageFormat),
     ImageChannelOrder(spirv::ImageChannelOrder),
     ImageChannelDataType(spirv::ImageChannelDataType),
@@ -167,6 +228,7 @@ pub enum Operand {
     RayQueryIntersection(spirv::RayQueryIntersection),
     RayQueryCommittedIntersectionType(spirv::RayQueryCommittedIntersectionType),
     RayQueryCandidateIntersectionType(spirv::RayQueryCandidateIntersectionType),
+    PackedVectorFormat(PackedVectorFormat),
     LiteralInt32(u32),
     LiteralInt64(u64),
     LiteralFloat32(f32),
@@ -176,14 +238,89 @@ pub enum Operand {
     LiteralString(String),
 }
 
+impl From<Value> for Operand {
+    fn from(value: Value) -> Self {
+        Operand::ValueRef(value)
+    }
+}
+
+impl From<Constant> for Operand {
+    fn from(value: Constant) -> Self {
+        Operand::ConstantRef(value)
+    }
+}
+
+impl From<GlobalVariable> for Operand {
+    fn from(var: GlobalVariable) -> Self {
+        Operand::GlobalRef(var)
+    }
+}
 
 impl From<ValueOrConstant> for Operand {
     fn from(value: ValueOrConstant) -> Self {
         match value {
-            ValueOrConstant::Value(v) => { Operand::ValueRef(v)}
-            ValueOrConstant::Constant(v) => {Operand::ConstantRef(v)}
+            ValueOrConstant::Value(v) => Operand::ValueRef(v),
+            ValueOrConstant::Constant(v) => Operand::ConstantRef(v),
         }
     }
+}
+
+impl From<IdRef> for Operand {
+    fn from(value: IdRef) -> Self {
+        match value {
+            IdRef::Value(v) => Operand::ValueRef(v),
+            IdRef::Constant(v) => Operand::ConstantRef(v),
+            IdRef::Global(v) => Operand::GlobalRef(v),
+        }
+    }
+}
+macro_rules! impl_operand_from {
+    ($($v:ident ($t:ty); )*) => {
+        $(impl From<$t> for Operand {
+            fn from(value: $t) -> Self {
+                Operand::$v(value)
+            }
+        })*
+    };
+}
+
+impl_operand_from! {
+    FPFastMathMode(spirv::FPFastMathMode);
+    SelectionControl(spirv::SelectionControl);
+    LoopControl(spirv::LoopControl);
+    FunctionControl(spirv::FunctionControl);
+    MemorySemantics(spirv::MemorySemantics);
+    MemoryAccess(spirv::MemoryAccess);
+    KernelProfilingInfo(spirv::KernelProfilingInfo);
+    RayFlags(spirv::RayFlags);
+    FragmentShadingRate(spirv::FragmentShadingRate);
+    SourceLanguage(spirv::SourceLanguage);
+    ExecutionModel(spirv::ExecutionModel);
+    AddressingModel(spirv::AddressingModel);
+    MemoryModel(spirv::MemoryModel);
+    ExecutionMode(spirv::ExecutionMode);
+    StorageClass(spirv::StorageClass);
+    Dim(spirv::Dim);
+    SamplerAddressingMode(spirv::SamplerAddressingMode);
+    SamplerFilterMode(spirv::SamplerFilterMode);
+    ImageOperands(spirv::ImageOperands);
+    ImageFormat(spirv::ImageFormat);
+    ImageChannelOrder(spirv::ImageChannelOrder);
+    ImageChannelDataType(spirv::ImageChannelDataType);
+    FPRoundingMode(spirv::FPRoundingMode);
+    LinkageType(spirv::LinkageType);
+    AccessQualifier(spirv::AccessQualifier);
+    FunctionParameterAttribute(spirv::FunctionParameterAttribute);
+    Decoration(spirv::Decoration);
+    BuiltIn(spirv::BuiltIn);
+    Scope(spirv::Scope);
+    GroupOperation(spirv::GroupOperation);
+    KernelEnqueueFlags(spirv::KernelEnqueueFlags);
+    Capability(spirv::Capability);
+    RayQueryIntersection(spirv::RayQueryIntersection);
+    RayQueryCommittedIntersectionType(spirv::RayQueryCommittedIntersectionType);
+    RayQueryCandidateIntersectionType(spirv::RayQueryCandidateIntersectionType);
+    PackedVectorFormat(PackedVectorFormat);
 }
 
 /// Data associated to an operation.
@@ -259,17 +396,20 @@ impl FunctionData {
 
         let entry_block = blocks.alloc(BlockData::new());
 
-        (FunctionData {
-            parameters,
-            arguments,
-            function_type,
-            name,
-            linkage,
-            values,
-            blocks,
-            entry_block: Some(entry_block),
-            function_control,
-        }, entry_block)
+        (
+            FunctionData {
+                parameters,
+                arguments,
+                function_type,
+                name,
+                linkage,
+                values,
+                blocks,
+                entry_block: Some(entry_block),
+                function_control,
+            },
+            entry_block,
+        )
     }
 
     /// Creates a new function declaration.
@@ -302,44 +442,27 @@ pub enum IntegerLiteral {
     U64(u64),
 }
 
-/// Reference to a value or a constant.
-pub enum ValueOrConstant {
-    Value(Value),
-    Constant(Constant),
-}
-
-impl From<Value> for ValueOrConstant {
-    fn from(value: Value) -> Self {
-        ValueOrConstant::Value(value)
-    }
-}
-
-impl From<Constant> for ValueOrConstant {
-    fn from(constant: Constant) -> Self {
-        ValueOrConstant::Constant(constant)
-    }
-}
-
 /// Block terminator instruction.
 #[derive(Clone, Debug)]
 pub enum TerminatingInstruction {
     Branch(Block),
     BranchConditional {
-        condition: Value,
+        condition: ValueOrConstant,
         true_block: Block,
         false_block: Block,
     },
     Switch {
-        selector: Value,
+        selector: ValueOrConstant,
         default: Block,
         target: Vec<(IntegerLiteral, Block)>,
     },
     Return,
-    ReturnValue(Value),
+    ReturnValue(IdRef),
     Unreachable,
     TerminateInvocation,
 }
 
+#[derive(Debug)]
 pub struct BlockData {
     pub instructions: Vec<InstructionData>,
     pub terminator: Option<TerminatingInstruction>,
@@ -392,7 +515,7 @@ macro_rules! const_vec_builder {
             let x = self.$component_method(x);
             let y = self.$component_method(y);
             let ty = self.define_type(TypeData::Vector(ScalarType::$scalar_ty, 2));
-            self.module.define_constant(ConstantData::Composite {
+            self.define_constant(ConstantData::Composite {
                 ty,
                 constituents: vec![x, y],
             })
@@ -402,7 +525,7 @@ macro_rules! const_vec_builder {
             let y = self.$component_method(y);
             let z = self.$component_method(z);
             let ty = self.define_type(TypeData::Vector(ScalarType::$scalar_ty, 3));
-            self.module.define_constant(ConstantData::Composite {
+            self.define_constant(ConstantData::Composite {
                 ty,
                 constituents: vec![x, y, z],
             })
@@ -413,7 +536,7 @@ macro_rules! const_vec_builder {
             let z = self.$component_method(z);
             let w = self.$component_method(w);
             let ty = self.define_type(TypeData::Vector(ScalarType::$scalar_ty, 4));
-            self.module.define_constant(ConstantData::Composite {
+            self.define_constant(ConstantData::Composite {
                 ty,
                 constituents: vec![x, y, z, w],
             })
@@ -431,17 +554,13 @@ pub struct Module {
     pub constants: id_arena::Arena<ConstantData, Constant>,
     pub functions: id_arena::Arena<FunctionData, Function>,
     pub globals: id_arena::Arena<GlobalVariableData, GlobalVariable>,
-    pub ops: id_arena::Arena<Operation, OperationId>,
     ty_unknown: Type,
     ty_unit: Type,
 }
 
 impl fmt::Debug for Module {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("HirCtxt")
-            .field("values", &self.values)
-            .field("regions", &self.regions)
-            .field("ops", &self.ops)
+        f.debug_struct("Module")
             .finish_non_exhaustive()
     }
 }
@@ -450,11 +569,10 @@ impl Module {
     pub fn new() -> Module {
         let mut types_interner = Interner::new();
         let constants_interner = Interner::new();
-        let mut types = Default::default();
+        let mut types = id_arena::Arena::default();
         let constants = Default::default();
         let functions = Default::default();
         let globals = Default::default();
-        let ops = Default::default();
         let ty_unknown = types_interner
             .intern(TypeData::Unknown, || types.alloc(TypeData::Unknown))
             .0;
@@ -467,7 +585,6 @@ impl Module {
             constants,
             functions,
             globals,
-            ops,
             ty_unknown,
             ty_unit,
         }
@@ -505,7 +622,7 @@ impl Module {
     }
 
     /// Interns a constant.
-    pub fn define_constant<T>(&mut self, v: ConstantData) -> Constant {
+    pub fn define_constant(&mut self, v: ConstantData) -> Constant {
         self.constants_interner
             .intern(v.clone(), || self.constants.alloc(v.clone()))
             .0

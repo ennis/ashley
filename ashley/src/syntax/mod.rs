@@ -11,7 +11,7 @@ use crate::{
     T,
 };
 use codespan_reporting::{term, term::termcolor::WriteColor};
-use rowan::{GreenNodeBuilder, TextRange, TextSize};
+use rowan::{Checkpoint, GreenNodeBuilder, TextRange, TextSize};
 use std::ops::Range;
 
 //--------------------------------------------------------------------------------------------------
@@ -58,12 +58,10 @@ pub(crate) fn parse_inner(text: &str, source_id: SourceId, diag: &Diagnostics) -
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let current = lex.next();
-    let lookahead = lex.next();
     let mut parser = Parser {
         source_id,
         text,
         current,
-        lookahead,
         lex,
         b,
         diag,
@@ -76,8 +74,6 @@ struct Parser<'a> {
     source_id: SourceId,
     /// Current token & span
     current: Option<(SyntaxKind, Range<usize>)>,
-    /// Lookahead
-    lookahead: Option<(SyntaxKind, Range<usize>)>,
     /// lexer for the input text
     lex: Lexer<'a>,
     /// the in-progress tree.
@@ -105,18 +101,12 @@ impl<'a> Parser<'a> {
     fn bump(&mut self) {
         let (kind, span) = self.current.clone().unwrap();
         self.b.token(kind.into(), &self.text[span]);
-        self.current = self.lookahead.clone();
-        self.lookahead = self.lex.next();
+        self.current = self.lex.next();
     }
 
     /// Peek at the first unprocessed token
     fn current(&self) -> Option<SyntaxKind> {
         self.current.clone().map(|(kind, _)| kind)
-    }
-
-    ///
-    fn lookahead1(&self) -> Option<SyntaxKind> {
-        self.lookahead.clone().map(|(kind, _)| kind)
     }
 
     fn skip_ws(&mut self) {
@@ -189,6 +179,29 @@ impl<'a> Parser<'a> {
     // --- Nodes ---
     //
 
+    fn parse_function_or_variable(&mut self) {
+        let cp = self.b.checkpoint();
+        // parse extern
+        if self.current() == Some(EXTERN_KW) {
+            self.start_node(EXTERN);
+            self.bump();
+            self.finish_node(); // EXTERN
+            self.skip_ws();
+        }
+        match self.current() {
+            Some(FN_KW) => {
+                self.parse_fn(cp);
+            }
+            Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW) => {
+                self.parse_global_variable(cp);
+            }
+            _ => {
+                let span = self.span();
+                self.diag.error("unexpected token").primary_label_opt(span, "").emit();
+            }
+        }
+    }
+
     fn parse_items(&mut self) {
         loop {
             self.skip_ws();
@@ -199,19 +212,8 @@ impl<'a> Parser<'a> {
                 Some(STRUCT_KW) => {
                     self.parse_struct_def();
                 }
-                Some(EXTERN_KW) => {
-                    if self.lookahead1() == Some(FN_KW) {
-                        // extern fn
-                        self.parse_fn();
-                    } else {
-                        self.parse_global_variable();
-                    }
-                }
-                Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW) => {
-                    self.parse_global_variable();
-                }
-                Some(FN_KW) => {
-                    self.parse_fn();
+                Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW | EXTERN_KW | FN_KW) => {
+                    self.parse_function_or_variable();
                 }
                 None => break,
                 _ => {
@@ -291,8 +293,8 @@ impl<'a> Parser<'a> {
         self.finish_node(); // STRUCT_FIELD
     }
 
-    fn parse_fn(&mut self) {
-        let cp = self.b.checkpoint();
+    // parse function after "extern"
+    fn parse_fn(&mut self, cp: Checkpoint) {
         //self.start_node(FN_DEF);
         if self.current() == Some(EXTERN_KW) {
             self.start_node(EXTERN);
@@ -455,6 +457,8 @@ impl<'a> Parser<'a> {
                     .error("syntax error (TODO parse_type)")
                     .primary_label_opt(cur_span, "")
                     .emit();
+                // FIXME: forward progress bump
+                self.bump();
             }
         }
     }
@@ -805,8 +809,8 @@ impl<'a> Parser<'a> {
         self.finish_node();
     }
 
-    fn parse_global_variable(&mut self) {
-        self.start_node(GLOBAL);
+    fn parse_global_variable(&mut self, start: Checkpoint) {
+        self.b.start_node_at(start, GLOBAL.into());
         if self.current() == Some(EXTERN_KW) {
             self.start_node(EXTERN);
             self.bump();

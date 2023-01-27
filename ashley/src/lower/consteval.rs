@@ -7,6 +7,7 @@ use crate::{
 };
 use ashley::syntax::ast::{Expr, LiteralKind};
 use std::num::ParseIntError;
+use ordered_float::OrderedFloat;
 use thiserror::Error;
 
 //use crate::hir::ConstantData;
@@ -37,6 +38,7 @@ pub(super) fn try_evaluate_constant_expression(
                 elements.push(try_evaluate_constant_expression(diag, &e, scope, None)?);
             }
             // infer the types of the element in the array
+            todo!()
         }
 
         Expr::BinExpr(_) => {
@@ -84,43 +86,39 @@ pub(super) fn try_evaluate_constant_expression(
                     Ok(i) => {
                         // convert to i32
                         match i.try_into() {
-                            Ok(i) => hir::ConstantData::I32(i),
-                            Err(err) => diag
-                                .error(format!("error parsing integer: {err}"))
-                                .primary_label(&v, "")
-                                .emit(),
+                            Ok(i) => Some(hir::ConstantData::I32(i)),
+                            Err(err) => {
+                                diag
+                                    .error(format!("error parsing integer: {err}"))
+                                    .primary_label(&v, "")
+                                    .emit();
+                                return None
+                            }
                         }
                     }
                     Err(err) => {
                         diag.error(format!("error parsing integer: {err}"))
                             .primary_label(&v, "")
                             .emit();
-                        None
+                        return None
                     }
                 }
             }
             LiteralKind::FloatNumber(v) => {
                 match v.value() {
                     Ok(f) => {
-                        // convert to i32
-                        match f.try_into() {
-                            Ok(f) => hir::ConstantData::F32(f),
-                            Err(err) => diag
-                                .error(format!("error parsing floating-point number: {err}"))
-                                .primary_label(&v, "")
-                                .emit(),
-                        }
+                        Some(hir::ConstantData::F32(OrderedFloat::from(f as f32)))
                     }
                     Err(err) => {
                         diag.error(format!("error parsing floating-point number: {err}"))
                             .primary_label(v, "")
                             .emit();
-                        None
+                        return None
                     }
                 }
             }
             LiteralKind::Bool(v) => {
-                hir::ConstantData::Bool(v)
+                Some(hir::ConstantData::Bool(v))
             }
         },
     };

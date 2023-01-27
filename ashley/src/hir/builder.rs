@@ -46,9 +46,11 @@ trait IntoOperand {
     fn write_operand(self, builder: &mut InstBuilder);
 }
 
-impl IntoOperand for i32 {
+impl IntoOperand for &[i32] {
     fn write_operand(self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::LiteralInt32(self as u32))
+        for lit in self {
+            builder.operands.push(Operand::LiteralInt32(*lit as u32))
+        }
     }
 }
 
@@ -78,18 +80,6 @@ impl<'a> IntoOperand for &'a [IdRef] {
         for &v in self {
             builder.operands.push(v.into());
         }
-    }
-}
-
-impl IntoOperand for Function {
-    fn write_operand(self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::FunctionRef(self))
-    }
-}
-
-impl IntoOperand for Type {
-    fn write_operand(self, builder: &mut InstBuilder) {
-        builder.operands.push(Operand::TypeRef(self))
     }
 }
 
@@ -189,11 +179,12 @@ impl IntoOperand for ImageOperands {
 }
 
 /// Trait for types that refer to an object ID.
-trait IntoIdRef: Into<Operand> {}
+pub trait IntoIdRef: Into<Operand> {}
 
 impl IntoIdRef for Constant {}
 impl IntoIdRef for Value {}
 impl IntoIdRef for GlobalVariable {}
+impl IntoIdRef for Function {}
 impl IntoIdRef for IdRef {}
 
 /// Used to build a HIR function.
@@ -309,6 +300,38 @@ impl<'a> FunctionBuilder<'a> {
         block.terminator = Some(inst);
     }
 
+    // TODO: fetch result type from function?
+    pub fn emit_function_call(&mut self, result_type: Type, function: impl IntoIdRef, args: &[IdRef]) -> Value {
+        let mut inst_builder = InstBuilder::new(spirv::Op::FunctionCall);
+        inst_builder.set_result(result_type);
+        inst_builder.operands.push(function.into());
+        for arg in args {
+            inst_builder.operands.push((*arg).into());
+        }
+        self.append_inst(inst_builder).unwrap()
+    }
+
+    pub fn emit_switch(&mut self, selector: impl IntoIdRef, default: impl IntoIdRef, target: &[(i32, Block)]) {
+        let mut inst_builder = InstBuilder::new(spirv::Op::Switch);
+        selector.write_operand(&mut inst_builder);
+        default.write_operand(&mut inst_builder);
+        for (lit, block) in target {
+            inst_builder.operands.push((*lit).into());
+            inst_builder.operands.push((*block).into());
+        }
+        self.append_inst(inst_builder);
+    }
+
+    pub fn emit_phi(&mut self, result_type: Type, variable_parent: &[(Value, Block)]) -> Value {
+        let mut inst_builder = InstBuilder::new(spirv::Op::Phi);
+        inst_builder.set_result(result_type);
+        for (value, block) in variable_parent {
+            inst_builder.operands.push((*value).into());
+            inst_builder.operands.push((*block).into());
+        }
+        self.append_inst(inst_builder).unwrap()
+    }
+
     pub fn emit_selection_merge(&mut self, merge_block: Block) {
         let mut i = InstBuilder::new(spirv::Op::SelectionMerge);
         i.operands.push(Operand::BlockRef(merge_block));
@@ -338,7 +361,7 @@ impl<'a> FunctionBuilder<'a> {
         self.terminate_block(TerminatingInstruction::Return);
     }
 
-    pub fn ret_value(&mut self, value: impl IntoIdRef) {
+    pub fn ret_value(&mut self, value: impl Into<IdRef>) {
         self.terminate_block(TerminatingInstruction::ReturnValue(value.into()))
     }
 }

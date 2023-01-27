@@ -12,8 +12,8 @@ use crate::{
         list::{List, ListNode},
         types::{Field, ScalarType, StructType},
     },
-    utils::interner::Interner,
 };
+use ashley::utils::interner::UniqueArena;
 use bumpalo::Bump;
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
@@ -140,6 +140,8 @@ impl From<Constant> for ValueOrConstant {
 pub enum IdRef {
     /// SSA value within the current function
     Value(Value),
+    /// Function
+    Function(Function),
     /// Constant
     Constant(Constant),
     /// Global variable
@@ -151,7 +153,15 @@ impl IdRef {
         match *self {
             IdRef::Value(v) => Some(ValueOrConstant::Value(v)),
             IdRef::Constant(v) => Some(ValueOrConstant::Constant(v)),
+            IdRef::Function(_) => None,
             IdRef::Global(_) => None,
+        }
+    }
+
+    pub fn to_function(&self) -> Option<Function> {
+        match *self {
+            IdRef::Function(f) => Some(f),
+            _ => None,
         }
     }
 }
@@ -174,6 +184,12 @@ impl From<GlobalVariable> for IdRef {
     }
 }
 
+impl From<Function> for IdRef {
+    fn from(f: Function) -> Self {
+        IdRef::Function(f)
+    }
+}
+
 //--------------------------------------------------------------------------------------------------
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -184,7 +200,7 @@ pub enum PackedVectorFormat {
 
 // TODO we may not need so much variants: we only need to distinguish between IDs in different arenas,
 // the rest can go into a generic u32
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operand {
     ConstantRef(Constant),
     GlobalRef(GlobalVariable),
@@ -231,16 +247,46 @@ pub enum Operand {
     PackedVectorFormat(PackedVectorFormat),
     LiteralInt32(u32),
     LiteralInt64(u64),
-    LiteralFloat32(f32),
-    LiteralFloat64(f64),
+    LiteralFloat32(OrderedFloat<f32>),
+    LiteralFloat64(OrderedFloat<f64>),
     LiteralExtInstInteger(u32),
     LiteralSpecConstantOpInteger(spirv::Op),
     LiteralString(String),
 }
 
+impl From<i32> for Operand {
+    fn from(value: i32) -> Self {
+        Operand::LiteralInt32(value as u32)
+    }
+}
+
+impl From<u32> for Operand {
+    fn from(value: u32) -> Self {
+        Operand::LiteralInt32(value as u32)
+    }
+}
+
+impl From<f32> for Operand {
+    fn from(value: f32) -> Self {
+        Operand::LiteralFloat32(OrderedFloat::from(value))
+    }
+}
+
 impl From<Value> for Operand {
     fn from(value: Value) -> Self {
         Operand::ValueRef(value)
+    }
+}
+
+impl From<Function> for Operand {
+    fn from(f: Function) -> Self {
+        Operand::FunctionRef(f)
+    }
+}
+
+impl From<Block> for Operand {
+    fn from(b: Block) -> Self {
+        Operand::BlockRef(b)
     }
 }
 
@@ -253,6 +299,12 @@ impl From<Constant> for Operand {
 impl From<GlobalVariable> for Operand {
     fn from(var: GlobalVariable) -> Self {
         Operand::GlobalRef(var)
+    }
+}
+
+impl From<Type> for Operand {
+    fn from(t: Type) -> Self {
+        Operand::TypeRef(t)
     }
 }
 
@@ -271,6 +323,7 @@ impl From<IdRef> for Operand {
             IdRef::Value(v) => Operand::ValueRef(v),
             IdRef::Constant(v) => Operand::ConstantRef(v),
             IdRef::Global(v) => Operand::GlobalRef(v),
+            IdRef::Function(v) => Operand::FunctionRef(v),
         }
     }
 }
@@ -332,7 +385,7 @@ pub struct InstructionData {
 }
 
 /// SSA value data.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ValueData {
     /// The type of the value.
     ty: Type,
@@ -364,7 +417,7 @@ pub struct FunctionParameter {
 }
 
 /// HIR functions or function declarations.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FunctionData {
     pub parameters: Vec<FunctionParameter>,
     pub arguments: Vec<Value>,
@@ -462,7 +515,7 @@ pub enum TerminatingInstruction {
     TerminateInvocation,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BlockData {
     pub instructions: Vec<InstructionData>,
     pub terminator: Option<TerminatingInstruction>,
@@ -548,10 +601,8 @@ macro_rules! const_vec_builder {
 ///
 /// It holds regions, values, operations, types and attributes.
 pub struct Module {
-    pub(crate) types_interner: Interner<TypeData<'static>, Type>,
-    pub(crate) constants_interner: Interner<ConstantData, Constant>,
-    pub types: id_arena::Arena<TypeData<'static>, Type>,
-    pub constants: id_arena::Arena<ConstantData, Constant>,
+    pub(crate) types: UniqueArena<TypeData<'static>, Type>,
+    pub(crate) constants: UniqueArena<ConstantData, Constant>,
     pub functions: id_arena::Arena<FunctionData, Function>,
     pub globals: id_arena::Arena<GlobalVariableData, GlobalVariable>,
     ty_unknown: Type,
@@ -560,27 +611,20 @@ pub struct Module {
 
 impl fmt::Debug for Module {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Module")
-            .finish_non_exhaustive()
+        f.debug_struct("Module").finish_non_exhaustive()
     }
 }
 
 impl Module {
     pub fn new() -> Module {
-        let mut types_interner = Interner::new();
-        let constants_interner = Interner::new();
-        let mut types = id_arena::Arena::default();
-        let constants = Default::default();
+        let mut types = UniqueArena::new();
+        let constants = UniqueArena::new();
         let functions = Default::default();
         let globals = Default::default();
-        let ty_unknown = types_interner
-            .intern(TypeData::Unknown, || types.alloc(TypeData::Unknown))
-            .0;
-        let ty_unit = types_interner.intern(TypeData::Unit, || types.alloc(TypeData::Unit)).0;
+        let (ty_unknown, _) = types.insert(TypeData::Unknown);
+        let (ty_unit, _) = types.insert(TypeData::Unit);
 
         Module {
-            types_interner,
-            constants_interner,
             types,
             constants,
             functions,
@@ -591,10 +635,15 @@ impl Module {
     }
 
     /// Interns a type.
-    pub fn define_type(&mut self, ty: TypeData) -> Type {
-        self.types_interner
-            .intern(ty.clone(), || self.types.alloc(ty.into_static()))
-            .0
+    pub fn define_type(&mut self, ty: TypeData<'static>) -> Type {
+        // TypeData<'1>, '1 is invariant
+        // get_index_of() U == TypeData<'1>
+        // TypeData<'static>: Borrow<TypeData<'1>>
+        if let Some(id) = self.types.get_index_of(&ty) {
+            id
+        } else {
+            self.types.insert(ty.into_static()).0
+        }
     }
 
     /*/// Defines a structure type.
@@ -622,10 +671,12 @@ impl Module {
     }
 
     /// Interns a constant.
-    pub fn define_constant(&mut self, v: ConstantData) -> Constant {
-        self.constants_interner
-            .intern(v.clone(), || self.constants.alloc(v.clone()))
-            .0
+    pub fn define_constant(&mut self, c: ConstantData) -> Constant {
+        if let Some(id) = self.constants.get_index_of(&c) {
+            id
+        } else {
+            self.constants.insert(c.clone()).0
+        }
     }
 
     pub fn define_global_variable(&mut self, v: GlobalVariableData) -> GlobalVariable {

@@ -53,10 +53,7 @@ pub struct StructType<'a> {
 
 impl<'a> StructType<'a> {
     pub fn into_static(self) -> StructType<'static> {
-        let mut fields = self.fields.into_owned();
-        for f in fields.iter_mut() {
-            *f = f.into_static();
-        }
+        let mut fields: Vec<_> = self.fields.into_owned().into_iter().map(Field::into_static).collect();
         StructType {
             name: self.name.map(|name| Cow::Owned(name.into_owned())),
             fields: Cow::Owned(fields),
@@ -173,7 +170,7 @@ impl<'a> TypeData<'a> {
             TypeData::Sampler => TypeData::Sampler,
             TypeData::String => TypeData::String,
             TypeData::Unknown => TypeData::Unknown,
+            TypeData::SamplerShadow => TypeData::SamplerShadow,
         }
     }
 }
-

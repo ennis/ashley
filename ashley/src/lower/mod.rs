@@ -685,7 +685,7 @@ fn error_place(fb: &mut FunctionBuilder) -> Place {
 fn lower_place_expr(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    expr: ast::Expr,
+    expr: &ast::Expr,
     scope: &Scope,
 ) -> Result<Place, LowerError> {
     match expr {
@@ -694,7 +694,7 @@ fn lower_place_expr(
             let array = index_expr.array().ok_or(LowerError)?;
             let index = index_expr.index().ok_or(LowerError)?;
 
-            let mut array_place = lower_place_expr(ctxt, fb, array, scope)?;
+            let mut array_place = lower_place_expr(ctxt, fb, &array, scope)?;
 
             let elem_type = match fb.types[array_place.ty] {
                 TypeData::Array(t, _) => t,
@@ -787,7 +787,7 @@ fn lower_place_expr_opt(
     scope: &Scope,
 ) -> Result<Place, LowerError> {
     if let Some(expr) = expr {
-        lower_place_expr(ctxt, func, expr, scope)
+        lower_place_expr(ctxt, func, &expr, scope)
     } else {
         Err(LowerError)
     }
@@ -802,19 +802,43 @@ fn lower_expr(ctxt: &mut LowerCtxt, fb: &mut FunctionBuilder, expr: ast::Expr, s
     match expr {
         ast::Expr::BinExpr(bin_expr) => lower_bin_expr(ctxt, fb, bin_expr, scope),
         ast::Expr::CallExpr(call_expr) => {
-            let f = lower_expr_opt(ctxt, fb, call_expr.func(), scope);
+            let f = lower_expr_opt(ctxt, fb, call_expr.func(), scope)?;
+            let Some(f_id) = f.val else {
+                ctxt.diag.error("expression did not evaluate to a function").primary_label(&call_expr, "").emit();
+                return Err(LowerError);
+            };
+            let Some(f_id) = f_id.to_function() else {
+                ctxt.diag.error("expression did not evaluate to a function").primary_label(&call_expr, "").emit();
+                return Err(LowerError);
+            };
+            let result_type = match fb.types[f.ty] {
+                TypeData::Function(ref f) => f.return_type,
+                _ => {
+                    ctxt.diag.error("expression did not evaluate to a function").primary_label(&call_expr, "").emit();
+                    return Err(LowerError);
+                }
+            };
+
             let mut args = Vec::new();
             if let Some(arg_list) = call_expr.arg_list() {
                 for arg in arg_list.arguments() {
-                    args.push(lower_expr(ctxt, fb, arg, scope));
+                    let result = lower_expr(ctxt, fb, arg, scope)?;
+                    let Some(val) = result.val else {
+                        // TODO diag
+                        return Err(LowerError);
+                    };
+                    args.push(val);
                 }
             }
-            fb.emit_call(f, args)
+            // TODO check args against signature
+
+            let v = fb.emit_function_call(result_type, f_id, &args);
+            Ok(TypedValue::new(v, result_type))
         }
         ast::Expr::IndexExpr(_) | ast::Expr::PathExpr(_) | ast::Expr::FieldExpr(_) => {
             // lower place expression and dereference
             // TODO move into a separate function?
-            let place = lower_place_expr(ctxt, fb, expr, scope)?;
+            let place = lower_place_expr(ctxt, fb, &expr, scope)?;
             let (ty, _storage_class) = place
                 .ty
                 .pointee_type(fb)
@@ -881,14 +905,14 @@ fn lower_type(ctxt: &mut LowerCtxt, m: &mut hir::Module, ty: ast::Type, scope: &
             }
         }
         ast::Type::TupleType(tuple_ty) => {
-            let fields = tuple_ty.fields().map(|f| Field {
+            let fields : Vec<_> = tuple_ty.fields().map(|f| Field {
                 name: None,
                 ty: lower_type(ctxt, m, f, scope),
-            });
+            }).collect();
             // TODO remove?
             m.define_type(TypeData::Struct(StructType {
                 name: None,
-                fields: Cow::Owned(fields.collect::<Vec<_>>()),
+                fields: Cow::Owned(fields),
             }))
         }
         ast::Type::ArrayType(array_type) => {
@@ -1070,7 +1094,7 @@ pub fn lower(
     ast: ast::Module,
     file: SourceId,
     source_files: SourceFileProvider,
-    diag_writer: &mut dyn WriteColor,
+    diag_writer: impl WriteColor + 'static,
 ) {
     let diag = Diagnostics::new(source_files, file, diag_writer, term::Config::default());
     let mut builtin_scope = Scope::new(None);

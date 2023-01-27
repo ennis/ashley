@@ -1177,3 +1177,11 @@ SPIR-V has only one ID type (`<id>` in the docs). Some ops can take `<id>` refer
 
 Q: Should we require all constant & global references in functions to go through special instructions so that we only operate on `Value`s at the basic level?
 A: As much as possible, avoid polluting the result SPIR-V too much; if we can avoid the indirection, avoid it
+
+
+# HIR builder refactor (or alternate API)
+
+- take and return TypedValues instead of IdRefs
+- Function calls take `Function`s instead of IdRefs
+- infer result types (function calls, arithmetic ops)
+  - no implicit conversions though

@@ -154,15 +154,14 @@ enum PseudoType {
 
 /// Signature of a built-in operation (function or operator).
 #[derive(Copy, Clone, Debug)]
-struct BuiltinSignature {
+pub(super) struct BuiltinSignature {
     parameter_types: &'static [PseudoType],
     result_type: PseudoType,
 }
 
-
 /// Error returned by `check_signature`
 #[derive(Debug)]
-struct SignatureMismatch;
+pub(super) struct SignatureMismatch;
 
 type ImplicitConversionRanks = SmallVec<[i32; 2]>;
 
@@ -208,7 +207,7 @@ fn resolve_preferred_overload(ranks: &mut [(usize, ImplicitConversionRanks)]) ->
 /// If you have multiple possible signatures, just call `check_signature` on all of them, keeping only the
 /// one with the lower `ImplicitConversionRanks` (it implements `Ord`)
 ///
-pub(crate) fn check_signature(
+pub(super) fn check_signature(
     m: &hir::Module,
     signature: &[hir::Type],
     arguments: &[hir::Type],
@@ -549,6 +548,7 @@ fn pseudo_type_to_concrete_type(
 }
 
 /// Represents a candidate for function (or operator) overload resolution.
+#[derive(Clone)]
 pub(crate) struct OverloadCandidate {
     pub(crate) conversion_ranks: ImplicitConversionRanks,
     pub(crate) parameter_types: SmallVec<[hir::Type; 2]>,
@@ -594,7 +594,7 @@ fn typecheck_builtin_helper(
 /// # Return value
 ///
 /// The signature of the
-pub(crate) fn typecheck_builtin_operation(
+pub(super) fn typecheck_builtin_operation(
     module: &hir::Module,
     builtin_types: &BuiltinTypes,
     op: BuiltinOperation,
@@ -673,7 +673,7 @@ pub(crate) fn typecheck_builtin_operation(
 
     if candidates.len() == 1 {
         // only one candidate
-        Ok(candidates[0])
+        Ok(candidates.into_iter().next().unwrap())
     } else {
         // rank candidates
         candidates.sort_by(|a, b| compare_conversion_ranks(&a.conversion_ranks, &b.conversion_ranks));
@@ -681,7 +681,7 @@ pub(crate) fn typecheck_builtin_operation(
         // if there's a candidate above all others, select it
         if compare_conversion_ranks(&candidates[0].conversion_ranks, &candidates[1].conversion_ranks) == Ordering::Less
         {
-            Ok(candidates[0])
+            Ok(candidates.into_iter().next().unwrap())
         } else {
             Err(SignatureMismatch)
         }
@@ -702,11 +702,11 @@ macro_rules! builtin_operations {
     ( $enum_name:ident, $signatures:ident; $($op_name:ident { $($sig:tt)* })*) => {
         #[allow(non_camel_case_types)]
         #[derive(Copy,Clone,Debug,Eq,PartialEq)]
-        pub enum $enum_name {
+        pub(super) enum $enum_name {
             $($op_name),*
         }
 
-        pub static $signatures: &[&[BuiltinSignature]] = &[
+        pub(super) static $signatures: &[&[BuiltinSignature]] = &[
             $(signatures!($($sig)*)),*
         ];
     };

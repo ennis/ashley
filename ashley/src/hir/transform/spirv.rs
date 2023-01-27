@@ -60,8 +60,8 @@ fn emit_image_type(builder: &mut rspirv::dr::Builder, image_type: &ImageType) ->
 fn emit_constants(module: &Module, builder: &mut rspirv::dr::Builder, type_ids: &TypeMap) -> ConstantMap {
     let mut map = ConstantMap::with_capacity(module.constants.len());
 
-    for (constant, cdata) in module.constants {
-        let ssa_id = match cdata {
+    for (constant, cdata) in module.constants.iter() {
+        let ssa_id = match *cdata {
             ConstantData::F32(v) => {
                 let ty = builder.type_float(32);
                 builder.constant_f32(ty, v.0)
@@ -94,7 +94,7 @@ fn emit_constants(module: &Module, builder: &mut rspirv::dr::Builder, type_ids: 
                     builder.constant_false(ty)
                 }
             }
-            ConstantData::Composite { ty, constituents } => {
+            ConstantData::Composite { ty, ref constituents } => {
                 let ty = type_ids[ty];
                 builder.constant_composite(ty, constituents.iter().map(|c| map[*c]))
             }
@@ -110,8 +110,8 @@ fn emit_constants(module: &Module, builder: &mut rspirv::dr::Builder, type_ids: 
 fn emit_types(module: &Module, builder: &mut rspirv::dr::Builder) -> TypeMap {
     let mut map = TypeMap::with_capacity(module.types.len());
 
-    for (ty, tydata) in module.types {
-        let ssa_id = match tydata {
+    for (ty, tydata) in module.types.iter() {
+        let ssa_id = match *tydata {
             TypeData::Unit => builder.type_void(),
             TypeData::Scalar(scalar_type) => emit_scalar_type(builder, scalar_type),
             TypeData::Vector(component_type, len) => {
@@ -129,18 +129,18 @@ fn emit_types(module: &Module, builder: &mut rspirv::dr::Builder) -> TypeMap {
                 builder.type_array(map[elem_ty], len)
             }
             TypeData::RuntimeArray(elem_ty) => builder.type_runtime_array(map[elem_ty]),
-            TypeData::Struct(ty) => {
-                let id = builder.type_struct(ty.fields.iter().map(|f| map[f.ty]));
-                if let Some(ref name) = ty.name {
+            TypeData::Struct(ref struct_ty) => {
+                let id = builder.type_struct(struct_ty.fields.iter().map(|f| map[f.ty]));
+                if let Some(ref name) = struct_ty.name {
                     builder.name(id, name.to_string());
                 }
                 id
             }
-            TypeData::SampledImage(ty) => {
-                let image_type = emit_image_type(builder, &ty);
+            TypeData::SampledImage(img_ty) => {
+                let image_type = emit_image_type(builder, &img_ty);
                 builder.type_sampled_image(image_type)
             }
-            TypeData::Image(ty) => emit_image_type(builder, &ty),
+            TypeData::Image(img_ty) => emit_image_type(builder, &img_ty),
             TypeData::Pointer {
                 pointee_type,
                 storage_class,
@@ -148,7 +148,7 @@ fn emit_types(module: &Module, builder: &mut rspirv::dr::Builder) -> TypeMap {
                 let pointee_type = map[pointee_type];
                 builder.type_pointer(None, storage_class, pointee_type)
             }
-            TypeData::Function(function_type) => {
+            TypeData::Function(ref function_type) => {
                 let return_type = map[function_type.return_type];
                 builder.type_function(return_type, function_type.arg_types.iter().map(|arg| map[*arg]))
             }
@@ -256,8 +256,8 @@ fn operand_to_rspirv(
         Operand::RayQueryCandidateIntersectionType(v) => rspirv::dr::Operand::RayQueryCandidateIntersectionType(v),
         Operand::LiteralInt32(v) => rspirv::dr::Operand::LiteralInt32(v),
         Operand::LiteralInt64(v) => rspirv::dr::Operand::LiteralInt64(v),
-        Operand::LiteralFloat32(v) => rspirv::dr::Operand::LiteralFloat32(v),
-        Operand::LiteralFloat64(v) => rspirv::dr::Operand::LiteralFloat64(v),
+        Operand::LiteralFloat32(v) => rspirv::dr::Operand::LiteralFloat32(v.0),
+        Operand::LiteralFloat64(v) => rspirv::dr::Operand::LiteralFloat64(v.0),
         Operand::LiteralSpecConstantOpInteger(v) => rspirv::dr::Operand::LiteralSpecConstantOpInteger(v),
         Operand::LiteralString(ref v) => rspirv::dr::Operand::LiteralString(v.clone()),
         Operand::ImageOperands(v) => rspirv::dr::Operand::ImageOperands(v),
@@ -297,7 +297,7 @@ fn emit_functions(
 
         for (ib, (_, bdata)) in fdata.blocks.iter().enumerate() {
             builder.select_block(Some(ib)).unwrap();
-            for inst in bdata.instructions {
+            for inst in bdata.instructions.iter() {
                 let result_type = inst.result.map(|v| type_map[fdata.values[v].ty]);
                 let result_id = if result_type.is_some() {
                     Some(builder.id())
@@ -355,6 +355,7 @@ fn emit_functions(
                             IdRef::Value(v) => values[*v],
                             IdRef::Constant(c) => constant_map[*c],
                             IdRef::Global(g) => global_map[*g],
+                            IdRef::Function(_) => panic!("invalid return value")
                         };
                         builder.ret_value(id).unwrap();
                     }

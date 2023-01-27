@@ -28,11 +28,11 @@ macro_rules! define_builtin_types {
     ($struct_name:ident, $register_fn:ident; $($name:ident $tydata:expr;)*) => {
 
         #[allow(non_snake_case)]
-        pub(crate) struct $struct_name {
-            $(pub(crate) $name: hir::Type,)*
+        pub(super) struct $struct_name {
+            $(pub(super) $name: hir::Type,)*
         }
 
-        pub(crate) fn $register_fn(module: &mut hir::Module, scope: &mut Scope) -> $struct_name {
+        pub(super) fn $register_fn(module: &mut hir::Module, scope: &mut Scope) -> $struct_name {
             $(
             let $name = module.define_type($tydata);
             scope.define_type(std::stringify!($name).to_string(), None, $name);

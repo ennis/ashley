@@ -1,8 +1,8 @@
 ---
 source: ashley/src/syntax/mod.rs
-expression: "parse_source_text(r#\"\nfn main() {\n}\n\nfn test() -> i32 {\n}\n\n// tuple types\nfn test2() -> (i32,i32) {\n}\n\"#)"
+expression: "parse_source_text(r#\"\nfn main() {\n}\n\nfn test() -> i32 {\n}\n\n// tuple types\nfn test2() -> (i32,i32) {\n}\n\n// array types\nfn test3() -> [f32; 4] {\n}\n\"#)"
 ---
-MODULE@0..81
+MODULE@0..124
   WHITESPACE@0..1 "\n"
   FN_DEF@1..14
     FN_KW@1..3 "fn"
@@ -62,5 +62,33 @@ MODULE@0..81
       L_CURLY@77..78 "{"
       WHITESPACE@78..79 "\n"
       R_CURLY@79..80 "}"
-  WHITESPACE@80..81 "\n"
+  WHITESPACE@80..82 "\n\n"
+  LINE_COMMENT@82..96 "// array types"
+  WHITESPACE@96..97 "\n"
+  FN_DEF@97..123
+    FN_KW@97..99 "fn"
+    WHITESPACE@99..100 " "
+    IDENT@100..105 "test3"
+    PARAM_LIST@105..107
+      L_PAREN@105..106 "("
+      R_PAREN@106..107 ")"
+    WHITESPACE@107..108 " "
+    RET_TYPE@108..119
+      THIN_ARROW@108..110 "->"
+      WHITESPACE@110..111 " "
+      ARRAY_TYPE@111..119
+        L_BRACK@111..112 "["
+        TYPE_REF@112..115
+          IDENT@112..115 "f32"
+        SEMICOLON@115..116 ";"
+        WHITESPACE@116..117 " "
+        LIT_EXPR@117..118
+          INT_NUMBER@117..118 "4"
+        R_BRACK@118..119 "]"
+    WHITESPACE@119..120 " "
+    BLOCK@120..123
+      L_CURLY@120..121 "{"
+      WHITESPACE@121..122 "\n"
+      R_CURLY@122..123 "}"
+  WHITESPACE@123..124 "\n"
 

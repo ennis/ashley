@@ -1,5 +1,5 @@
 ---
-source: src/syntax/mod.rs
+source: ashley/src/syntax/mod.rs
 expression: "parse_source_text(r#\"\nfn main(){}\n    fn main2    (    )    {     }\nfn main3(    arg:f32    ) { }\nfn main4(  arg   :   f32) {}\n\"#)"
 ---
 MODULE@0..106
@@ -34,17 +34,17 @@ MODULE@0..106
     FN_KW@47..49 "fn"
     WHITESPACE@49..50 " "
     IDENT@50..55 "main3"
-    PARAM_LIST@55..73
+    PARAM_LIST@55..72
       L_PAREN@55..56 "("
       WHITESPACE@56..60 "    "
-      FN_ARG@60..67
+      FN_PARAM@60..67
         IDENT@60..63 "arg"
         COLON@63..64 ":"
         TYPE_REF@64..67
           IDENT@64..67 "f32"
       WHITESPACE@67..71 "    "
       R_PAREN@71..72 ")"
-      WHITESPACE@72..73 " "
+    WHITESPACE@72..73 " "
     BLOCK@73..76
       L_CURLY@73..74 "{"
       WHITESPACE@74..75 " "
@@ -54,10 +54,10 @@ MODULE@0..106
     FN_KW@77..79 "fn"
     WHITESPACE@79..80 " "
     IDENT@80..85 "main4"
-    PARAM_LIST@85..103
+    PARAM_LIST@85..102
       L_PAREN@85..86 "("
       WHITESPACE@86..88 "  "
-      FN_ARG@88..101
+      FN_PARAM@88..101
         IDENT@88..91 "arg"
         WHITESPACE@91..94 "   "
         COLON@94..95 ":"
@@ -65,7 +65,7 @@ MODULE@0..106
         TYPE_REF@98..101
           IDENT@98..101 "f32"
       R_PAREN@101..102 ")"
-      WHITESPACE@102..103 " "
+    WHITESPACE@102..103 " "
     BLOCK@103..105
       L_CURLY@103..104 "{"
       R_CURLY@104..105 "}"

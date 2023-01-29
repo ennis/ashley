@@ -1,5 +1,5 @@
 ---
-source: src/syntax/mod.rs
+source: ashley/src/syntax/mod.rs
 expression: "parse_source_text(r#\"\n// global variables\nin v_position: vec3;\nout f_position: vec3 = vec3(0.0);\nuniform u_model_matrix: mat4;\n\nfn main() {\n    let x = 0;\n    var x = 0;\n    let y: f32 = 0;\n    let z;\n    let w: f32;\n\n    if one {\n        let x;\n        var x;\n    }\n\n    if one {\n        let x;\n        var x;\n    } else {\n        let x;\n        var x;\n    }\n\n    while true {\n        let x;\n        var x;\n    }\n}\n\"#)"
 ---
 MODULE@0..395
@@ -7,7 +7,8 @@ MODULE@0..395
   LINE_COMMENT@1..20 "// global variables"
   WHITESPACE@20..21 "\n"
   GLOBAL@21..41
-    IN_KW@21..23 "in"
+    QUALIFIER@21..23
+      IN_KW@21..23 "in"
     WHITESPACE@23..24 " "
     IDENT@24..34 "v_position"
     COLON@34..35 ":"
@@ -17,7 +18,8 @@ MODULE@0..395
     SEMICOLON@40..41 ";"
   WHITESPACE@41..42 "\n"
   GLOBAL@42..75
-    OUT_KW@42..45 "out"
+    QUALIFIER@42..45
+      OUT_KW@42..45 "out"
     WHITESPACE@45..46 " "
     IDENT@46..56 "f_position"
     COLON@56..57 ":"
@@ -39,7 +41,8 @@ MODULE@0..395
     SEMICOLON@74..75 ";"
   WHITESPACE@75..76 "\n"
   GLOBAL@76..105
-    UNIFORM_KW@76..83 "uniform"
+    QUALIFIER@76..83
+      UNIFORM_KW@76..83 "uniform"
     WHITESPACE@83..84 " "
     IDENT@84..98 "u_model_matrix"
     COLON@98..99 ":"

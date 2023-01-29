@@ -6,8 +6,8 @@ in i_position: vec2;
 out o_color: vec4;
 
 fn main() {
-    let position : f32 = v_position * vec2(1.0, -1.0) * u_resolution * 0.5;
-    let vignette : f32 = clamp(0.7 * length(v_position), 0.0, 1.0);
+    let position : f32 = i_position * vec2(1.0, -1.0) * u_resolution * 0.5;
+    let vignette : f32 = clamp(0.7 * length(i_position), 0.0, 1.0);
     out_color = mix(
         vec4(0.0, 0.47, 0.9, 1.0),
         vec4(0.0, 0.1, 0.64, 1.0),

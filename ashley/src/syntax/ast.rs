@@ -356,11 +356,11 @@ impl LitExpr {
 
 impl BinExpr {
     pub fn lhs(&self) -> Option<Expr> {
-        self.syntax.children().filter_map(Expr::cast).nth(1)
+        self.syntax.children().filter_map(Expr::cast).nth(0)
     }
 
     pub fn rhs(&self) -> Option<Expr> {
-        self.syntax.children().filter_map(Expr::cast).nth(2)
+        self.syntax.children().filter_map(Expr::cast).nth(1)
     }
 
     pub fn op_details(&self) -> Option<(SyntaxToken, BinaryOp)> {
@@ -411,11 +411,11 @@ impl BinExpr {
 
 impl IndexExpr {
     pub fn array(&self) -> Option<Expr> {
-        self.syntax.children().filter_map(Expr::cast).nth(1)
+        self.syntax.children().filter_map(Expr::cast).nth(0)
     }
 
     pub fn index(&self) -> Option<Expr> {
-        self.syntax.children().filter_map(Expr::cast).nth(2)
+        self.syntax.children().filter_map(Expr::cast).nth(1)
     }
 }
 

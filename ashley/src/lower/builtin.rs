@@ -7,7 +7,6 @@ use crate::{
     lower::Scope,
 };
 use rspirv::spirv;
-use std::sync::Arc;
 
 macro_rules! image_type {
     ($sampling:ident $sampled_ty:ident $dim:ident Arrayed $arrayed:literal Multisampled $ms:literal) => {
@@ -69,6 +68,31 @@ define_builtin_types! {
     dvec2           TypeData::Vector(ScalarType::Double, 2);
     dvec3           TypeData::Vector(ScalarType::Double, 3);
     dvec4           TypeData::Vector(ScalarType::Double, 4);
+
+    mat2            TypeData::Matrix { component_type: ScalarType::Float, columns: 2, rows: 2 };
+    mat3            TypeData::Matrix { component_type: ScalarType::Float, columns: 3, rows: 3 };
+    mat4            TypeData::Matrix { component_type: ScalarType::Float, columns: 4, rows: 4 };
+    dmat2           TypeData::Matrix { component_type: ScalarType::Double, columns: 2, rows: 2 };
+    dmat3           TypeData::Matrix { component_type: ScalarType::Double, columns: 3, rows: 3 };
+    dmat4           TypeData::Matrix { component_type: ScalarType::Double, columns: 4, rows: 4 };
+    mat2x2          TypeData::Matrix { component_type: ScalarType::Float, columns: 2, rows: 2 };
+    mat2x3          TypeData::Matrix { component_type: ScalarType::Float, columns: 2, rows: 3 };
+    mat2x4          TypeData::Matrix { component_type: ScalarType::Float, columns: 2, rows: 4 };
+    mat3x2          TypeData::Matrix { component_type: ScalarType::Float, columns: 3, rows: 2 };
+    mat3x3          TypeData::Matrix { component_type: ScalarType::Float, columns: 3, rows: 3 };
+    mat3x4          TypeData::Matrix { component_type: ScalarType::Float, columns: 3, rows: 4 };
+    mat4x2          TypeData::Matrix { component_type: ScalarType::Float, columns: 4, rows: 2 };
+    mat4x3          TypeData::Matrix { component_type: ScalarType::Float, columns: 4, rows: 3 };
+    mat4x4          TypeData::Matrix { component_type: ScalarType::Float, columns: 4, rows: 4 };
+    dmat2x2         TypeData::Matrix { component_type: ScalarType::Double, columns: 2, rows: 2 };
+    dmat2x3         TypeData::Matrix { component_type: ScalarType::Double, columns: 2, rows: 3 };
+    dmat2x4         TypeData::Matrix { component_type: ScalarType::Double, columns: 2, rows: 4 };
+    dmat3x2         TypeData::Matrix { component_type: ScalarType::Double, columns: 3, rows: 2 };
+    dmat3x3         TypeData::Matrix { component_type: ScalarType::Double, columns: 3, rows: 3 };
+    dmat3x4         TypeData::Matrix { component_type: ScalarType::Double, columns: 3, rows: 4 };
+    dmat4x2         TypeData::Matrix { component_type: ScalarType::Double, columns: 4, rows: 2 };
+    dmat4x3         TypeData::Matrix { component_type: ScalarType::Double, columns: 4, rows: 3 };
+    dmat4x4         TypeData::Matrix { component_type: ScalarType::Double, columns: 4, rows: 4 };
 
     sampler         TypeData::Sampler;
     samplerShadow   TypeData::SamplerShadow;

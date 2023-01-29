@@ -2,7 +2,7 @@ mod builder;
 mod constant;
 mod list;
 //pub mod print;
-mod transform;
+pub mod transform;
 pub mod types;
 mod visit;
 
@@ -549,6 +549,7 @@ pub enum Domain {
 pub struct GlobalVariableData {
     pub name: String,
     /// Type of the global variable (not necessarily a pointer).
+    /// TODO replace with a pointer?
     pub ty: Type,
     pub storage_class: spirv::StorageClass,
     pub linkage: Option<LinkageType>,
@@ -681,6 +682,14 @@ impl Module {
 
     pub fn define_global_variable(&mut self, v: GlobalVariableData) -> GlobalVariable {
         self.globals.alloc(v)
+    }
+
+    /// Returns a pointer type.
+    pub fn pointer_type(&mut self, pointee_type: Type, storage_class: spirv::StorageClass) -> Type {
+        self.define_type(TypeData::Pointer {
+            pointee_type,
+            storage_class,
+        })
     }
 
     /// Adds a function to the module.

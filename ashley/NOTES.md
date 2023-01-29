@@ -1181,7 +1181,23 @@ A: As much as possible, avoid polluting the result SPIR-V too much; if we can av
 
 # HIR builder refactor (or alternate API)
 
+- allow void-typed values for easier codegen
 - take and return TypedValues instead of IdRefs
 - Function calls take `Function`s instead of IdRefs
 - infer result types (function calls, arithmetic ops)
   - no implicit conversions though
+
+# TODOs
+- diag: fix `impl WriteColor + 'static` ugliness
+- lower: block termination
+- hir: remove `Cow` in TypeData, as it's pretty much unusable as hashmap keys
+- syntax: automatic whitespace consumption
+- syntax: nth(2) lookahead
+- syntax: method call syntax 
+
+# Automatic whitespace in the syntax
+- eat whitespace before `start_node`, `checkpoint`, `expect`
+- `current()` never returns whitespace
+
+# Function places
+There must be a separate lower_expr function for function calls, since in our IR functions are not first-class values.

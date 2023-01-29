@@ -85,11 +85,13 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn parse(mut self) -> SyntaxNode {
-        self.start_node(MODULE);
+        // Don't skip whitespace for the root module
+        self.b.start_node(MODULE.into());
         while self.current().is_some() {
             self.parse_items();
         }
-        self.finish_node();
+        self.skip_ws2();
+        self.b.finish_node();
         let green_node = self.b.finish();
         SyntaxNode::new_root(green_node)
     }
@@ -104,13 +106,19 @@ impl<'a> Parser<'a> {
         self.current = self.lex.next();
     }
 
+    fn checkpoint(&mut self) -> Checkpoint {
+        self.skip_ws2();
+        self.b.checkpoint()
+    }
+
     /// Peek at the first unprocessed token
-    fn current(&self) -> Option<SyntaxKind> {
+    fn current(&mut self) -> Option<SyntaxKind> {
+        self.skip_ws2();
         self.current.clone().map(|(kind, _)| kind)
     }
 
-    fn skip_ws(&mut self) {
-        while matches!(self.current(), Some(WHITESPACE | BLOCK_COMMENT | LINE_COMMENT)) {
+    fn skip_ws2(&mut self) {
+        while matches!(self.current.clone().map(|(kind, _)| kind), Some(WHITESPACE | BLOCK_COMMENT | LINE_COMMENT)) {
             self.bump()
         }
     }
@@ -128,6 +136,7 @@ impl<'a> Parser<'a> {
     }
 
     fn start_node(&mut self, kind: SyntaxKind) {
+        self.skip_ws2();
         self.b.start_node(kind.into());
     }
 
@@ -135,6 +144,7 @@ impl<'a> Parser<'a> {
         self.b.finish_node();
     }
 
+    //--------------------------------------------------------------------
     fn expect_ident(&mut self, ident_kind: &str) -> bool {
         if self.current() != Some(IDENT) {
             let span = self.span();
@@ -175,18 +185,18 @@ impl<'a> Parser<'a> {
         false
     }
 
+
     //
     // --- Nodes ---
     //
 
     fn parse_function_or_variable(&mut self) {
-        let cp = self.b.checkpoint();
+        let cp = self.checkpoint();
         // parse extern
         if self.current() == Some(EXTERN_KW) {
             self.start_node(EXTERN);
             self.bump();
             self.finish_node(); // EXTERN
-            self.skip_ws();
         }
         match self.current() {
             Some(FN_KW) => {
@@ -204,7 +214,6 @@ impl<'a> Parser<'a> {
 
     fn parse_items(&mut self) {
         loop {
-            self.skip_ws();
             match self.current() {
                 Some(IMPORT_KW) => {
                     self.parse_import_declaration();
@@ -246,26 +255,20 @@ impl<'a> Parser<'a> {
     fn parse_import_declaration(&mut self) {
         self.start_node(IMPORT_DECL);
         self.expect(IMPORT_KW);
-        self.skip_ws();
         self.expect_ident("package name");
-        self.skip_ws();
         if let Some(T!['(']) = self.current() {
             self.start_node(IMPORT_PARAM_LIST);
             self.bump();
-            self.skip_ws();
             self.parse_separated_list(T![,], T![')'], true, false, Self::parse_package_parameter);
             self.expect(T![')']);
             self.finish_node(); // IMPORT_PARAM_LIST
-            self.skip_ws();
         }
 
         if let Some(T![as]) = self.current() {
             self.start_node(IMPORT_ALIAS);
             self.bump();
-            self.skip_ws();
             self.expect_ident("package import alias");
             self.finish_node(); // IMPORT_ALIAS
-            self.skip_ws();
         }
         self.expect(T![;]);
         self.finish_node(); // IMPORT_DECL
@@ -274,9 +277,7 @@ impl<'a> Parser<'a> {
     fn parse_struct_def(&mut self) {
         self.start_node(STRUCT_DEF);
         self.expect(STRUCT_KW);
-        self.skip_ws();
         self.expect_ident("struct name");
-        self.skip_ws();
         self.expect(T!['{']);
         self.parse_separated_list(T![,], T!['}'], true, false, Self::parse_struct_field);
         self.expect(T!['}']);
@@ -286,9 +287,7 @@ impl<'a> Parser<'a> {
     fn parse_struct_field(&mut self) {
         self.start_node(STRUCT_FIELD);
         self.expect_ident("field name");
-        self.skip_ws();
         self.expect(T![:]);
-        self.skip_ws();
         self.parse_type();
         self.finish_node(); // STRUCT_FIELD
     }
@@ -300,21 +299,15 @@ impl<'a> Parser<'a> {
             self.start_node(EXTERN);
             self.bump();
             self.finish_node(); // EXTERN
-            self.skip_ws();
         }
         self.expect(FN_KW);
-        self.skip_ws();
         self.expect_ident("function name");
-        self.skip_ws();
         self.parse_fn_param_list();
-        self.skip_ws();
         if self.current() == Some(THIN_ARROW) {
             self.start_node(RET_TYPE);
             self.bump();
-            self.skip_ws();
             self.parse_type();
             self.finish_node();
-            self.skip_ws();
         }
 
         match self.current() {
@@ -344,7 +337,6 @@ impl<'a> Parser<'a> {
             return;
         }
 
-        self.skip_ws();
 
         loop {
             match self.current() {
@@ -363,14 +355,11 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
             self.parse_fn_parameter();
-            self.skip_ws();
             if self.current() == Some(COMMA) {
                 self.bump();
-                self.skip_ws();
                 continue;
             }
             self.expect(R_PAREN);
-            self.skip_ws();
             break;
         }
 
@@ -381,9 +370,7 @@ impl<'a> Parser<'a> {
         // TODO
         self.start_node(BLOCK);
         self.expect(L_CURLY);
-        self.skip_ws();
         self.parse_stmt_list();
-        self.skip_ws();
         self.expect(R_CURLY);
         self.finish_node();
     }
@@ -392,9 +379,7 @@ impl<'a> Parser<'a> {
         self.start_node(FN_PARAM);
         // <ident> : <type>
         self.expect_ident("argument name");
-        self.skip_ws();
         self.expect(COLON);
-        self.skip_ws();
         self.parse_type();
         self.finish_node();
     }
@@ -409,9 +394,7 @@ impl<'a> Parser<'a> {
             Some(T!['{']) => {
                 self.start_node(CONST_EXPR);
                 self.bump();
-                self.skip_ws();
                 self.parse_expr();
-                self.skip_ws();
                 self.expect(T!['}']);
                 self.finish_node();
             }
@@ -434,14 +417,12 @@ impl<'a> Parser<'a> {
             Some(IDENT) => {
                 self.start_node(TYPE_REF);
                 self.bump();
-                // optional type parameter list
+                /*// optional type parameter list
                 if self.current() == Some(T![<]) {
                     self.bump();
-                    self.skip_ws();
                     self.parse_separated_list(T![,], T![>], true, false, Self::parse_type_parameter);
-                    self.skip_ws();
                     self.expect(T![>]);
-                }
+                }*/
                 self.finish_node();
             }
             None => {
@@ -475,7 +456,6 @@ impl<'a> Parser<'a> {
         let mut last_sep_span = None;
         let mut item_count = 0;
         loop {
-            self.skip_ws();
             match self.current() {
                 Some(x) if x == end => {
                     if trailing_sep && !allow_trailing {
@@ -491,7 +471,6 @@ impl<'a> Parser<'a> {
             }
             parse_item(self);
             item_count += 1;
-            self.skip_ws();
             match self.current() {
                 Some(x) if x == end => {
                     if item_count == 1 && tuple_rule {
@@ -532,20 +511,16 @@ impl<'a> Parser<'a> {
     fn parse_closure_type(&mut self) {
         self.start_node(CLOSURE_TYPE);
         self.expect(FN_KW);
-        self.skip_ws();
         self.start_node(CLOSURE_PARAM_LIST);
         self.expect(T!['(']);
         self.parse_separated_list(T![,], T![')'], true, false, Self::parse_type);
         self.expect(T![')']);
         self.finish_node(); // CLOSURE_PARAM_LIST
-        self.skip_ws();
         if self.current() == Some(T![->]) {
             self.start_node(RET_TYPE);
             self.bump();
-            self.skip_ws();
             self.parse_type();
             self.finish_node();
-            self.skip_ws();
         }
         self.finish_node();
     }
@@ -554,14 +529,10 @@ impl<'a> Parser<'a> {
     fn parse_array_type(&mut self) {
         self.start_node(ARRAY_TYPE);
         self.expect(T!['[']);
-        self.skip_ws();
         self.parse_type();
-        self.skip_ws();
         if self.current() == Some(T![;]) {
             self.bump();
-            self.skip_ws();
             self.parse_expr();
-            self.skip_ws();
         }
         self.expect(T![']']);
         self.finish_node();
@@ -596,11 +567,9 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }
             Some(T!['(']) => {
-                let cp = self.b.checkpoint();
+                let cp = self.checkpoint();
                 self.bump();
-                self.skip_ws();
                 self.parse_expr();
-                self.skip_ws();
                 match self.current() {
                     Some(T![')']) => {
                         self.b.start_node_at(cp, PAREN_EXPR.into());
@@ -611,7 +580,6 @@ impl<'a> Parser<'a> {
                         // tuple
                         self.b.start_node_at(cp, TUPLE_EXPR.into());
                         self.bump();
-                        self.skip_ws();
                         self.parse_separated_list(T![,], T![')'], true, false, Self::parse_expr);
                         self.expect(T![')']);
                         self.finish_node();
@@ -624,9 +592,7 @@ impl<'a> Parser<'a> {
             }
             Some(T!['[']) => {
                 self.start_node(ARRAY_EXPR);
-                self.skip_ws();
                 self.parse_separated_list(T![,], T![']'], true, false, Self::parse_expr);
-                self.skip_ws();
                 self.expect(T![']']);
                 self.finish_node();
             }
@@ -645,7 +611,6 @@ impl<'a> Parser<'a> {
                 None => break,
                 _ => self.parse_stmt(),
             }
-            self.skip_ws();
         }
     }
 
@@ -667,22 +632,16 @@ impl<'a> Parser<'a> {
     fn parse_local_variable_stmt(&mut self) {
         self.start_node(LOCAL_VARIABLE);
         self.expect_any(&[VAR_KW, LET_KW]);
-        self.skip_ws();
         self.expect_ident("variable name");
-        self.skip_ws();
         if self.current() == Some(T![:]) {
             self.bump();
-            self.skip_ws();
             self.parse_type();
-            self.skip_ws();
         }
         if self.current() == Some(T![=]) {
             self.start_node(INITIALIZER);
             self.bump();
-            self.skip_ws();
             self.parse_expr();
             self.finish_node(); // INITIALIZER
-            self.skip_ws();
         }
         self.expect(SEMICOLON);
         self.finish_node(); // LOCAL_VARIABLE
@@ -691,7 +650,6 @@ impl<'a> Parser<'a> {
     fn parse_break_stmt(&mut self) {
         self.start_node(BREAK_STMT);
         self.expect(BREAK_KW);
-        self.skip_ws();
         self.expect(SEMICOLON);
         self.finish_node();
     }
@@ -699,7 +657,6 @@ impl<'a> Parser<'a> {
     fn parse_continue_stmt(&mut self) {
         self.start_node(CONTINUE_STMT);
         self.expect(CONTINUE_KW);
-        self.skip_ws();
         self.expect(SEMICOLON);
         self.finish_node();
     }
@@ -707,7 +664,6 @@ impl<'a> Parser<'a> {
     fn parse_discard_stmt(&mut self) {
         self.start_node(DISCARD_STMT);
         self.expect(DISCARD_KW);
-        self.skip_ws();
         self.expect(SEMICOLON);
         self.finish_node();
     }
@@ -715,11 +671,9 @@ impl<'a> Parser<'a> {
     fn parse_while_stmt(&mut self) {
         self.start_node(WHILE_STMT);
         self.expect(WHILE_KW);
-        self.skip_ws();
         self.start_node(CONDITION);
         self.parse_expr();
         self.finish_node(); // CONDITION
-        self.skip_ws();
         self.parse_block();
         self.finish_node(); // WHILE_STMT
     }
@@ -727,17 +681,13 @@ impl<'a> Parser<'a> {
     fn parse_if_stmt(&mut self) {
         self.start_node(IF_STMT);
         self.expect(IF_KW);
-        self.skip_ws();
         self.start_node(CONDITION);
         self.parse_expr();
-        self.skip_ws();
         self.finish_node();
         self.parse_block();
-        self.skip_ws();
         if self.current() == Some(ELSE_KW) {
             self.start_node(ELSE_BRANCH);
             self.bump();
-            self.skip_ws();
             if self.current() == Some(IF_KW) {
                 // else if
                 self.parse_if_stmt();
@@ -756,7 +706,6 @@ impl<'a> Parser<'a> {
     fn parse_expr_stmt(&mut self) {
         self.start_node(EXPR_STMT);
         self.parse_expr();
-        self.skip_ws();
         self.expect(SEMICOLON);
         self.finish_node();
     }
@@ -764,9 +713,7 @@ impl<'a> Parser<'a> {
     fn parse_return(&mut self) {
         self.start_node(RETURN_STMT);
         self.expect(RETURN_KW);
-        self.skip_ws();
         self.parse_expr();
-        self.skip_ws();
         self.expect(SEMICOLON);
         self.finish_node();
     }
@@ -776,7 +723,6 @@ impl<'a> Parser<'a> {
         self.expect(T!['(']);
 
         loop {
-            self.skip_ws();
             match self.current() {
                 Some(T![')']) => {
                     self.bump();
@@ -786,7 +732,6 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
             self.parse_expr();
-            self.skip_ws();
             match self.current() {
                 Some(T![')']) => {
                     self.bump();
@@ -815,22 +760,16 @@ impl<'a> Parser<'a> {
             self.start_node(EXTERN);
             self.bump();
             self.finish_node(); // EXTERN
-            self.skip_ws();
         }
         self.start_node(QUALIFIER);
         self.expect_any(&[IN_KW, OUT_KW, CONST_KW, UNIFORM_KW]);
         self.finish_node(); // QUALIFIER
-        self.skip_ws();
         self.expect_ident("variable name");
-        self.skip_ws();
         self.expect(COLON);
-        self.skip_ws();
         self.parse_type();
-        self.skip_ws();
         if self.current() == Some(EQ) {
             self.start_node(INITIALIZER);
             self.bump();
-            self.skip_ws();
             self.parse_expr();
             self.finish_node(); // INITIALIZER
         }
@@ -844,12 +783,11 @@ impl<'a> Parser<'a> {
 
     // https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
     fn parse_expr_bp(&mut self, min_bp: u8) {
-        let cp = self.b.checkpoint();
+        let cp = self.checkpoint();
         match self.current() {
             Some(op @ T![+] | op @ T![-] | op @ T![!]) => {
                 self.start_node(PREFIX_EXPR);
                 self.bump();
-                self.skip_ws();
                 let r_bp = prefix_binding_power(op);
                 self.parse_expr_bp(r_bp);
                 self.finish_node();
@@ -860,7 +798,6 @@ impl<'a> Parser<'a> {
         }
 
         loop {
-            self.skip_ws();
             let op = match self.current() {
                 Some(
                     op @ T![+]
@@ -897,7 +834,6 @@ impl<'a> Parser<'a> {
                     // the array index binds closer to everything else, no need to check binding power
                     self.b.start_node_at(cp, INDEX_EXPR.into());
                     self.bump();
-                    self.skip_ws();
                     self.parse_expr();
                     self.expect(T![']']);
                     self.finish_node();
@@ -912,7 +848,6 @@ impl<'a> Parser<'a> {
                 Some(T![.]) => {
                     self.b.start_node_at(cp, FIELD_EXPR.into());
                     self.bump();
-                    self.skip_ws();
                     self.expect_ident("field identifier");
                     self.finish_node();
                     continue;
@@ -928,10 +863,9 @@ impl<'a> Parser<'a> {
             self.b.start_node_at(cp, BIN_EXPR.into());
 
             self.bump();
-            self.skip_ws();
             self.parse_expr_bp(r_bp);
 
-            self.b.finish_node();
+            self.finish_node();
         }
     }
 }
@@ -986,6 +920,13 @@ mod tests {
     fn expr(expr: &str) -> SyntaxNode {
         let src = format!("fn main() {{ {expr}; }}");
         parse_source_text(&src)
+    }
+
+    #[test]
+    fn empty_test() {
+        insta::assert_debug_snapshot!(parse_source_text(
+            r#"    "#
+        ));
     }
 
     #[test]

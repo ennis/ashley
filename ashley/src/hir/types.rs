@@ -3,7 +3,6 @@ use rspirv::{
     spirv,
     spirv::{AccessQualifier, ImageFormat},
 };
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 /// Scalar type kind.
@@ -121,7 +120,7 @@ pub enum TypeData<'a> {
     /// Vector type (element type + size).
     Vector(ScalarType, u8),
     /// Matrix type (element type + row count + column count).
-    Matrix(ScalarType, u8, u8),
+    Matrix { component_type: ScalarType, columns: u8, rows: u8 },
     /// Array type (element type + size).
     Array(Type, u32),
     /// Runtime array type. Array without a known length.
@@ -155,7 +154,11 @@ impl<'a> TypeData<'a> {
             TypeData::Unit => TypeData::Unit,
             TypeData::Scalar(t) => TypeData::Scalar(t),
             TypeData::Vector(t, n) => TypeData::Vector(t, n),
-            TypeData::Matrix(t, r, c) => TypeData::Matrix(t, r, c),
+            TypeData::Matrix { component_type, columns, rows } => TypeData::Matrix {
+                component_type,
+                columns,
+                rows,
+            },
             TypeData::Array(t, n) => TypeData::Array(t, n),
             TypeData::RuntimeArray(t) => TypeData::RuntimeArray(t),
             TypeData::SampledImage(i) => TypeData::SampledImage(i),

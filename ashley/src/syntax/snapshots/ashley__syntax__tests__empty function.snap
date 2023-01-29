@@ -1,94 +1,56 @@
 ---
 source: ashley/src/syntax/mod.rs
-expression: "parse_source_text(r#\"\nfn main() {\n}\n\nfn test() -> i32 {\n}\n\n// tuple types\nfn test2() -> (i32,i32) {\n}\n\n// array types\nfn test3() -> [f32; 4] {\n}\n\"#)"
+expression: "parse_source_text(r#\"\nvoid main() {\n}\n\nint test() {\n}\n\n// array types\nfloat[4] test3() {\n}\n\"#)"
 ---
-MODULE@0..124
+MODULE@0..70
   WHITESPACE@0..1 "\n"
-  FN_DEF@1..14
-    FN_KW@1..3 "fn"
-    WHITESPACE@3..4 " "
-    IDENT@4..8 "main"
-    PARAM_LIST@8..10
-      L_PAREN@8..9 "("
-      R_PAREN@9..10 ")"
-    WHITESPACE@10..11 " "
-    BLOCK@11..14
-      L_CURLY@11..12 "{"
-      WHITESPACE@12..13 "\n"
-      R_CURLY@13..14 "}"
-  WHITESPACE@14..16 "\n\n"
-  FN_DEF@16..36
-    FN_KW@16..18 "fn"
-    WHITESPACE@18..19 " "
-    IDENT@19..23 "test"
-    PARAM_LIST@23..25
-      L_PAREN@23..24 "("
-      R_PAREN@24..25 ")"
-    WHITESPACE@25..26 " "
-    RET_TYPE@26..32
-      THIN_ARROW@26..28 "->"
-      WHITESPACE@28..29 " "
-      TYPE_REF@29..32
-        IDENT@29..32 "i32"
-    WHITESPACE@32..33 " "
-    BLOCK@33..36
-      L_CURLY@33..34 "{"
-      WHITESPACE@34..35 "\n"
-      R_CURLY@35..36 "}"
-  WHITESPACE@36..38 "\n\n"
-  LINE_COMMENT@38..52 "// tuple types"
-  WHITESPACE@52..53 "\n"
-  FN_DEF@53..80
-    FN_KW@53..55 "fn"
-    WHITESPACE@55..56 " "
-    IDENT@56..61 "test2"
-    PARAM_LIST@61..63
-      L_PAREN@61..62 "("
-      R_PAREN@62..63 ")"
-    WHITESPACE@63..64 " "
-    RET_TYPE@64..76
-      THIN_ARROW@64..66 "->"
-      WHITESPACE@66..67 " "
-      TUPLE_TYPE@67..76
-        L_PAREN@67..68 "("
-        TYPE_REF@68..71
-          IDENT@68..71 "i32"
-        COMMA@71..72 ","
-        TYPE_REF@72..75
-          IDENT@72..75 "i32"
-        R_PAREN@75..76 ")"
-    WHITESPACE@76..77 " "
-    BLOCK@77..80
-      L_CURLY@77..78 "{"
-      WHITESPACE@78..79 "\n"
-      R_CURLY@79..80 "}"
-  WHITESPACE@80..82 "\n\n"
-  LINE_COMMENT@82..96 "// array types"
-  WHITESPACE@96..97 "\n"
-  FN_DEF@97..123
-    FN_KW@97..99 "fn"
-    WHITESPACE@99..100 " "
-    IDENT@100..105 "test3"
-    PARAM_LIST@105..107
-      L_PAREN@105..106 "("
-      R_PAREN@106..107 ")"
-    WHITESPACE@107..108 " "
-    RET_TYPE@108..119
-      THIN_ARROW@108..110 "->"
-      WHITESPACE@110..111 " "
-      ARRAY_TYPE@111..119
-        L_BRACK@111..112 "["
-        TYPE_REF@112..115
-          IDENT@112..115 "f32"
-        SEMICOLON@115..116 ";"
-        WHITESPACE@116..117 " "
-        LIT_EXPR@117..118
-          INT_NUMBER@117..118 "4"
-        R_BRACK@118..119 "]"
-    WHITESPACE@119..120 " "
-    BLOCK@120..123
-      L_CURLY@120..121 "{"
-      WHITESPACE@121..122 "\n"
-      R_CURLY@122..123 "}"
-  WHITESPACE@123..124 "\n"
+  FN_DEF@1..16
+    TYPE_REF@1..5
+      IDENT@1..5 "void"
+    WHITESPACE@5..6 " "
+    IDENT@6..10 "main"
+    PARAM_LIST@10..12
+      L_PAREN@10..11 "("
+      R_PAREN@11..12 ")"
+    WHITESPACE@12..13 " "
+    BLOCK@13..16
+      L_CURLY@13..14 "{"
+      WHITESPACE@14..15 "\n"
+      R_CURLY@15..16 "}"
+  WHITESPACE@16..18 "\n\n"
+  FN_DEF@18..32
+    TYPE_REF@18..21
+      IDENT@18..21 "int"
+    WHITESPACE@21..22 " "
+    IDENT@22..26 "test"
+    PARAM_LIST@26..28
+      L_PAREN@26..27 "("
+      R_PAREN@27..28 ")"
+    WHITESPACE@28..29 " "
+    BLOCK@29..32
+      L_CURLY@29..30 "{"
+      WHITESPACE@30..31 "\n"
+      R_CURLY@31..32 "}"
+  WHITESPACE@32..34 "\n\n"
+  LINE_COMMENT@34..48 "// array types"
+  WHITESPACE@48..49 "\n"
+  FN_DEF@49..69
+    ARRAY_TYPE@49..57
+      TYPE_REF@49..54
+        IDENT@49..54 "float"
+      L_BRACK@54..55 "["
+      LIT_EXPR@55..56
+        INT_NUMBER@55..56 "4"
+      R_BRACK@56..57 "]"
+    WHITESPACE@57..58 " "
+    IDENT@58..63 "test3"
+    PARAM_LIST@63..65
+      L_PAREN@63..64 "("
+      R_PAREN@64..65 ")"
+    WHITESPACE@65..66 " "
+    BLOCK@66..69
+      L_CURLY@66..67 "{"
+      WHITESPACE@67..68 "\n"
+      R_CURLY@68..69 "}"
+  WHITESPACE@69..70 "\n"
 

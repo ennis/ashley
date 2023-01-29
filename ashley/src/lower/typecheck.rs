@@ -630,7 +630,7 @@ pub(crate) struct OverloadCandidate {
 
 /// Helper function for `typecheck_builtin_operation`.
 ///
-/// Signatures of builtins are specified using `PseudoTypes` to make them more compact (TODO: replace with regular TypeData),
+/// Signatures of builtins are specified using `PseudoTypes` to make them more compact,
 /// so we use this function to convert them to `hir::Type`s before calling `check_signature`.
 ///
 /// Returns true if `check_signature` returned an exact match was found, false otherwise.
@@ -777,11 +777,11 @@ pub(super) fn lower_builtin_operation(
     args: &[IdRef],
     types: &[hir::Type],
     ret_type: hir::Type
-) -> Value {
-    (BUILTIN_OPERATION_SIGNATURES[op as usize][overload_index].lower)(ctxt, fb, args, types, ret_type)
+) -> TypedValue {
+    TypedValue::new((BUILTIN_OPERATION_SIGNATURES[op as usize][overload_index].lower)(ctxt, fb, args, types, ret_type), ret_type)
 }
 
-//--------------------------------------------------------------------------------------------------
+/*//--------------------------------------------------------------------------------------------------
 macro_rules! signatures {
     ($( ($($arg:ident),*) -> $ret_ty:ident => $builder_fn:expr; )*) => {
         &[ $(BuiltinSignature {
@@ -790,13 +790,24 @@ macro_rules! signatures {
             lower: $builder_fn
         }),* ]
     };
-}
+}*/
 
 //--------------------------------------------------------------------------------------------------
 // All built-in functions and their signatures
 
 macro_rules! builtin_operations {
-    ( $enum_name:ident, $signatures:ident, $register:ident; $($op_name:ident { $($sig:tt)* })*) => {
+    (@implicit_rank $rank:literal) => { Some($rank) };
+    (@implicit_rank) => { None };
+
+    (
+        $enum_name:ident, $signatures:ident, $register:ident;
+        $(
+            $op_name:ident {
+                $( $ret_ty:ident ($($arg:ident),*) => $builder_fn:expr; )*
+            }
+        )*
+    ) =>
+    {
         #[allow(non_camel_case_types)]
         #[derive(Copy,Clone,Debug,Eq,PartialEq)]
         pub(super) enum $enum_name {
@@ -804,7 +815,15 @@ macro_rules! builtin_operations {
         }
 
         pub(super) static $signatures: &[&[BuiltinSignature]] = &[
-            $(signatures!($($sig)*)),*
+            $(
+                &[
+                    $(BuiltinSignature {
+                        parameter_types: &[$(PseudoType::$arg),*],
+                        result_type: PseudoType::$ret_ty,
+                        lower: $builder_fn
+                    }),*
+                ]
+            ),*
         ];
 
         pub(super) fn $register(m: &mut Module, scope: &mut Scope) {
@@ -825,83 +844,98 @@ builtin_operations! {
     // Operators
     //////////////////////////////////////////////////////
     And {
-       (bool,bool)   -> bool  => |_ctxt, fb, args, _types, ret| fb.emit_logical_and(ret, args[0], args[1]);
+       bool(bool,bool)      => |_ctxt, fb, args, _types, ret| fb.emit_logical_and(ret, args[0], args[1]);
     }
     Or {
-       (bool,bool)   -> bool  => |_ctxt, fb, args, _types, ret| fb.emit_logical_or(ret, args[0], args[1]);
+       bool(bool,bool)      => |_ctxt, fb, args, _types, ret| fb.emit_logical_or(ret, args[0], args[1]);
     }
     Eq {
-       (vecN,vecN)   -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_equal(ret, args[0], args[1]);
-       (dvecN,dvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_equal(ret, args[0], args[1]);
-       (ivecN,ivecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_i_equal(ret, args[0], args[1]);
-       (uvecN,uvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_i_equal(ret, args[0], args[1]);
-       (bvecN,bvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_logical_equal(ret, args[0], args[1]);
+       bvecN(vecN,vecN)     => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_equal(ret, args[0], args[1]);
+       bvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_equal(ret, args[0], args[1]);
+       bvecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_equal(ret, args[0], args[1]);
+       bvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_equal(ret, args[0], args[1]);
+       bvecN(bvecN,bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_logical_equal(ret, args[0], args[1]);
     }
     Ne {
-       (vecN,vecN)   -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_not_equal(ret, args[0], args[1]);
-       (dvecN,dvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_not_equal(ret, args[0], args[1]);
-       (ivecN,ivecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_i_not_equal(ret, args[0], args[1]);
-       (uvecN,uvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_i_not_equal(ret, args[0], args[1]);
-       (bvecN,bvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_logical_not_equal(ret, args[0], args[1]);
+       bvecN(vecN,vecN)     => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_not_equal(ret, args[0], args[1]);
+       bvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_not_equal(ret, args[0], args[1]);
+       bvecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_not_equal(ret, args[0], args[1]);
+       bvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_not_equal(ret, args[0], args[1]);
+       bvecN(bvecN,bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_logical_not_equal(ret, args[0], args[1]);
     }
     Gt {
-        (vecN,vecN)   -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than(ret, args[0], args[1]);
-        (dvecN,dvecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than(ret, args[0], args[1]);
-        (ivecN,ivecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_s_greater_than(ret, args[0], args[1]);
-        (uvecN,uvecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_u_greater_than(ret, args[0], args[1]);
+        bvecN(vecN,vecN)      => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than(ret, args[0], args[1]);
+        bvecN(dvecN,dvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than(ret, args[0], args[1]);
+        bvecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_s_greater_than(ret, args[0], args[1]);
+        bvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_u_greater_than(ret, args[0], args[1]);
     }
     Ge {
-        (vecN,vecN)   -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than_equal(ret, args[0], args[1]);
-        (dvecN,dvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than_equal(ret, args[0], args[1]);
-        (ivecN,ivecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_s_greater_than_equal(ret, args[0], args[1]);
-        (uvecN,uvecN) -> bvecN => |_ctxt, fb, args, _types, ret| fb.emit_u_greater_than_equal(ret, args[0], args[1]);
+        bvecN(vecN,vecN)     => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than_equal(ret, args[0], args[1]);
+        bvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_greater_than_equal(ret, args[0], args[1]);
+        bvecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_s_greater_than_equal(ret, args[0], args[1]);
+        bvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_u_greater_than_equal(ret, args[0], args[1]);
     }
     Lt {
-        (vecN,vecN)   -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than(ret, args[0], args[1]);
-        (dvecN,dvecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than(ret, args[0], args[1]);
-        (ivecN,ivecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_s_less_than(ret, args[0], args[1]);
-        (uvecN,uvecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_u_less_than(ret, args[0], args[1]);
+        bvecN(vecN,vecN)      => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than(ret, args[0], args[1]);
+        bvecN(dvecN,dvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than(ret, args[0], args[1]);
+        bvecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_s_less_than(ret, args[0], args[1]);
+        bvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_u_less_than(ret, args[0], args[1]);
     }
     Le {
-        (vecN,vecN)   -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than_equal(ret, args[0], args[1]);
-        (dvecN,dvecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than_equal(ret, args[0], args[1]);
-        (ivecN,ivecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_s_less_than_equal(ret, args[0], args[1]);
-        (uvecN,uvecN) -> bvecN  => |_ctxt, fb, args, _types, ret| fb.emit_u_less_than_equal(ret, args[0], args[1]);
+        bvecN(vecN,vecN)      => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than_equal(ret, args[0], args[1]);
+        bvecN(dvecN,dvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_f_ord_less_than_equal(ret, args[0], args[1]);
+        bvecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_s_less_than_equal(ret, args[0], args[1]);
+        bvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_u_less_than_equal(ret, args[0], args[1]);
     }
     Add {
-        (vecN,vecN)   -> vecN   => |_ctxt, fb, args, _types, ret| fb.emit_f_add(ret, args[0], args[1]);
-        (dvecN,dvecN) -> dvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_add(ret, args[0], args[1]);
-        (ivecN,ivecN) -> ivecN  => |_ctxt, fb, args, _types, ret| fb.emit_i_add(ret, args[0], args[1]);
-        (uvecN,uvecN) -> uvecN  => |_ctxt, fb, args, _types, ret| fb.emit_i_add(ret, args[0], args[1]);
+        vecN(vecN,vecN)       => |_ctxt, fb, args, _types, ret| fb.emit_f_add(ret, args[0], args[1]);
+        dvecN(dvecN,dvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_f_add(ret, args[0], args[1]);
+        ivecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_add(ret, args[0], args[1]);
+        uvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_add(ret, args[0], args[1]);
     }
     Mul {
-        (vecN,float)   -> vecN  => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
-        (float,vecN)   -> vecN  => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
-        (vecN,vecN)   -> vecN   => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        vec2(vec2,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
+        vec3(vec3,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
+        vec4(vec4,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
+        vec2(float,vec2)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
+        vec3(float,vec3)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
+        vec4(float,vec4)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
+        float(float,float)    => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        vec2(vec2,vec2)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        vec3(vec3,vec3)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        vec4(vec4,vec4)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
 
-        (dvecN,double) -> dvecN  => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
-        (double,dvecN) -> dvecN  => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
-        (dvecN,dvecN) -> dvecN  => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        dvec2(dvec2,double)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
+        dvec3(dvec3,double)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
+        dvec4(dvec4,double)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
+        dvec2(double,dvec2)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
+        dvec3(double,dvec3)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
+        dvec4(double,dvec4)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[1], args[0]);
+        double(double,double)    => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        dvec2(dvec2,dvec2)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        dvec3(dvec3,dvec3)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
+        dvec4(dvec4,dvec4)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
 
-        (int,ivecN) -> ivecN  => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,int) -> ivecN  => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,ivecN) -> ivecN  => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);
+        // TODO fix this
+        ivecN(int,ivecN)    => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,int)    => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);
 
-        (uint,uvecN) -> uvecN  => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uint) -> uvecN  => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uvecN) -> uvecN  => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);
+        uvecN(uint,uvecN)    => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uint)    => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);
     }
     Sub {
-        (vecN,vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,ivecN) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uvecN) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
     Div {
-        (vecN,vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,ivecN) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uvecN) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
     Rem {  }
     Shl {  }
@@ -909,206 +943,252 @@ builtin_operations! {
     BitXor {  }
     BitOr {  }
     BitAnd {  }
-    Not {  }
+    Not {
+    }
     Compl {  }
-    UnaryMinus {  }
+    UnaryMinus {
+        ivecN(ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_s_negate(ret, args[0]);
+        vecN(vecN)     => |_ctxt, fb, args, _types, ret| fb.emit_f_negate(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_negate(ret, args[0]);
+    }
 
     //////////////////////////////////////////////////////
     // 8.1. Angle and Trigonometry Functions
     //////////////////////////////////////////////////////
-    acos { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_acos(ret, args[0]); }
-    acosh { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_acosh(ret, args[0]); }
-    asin { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_asin(ret, args[0]); }
-    asinh { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_asinh(ret, args[0]); }
-    atan { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_atan(ret, args[0]);
-           (vecN,vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_atan2(ret, args[0], args[1]); }
-    atanh { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_atanh(ret, args[0]); }
-    cos { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_cos(ret, args[0]); }
-    cosh { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_cosh(ret, args[0]); }
-    sin { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sin(ret, args[0]); }
-    sinh { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sinh(ret, args[0]); }
-    tan { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_tan(ret, args[0]); }
-    tanh { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_tanh(ret, args[0]); }
-    radians { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_radians(ret, args[0]); }
-    degrees { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_degrees(ret, args[0]); }
+    acos {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_acos(ret, args[0]);
+    }
+    acosh {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_acosh(ret, args[0]);
+    }
+    asin {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_asin(ret, args[0]);
+    }
+    asinh {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_asinh(ret, args[0]);
+    }
+    atan {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_atan(ret, args[0]);
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_atan2(ret, args[0], args[1]);
+    }
+    atanh {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_atanh(ret, args[0]);
+    }
+    cos {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_cos(ret, args[0]);
+    }
+    cosh {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_cosh(ret, args[0]);
+    }
+    sin {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sin(ret, args[0]);
+    }
+    sinh {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sinh(ret, args[0]);
+    }
+    tan {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_tan(ret, args[0]);
+    }
+    tanh {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_tanh(ret, args[0]);
+    }
+    radians {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_radians(ret, args[0]);
+    }
+    degrees {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_degrees(ret, args[0]);
+    }
 
     //////////////////////////////////////////////////////
     // 8.2. Exponential Functions
     //////////////////////////////////////////////////////
     pow {
-        (vecN, vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_pow(ret, args[0], args[1]);
+
+        vecN(vecN, vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_pow(ret, args[0], args[1]);
     }
-    exp { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_exp(ret, args[0]); }
-    log { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_log(ret, args[0]); }
-    exp2 { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_exp2(ret, args[0]); }
-    log2 { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_log2(ret, args[0]); }
-    sqrt { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sqrt(ret, args[0]);
-           (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sqrt(ret, args[0]); }
-    inversesqrt { (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_inverse_sqrt(ret, args[0]);
-                  (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_inverse_sqrt(ret, args[0]); }
+    exp {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_exp(ret, args[0]);
+    }
+    log {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_log(ret, args[0]);
+    }
+    exp2 {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_exp2(ret, args[0]);
+    }
+    log2 {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_log2(ret, args[0]);
+    }
+    sqrt {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sqrt(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_sqrt(ret, args[0]);
+    }
+    inversesqrt {
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_inverse_sqrt(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_inverse_sqrt(ret, args[0]);
+    }
 
     //////////////////////////////////////////////////////
     // 8.3. Common Functions
     //////////////////////////////////////////////////////
 
     abs {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_abs(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_abs(ret, args[0]);
-        (ivecN) -> ivecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_s_abs(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_abs(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_abs(ret, args[0]);
+        ivecN(ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_s_abs(ret, args[0]);
     }
     sign {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_sign(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_sign(ret, args[0]);
-        (ivecN) -> ivecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_s_sign(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_sign(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_sign(ret, args[0]);
+        ivecN(ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_s_sign(ret, args[0]);
     }
     floor {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_floor(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_floor(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_floor(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_floor(ret, args[0]);
     }
     trunc {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_trunc(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_trunc(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_trunc(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_trunc(ret, args[0]);
     }
     round {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round(ret, args[0]);
     }
     roundEven {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round_even(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round_even(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round_even(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_round_even(ret, args[0]);
     }
     ceil {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_ceil(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_ceil(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_ceil(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_ceil(ret, args[0]);
     }
     fract {
-        (vecN) -> vecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_fract(ret, args[0]);
-        (dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| fb.emit_glsl_fract(ret, args[0]);
+        vecN(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_fract(ret, args[0]);
+        dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_fract(ret, args[0]);
     }
 
     mod_ {
-        (vecN,vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (vecN,float) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,double) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,float)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,double)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     modf {
-        (vecN) -> modf_result_vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN) -> modf_result_dvecN => |_ctxt, fb, args, _types, ret| todo!();
+        modf_result_vecN(vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        modf_result_dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     min {
-        (vecN,vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (vecN,float) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,double) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,ivecN) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,int) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uvecN) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uint) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,float)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,double)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,int)   => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uint)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     max {
-        (vecN,vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (vecN,float) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN,double) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,ivecN) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN,int) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uvecN) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN,uint) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,float)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN,double)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN,int)   => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN,uint)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     clamp {
-        (vecN, vecN, vecN)      -> vecN  => |_ctxt, fb, args, _types, ret| todo!();
-        (vecN, float, float)    -> vecN  => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN, dvecN)   -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, double, double) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN, ivecN, ivecN)   -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN, int, int)       -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN, uvecN, uvecN)   -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN, uint, uint)     -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN, vecN, vecN)         => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_clamp(ret, args[0], args[1], args[2]);
+        vecN(vecN, float, float)       => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN, dvecN, dvecN)     => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_clamp(ret, args[0], args[1], args[2]);
+        dvecN(dvecN, double, double)   => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(ivecN, ivecN, ivecN)     => |_ctxt, fb, args, _types, ret| fb.emit_glsl_s_clamp(ret, args[0], args[1], args[2]);
+        ivecN(ivecN, int, int)         => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(uvecN, uvecN, uvecN)     => |_ctxt, fb, args, _types, ret| fb.emit_glsl_u_clamp(ret, args[0], args[1], args[2]);
+        uvecN(uvecN, uint, uint)       => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     mix {
-        (vecN, vecN, vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (vecN, vecN, float) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN, dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN, double) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (vecN, vecN, bvecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN, bvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (ivecN, ivecN, bvecN) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
-        (uvecN, uvecN, bvecN) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (bvecN, bvecN, bvecN) -> bvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN, vecN, vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_mix(ret, args[0], args[1], args[2]);
+        vecN(vecN, vecN, float)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN, dvecN, dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_f_mix(ret, args[0], args[1], args[2]);
+        dvecN(dvecN, dvecN, double)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN, vecN, bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_select(ret, args[0], args[1], args[2]);
+        dvecN(dvecN, dvecN, bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_select(ret, args[0], args[1], args[2]);
+        ivecN(ivecN, ivecN, bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_select(ret, args[0], args[1], args[2]);
+        uvecN(uvecN, uvecN, bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_select(ret, args[0], args[1], args[2]);
+        bvecN(bvecN, bvecN, bvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_select(ret, args[0], args[1], args[2]);
     }
 
     step {
-        (vecN, vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (float, vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (double, dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN, vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(float, vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN, dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(double, dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     smoothstep {
-        (vecN, vecN, vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (float, float, vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN, dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (double, double, dvecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN, vecN, vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(float, float, vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN, dvecN, dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(double, double, dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     isnan {
-        (vecN) -> bvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN) -> bvecN => |_ctxt, fb, args, _types, ret| todo!();
+        bvecN(vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        bvecN(dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     isinf {
-        (vecN) -> bvecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN) -> bvecN => |_ctxt, fb, args, _types, ret| todo!();
+        bvecN(vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        bvecN(dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     floatBitsToInt {
-        (highp_vecN) -> ivecN => |_ctxt, fb, args, _types, ret| todo!();
+        ivecN(highp_vecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     floatBitsToUint {
-        (highp_vecN) -> uvecN => |_ctxt, fb, args, _types, ret| todo!();
+        uvecN(highp_vecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     intBitsToFloat {
-        (highp_ivecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(highp_ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     uintBitsToFloat {
-        (uvecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     fma {
-        (vecN, vecN, vecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, dvecN, dvecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN, vecN, vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(dvecN, dvecN, dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     frexp {
-        (highp_vecN) -> frexp_result_highp_vecN => |_ctxt, fb, args, _types, ret| todo!();
-        //(dvecN) -> frexp_result_dvecN => |_ctxt, fb, args, _types, ret| todo!();
+        frexp_result_highp_vecN(highp_vecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        //frexp_result_dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     ldexp {
-        (highp_vecN, highp_ivecN) -> vecN => |_ctxt, fb, args, _types, ret| todo!();
-        (dvecN, ivecN) -> dvecN => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(highp_vecN, highp_ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        dvecN(dvecN, ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     //////////////////////////////////////////////////////
     // 8.5. Geometric Functions
     //////////////////////////////////////////////////////
     length {
-        (vecN) -> float => |_ctxt, fb, args, _types, ret| fb.emit_glsl_length(ret, args[0]);
-        (dvecN) -> double => |_ctxt, fb, args, _types, ret| fb.emit_glsl_length(ret, args[0]);
+        float(vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_length(ret, args[0]);
+        double(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_length(ret, args[0]);
     }
 
     distance {
-        (vecN,vecN) -> float => |_ctxt, fb, args, _types, ret| fb.emit_glsl_distance(ret, args[0], args[1]);
-        (dvecN,dvecN) -> double => |_ctxt, fb, args, _types, ret| fb.emit_glsl_distance(ret, args[0], args[1]);
+        float(vecN,vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_distance(ret, args[0], args[1]);
+        double(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_distance(ret, args[0], args[1]);
     }
 
     // TODO
@@ -1117,24 +1197,24 @@ builtin_operations! {
     // 8.6. Matrix functions
     //////////////////////////////////////////////////////
     matrixCompMult {
-        (mat2x2,mat2x2) -> mat2x2 => lower_matrix_comp_mult;
-        (mat2x3,mat2x3) -> mat2x3 => lower_matrix_comp_mult;
-        (mat2x4,mat2x4) -> mat2x4 => lower_matrix_comp_mult;
-        (mat3x2,mat3x2) -> mat3x2 => lower_matrix_comp_mult;
-        (mat3x3,mat3x3) -> mat3x3 => lower_matrix_comp_mult;
-        (mat3x4,mat3x4) -> mat3x4 => lower_matrix_comp_mult;
-        (mat4x2,mat4x2) -> mat4x2 => lower_matrix_comp_mult;
-        (mat4x3,mat4x3) -> mat4x3 => lower_matrix_comp_mult;
-        (mat4x4,mat4x4) -> mat4x4 => lower_matrix_comp_mult;
-        (dmat2x2,dmat2x2) -> dmat2x2 => lower_matrix_comp_mult;
-        (dmat2x3,dmat2x3) -> dmat2x3 => lower_matrix_comp_mult;
-        (dmat2x4,dmat2x4) -> dmat2x4 => lower_matrix_comp_mult;
-        (dmat3x2,dmat3x2) -> dmat3x2 => lower_matrix_comp_mult;
-        (dmat3x3,dmat3x3) -> dmat3x3 => lower_matrix_comp_mult;
-        (dmat3x4,dmat3x4) -> dmat3x4 => lower_matrix_comp_mult;
-        (dmat4x2,dmat4x2) -> dmat4x2 => lower_matrix_comp_mult;
-        (dmat4x3,dmat4x3) -> dmat4x3 => lower_matrix_comp_mult;
-        (dmat4x4,dmat4x4) -> dmat4x4 => lower_matrix_comp_mult;
+        mat2x2(mat2x2,mat2x2)   => lower_matrix_comp_mult;
+        mat2x3(mat2x3,mat2x3)   => lower_matrix_comp_mult;
+        mat2x4(mat2x4,mat2x4)   => lower_matrix_comp_mult;
+        mat3x2(mat3x2,mat3x2)   => lower_matrix_comp_mult;
+        mat3x3(mat3x3,mat3x3)   => lower_matrix_comp_mult;
+        mat3x4(mat3x4,mat3x4)   => lower_matrix_comp_mult;
+        mat4x2(mat4x2,mat4x2)   => lower_matrix_comp_mult;
+        mat4x3(mat4x3,mat4x3)   => lower_matrix_comp_mult;
+        mat4x4(mat4x4,mat4x4)   => lower_matrix_comp_mult;
+        dmat2x2(dmat2x2,dmat2x2)   => lower_matrix_comp_mult;
+        dmat2x3(dmat2x3,dmat2x3)   => lower_matrix_comp_mult;
+        dmat2x4(dmat2x4,dmat2x4)   => lower_matrix_comp_mult;
+        dmat3x2(dmat3x2,dmat3x2)   => lower_matrix_comp_mult;
+        dmat3x3(dmat3x3,dmat3x3)   => lower_matrix_comp_mult;
+        dmat3x4(dmat3x4,dmat3x4)   => lower_matrix_comp_mult;
+        dmat4x2(dmat4x2,dmat4x2)   => lower_matrix_comp_mult;
+        dmat4x3(dmat4x3,dmat4x3)   => lower_matrix_comp_mult;
+        dmat4x4(dmat4x4,dmat4x4)   => lower_matrix_comp_mult;
     }
 
 
@@ -1143,50 +1223,141 @@ builtin_operations! {
     // (this is not strictly GLSL, since textures & samplers are separated)
     //////////////////////////////////////////////////////
     textureSample {
-        (gtexture1D, sampler, float) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();
-        (gtexture2D, sampler, vec2) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();         // coords
-        (gtexture2D, sampler, vec2, ivec2) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();   // coords,offset
-        (gtexture2DArray, sampler, vec2, int) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index
-        (gtexture2DArray, sampler, vec2, uint) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index
-        (gtexture2DArray, sampler, vec2, int, ivec2) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index,offset
-        (gtexture2DArray, sampler, vec2, uint, ivec2) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index,offset
+        gvec4(gtexture1D, sampler, float)   => |_ctxt, fb, args, _types, ret| todo!();
+        gvec4(gtexture2D, sampler, vec2)   => |_ctxt, fb, args, _types, ret| todo!();         // coords
+        gvec4(gtexture2D, sampler, vec2, ivec2)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,offset
+        gvec4(gtexture2DArray, sampler, vec2, int)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index
+        gvec4(gtexture2DArray, sampler, vec2, uint)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index
+        gvec4(gtexture2DArray, sampler, vec2, int, ivec2)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index,offset
+        gvec4(gtexture2DArray, sampler, vec2, uint, ivec2)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index,offset
 
-        (gtexture3D, sampler, vec3) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();
-        (gtextureCube, sampler, vec3) -> gvec4 => |_ctxt, fb, args, _types, ret| todo!();
+        gvec4(gtexture3D, sampler, vec3)   => |_ctxt, fb, args, _types, ret| todo!();
+        gvec4(gtextureCube, sampler, vec3)   => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     //////////////////////////////////////////////////////
     // 8.12. Image Functions
     //////////////////////////////////////////////////////
     imageSize {
-         (gimage1D)        -> int    => |_ctxt, fb, args, _types, ret| todo!();
-         (gimage2D)        -> ivec2  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimage3D)        -> ivec3  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimageCube)      -> ivec2  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimageCubeArray) -> ivec3  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimage2DArray)   -> ivec3  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimage1DArray)   -> ivec2  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimage2DMS)      -> ivec2  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimage2DMSArray) -> ivec3  => |_ctxt, fb, args, _types, ret| todo!();
-         (gimageBuffer)    -> int    => |_ctxt, fb, args, _types, ret| todo!();
+         int(gimage1D)             => |_ctxt, fb, args, _types, ret| todo!();
+         ivec2(gimage2D)           => |_ctxt, fb, args, _types, ret| todo!();
+         ivec3(gimage3D)           => |_ctxt, fb, args, _types, ret| todo!();
+         ivec2(gimageCube)         => |_ctxt, fb, args, _types, ret| todo!();
+         ivec3(gimageCubeArray)    => |_ctxt, fb, args, _types, ret| todo!();
+         ivec3(gimage2DArray)      => |_ctxt, fb, args, _types, ret| todo!();
+         ivec2(gimage1DArray)      => |_ctxt, fb, args, _types, ret| todo!();
+         ivec2(gimage2DMS)         => |_ctxt, fb, args, _types, ret| todo!();
+         ivec3(gimage2DMSArray)    => |_ctxt, fb, args, _types, ret| todo!();
+         int(gimageBuffer)         => |_ctxt, fb, args, _types, ret| todo!();
     }
 
     //////////////////////////////////////////////////////
     // 5.4. Constructors
     //////////////////////////////////////////////////////
-    vec4 {
-        (float) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        (float,float,float,float) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
 
-        (vec2, float, float) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        (float, vec2, float) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        (float, float, vec2) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+    /* let conversion_rank = match (&m.types[*sigty], &m.types[*argty]) {
+            // Source type => implicitly converts to
+            (TypeData::Scalar(targ), TypeData::Scalar(tsig)) => match (targ, tsig) {
+                (ScalarType::Int, ScalarType::UnsignedInt) => 1,
+                (ScalarType::UnsignedInt | ScalarType::Int, ScalarType::Float) => 2,
+                (ScalarType::Int | ScalarType::UnsignedInt | ScalarType::Float, ScalarType::Double) => 3,
+                _ => {
+                    break;
+                }
+            },
+            (TypeData::Vector(targ, n2), TypeData::Vector(tsig, n1)) if n1 == n2 => match (targ, tsig) {
+                (ScalarType::Int, ScalarType::UnsignedInt) => 1,
+                (ScalarType::UnsignedInt | ScalarType::Int, ScalarType::Float) => 2,
+                (ScalarType::Int | ScalarType::UnsignedInt | ScalarType::Float, ScalarType::Double) => 3,
+                _ => {
+                    break;
+                }
+            },
+            (
+                TypeData::Matrix {
+                    component_type: targ,
+                    rows: r1,
+                    columns: c1,
+                },
+                TypeData::Matrix {
+                    component_type: tsig,
+                    rows: r2,
+                    columns: c2,
+                },
+            ) if r1 == r2 && c1 == c2 => match (targ, tsig) {
+                (ScalarType::Float, ScalarType::Double) => 1,
+                _ => {
+                    break;
+                }
+            },
+            _ => break,
+        };*/
 
-        (vec3, float) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        (float, vec3) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-
-        (vec4) -> vec4 => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+    int {
+        int(uint)   => |_ctxt, fb, args, _types, ret| todo!();
+        int(bool)   => |_ctxt, fb, args, _types, ret| todo!();
+        int(float)   => |_ctxt, fb, args, _types, ret| todo!();
+        int(double)   => |_ctxt, fb, args, _types, ret| todo!();
     }
+
+    uint {
+        // /* implicit */ uint(int)   => |_ctxt, fb, args, _types, ret| fb.emit_bitcast(ret, args[0]);
+        uint(bool)   => |_ctxt, fb, args, _types, ret| todo!();
+        uint(float)   => |_ctxt, fb, args, _types, ret| todo!();
+        uint(double)   => |_ctxt, fb, args, _types, ret| todo!();
+    }
+
+    bool {
+        bool(int)   => |_ctxt, fb, args, _types, ret| todo!();
+        bool(uint)   => |_ctxt, fb, args, _types, ret| todo!();
+        bool(float)   => |_ctxt, fb, args, _types, ret| todo!();
+        bool(double)   => |_ctxt, fb, args, _types, ret| todo!();
+    }
+
+    float {
+        // /* implicit */ float(int)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_s_to_f(ret, args[0]);
+        // /* implicit */ float(uint)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_u_to_f(ret, args[0]);
+        float(bool)   => |_ctxt, fb, args, _types, ret| todo!();
+        float(double)   => |_ctxt, fb, args, _types, ret| todo!();
+    }
+
+    double {
+        // /* implicit */ double(int)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_s_to_f(ret, args[0]);
+        // /* implicit */ double(uint)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_u_to_f(ret, args[0]);
+        // /* implicit */ double(float)   => |_ctxt, fb, args, _types, ret| fb.emit_f_convert(ret, args[0]);
+        double(bool)   => |_ctxt, fb, args, _types, ret| todo!();
+    }
+
+    vec2 {
+        vec2(float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, &[args[0], args[0]]);
+        vec2(float,float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec2(vec2)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
+    }
+
+    vec3 {
+        vec3(float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, &[args[0], args[0], args[0]]);
+        vec3(float,float,float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec3(vec2, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec3(float, vec2)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec3(vec3)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
+        vec3(vec4)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_extract(ret, args[0], &[0,1,2]);
+    }
+
+    vec4 {
+        vec4(float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, &[args[0], args[0], args[0], args[0]]);
+        vec4(float,float,float,float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+
+        vec4(vec2, float, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec4(float, vec2, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec4(float, float, vec2)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+
+        vec4(vec3, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+        vec4(float, vec3)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+
+        vec4(vec4)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
+    }
+
+
 }
 
 /*fn lower_logical_and(
@@ -1225,37 +1396,37 @@ fn lower_matrix_comp_mult(
         2 => {
             let a0 = fb.emit_composite_extract(column_ty, lhs, &[0]);
             let b0 = fb.emit_composite_extract(column_ty, rhs, &[0]);
-            let c0 = fb.emit_f_mul(column_ty, a0, b0);
+            let c0 = fb.emit_f_mul(column_ty, a0.into(), b0.into());
             let a1 = fb.emit_composite_extract(column_ty, lhs, &[1]);
             let b1 = fb.emit_composite_extract(column_ty, rhs, &[1]);
-            let c1 = fb.emit_f_mul(column_ty, a1, b1);
+            let c1 = fb.emit_f_mul(column_ty, a1.into(), b1.into());
             fb.emit_composite_construct(result_type, &[c0.into(), c1.into()])
         }
         3 => {
             let a0 = fb.emit_composite_extract(column_ty, lhs, &[0]);
             let b0 = fb.emit_composite_extract(column_ty, rhs, &[0]);
-            let c0 = fb.emit_f_mul(column_ty, a0, b0);
+            let c0 = fb.emit_f_mul(column_ty, a0.into(), b0.into());
             let a1 = fb.emit_composite_extract(column_ty, lhs, &[1]);
             let b1 = fb.emit_composite_extract(column_ty, rhs, &[1]);
-            let c1 = fb.emit_f_mul(column_ty, a1, b1);
+            let c1 = fb.emit_f_mul(column_ty, a1.into(), b1.into());
             let a2 = fb.emit_composite_extract(column_ty, lhs, &[2]);
             let b2 = fb.emit_composite_extract(column_ty, rhs, &[2]);
-            let c2 = fb.emit_f_mul(column_ty, a2, b2);
+            let c2 = fb.emit_f_mul(column_ty, a2.into(), b2.into());
             fb.emit_composite_construct(result_type, &[c0.into(), c1.into(), c2.into()])
         }
         4 => {
             let a0 = fb.emit_composite_extract(column_ty, lhs, &[0]);
             let b0 = fb.emit_composite_extract(column_ty, rhs, &[0]);
-            let c0 = fb.emit_f_mul(column_ty, a0, b0);
+            let c0 = fb.emit_f_mul(column_ty, a0.into(), b0.into());
             let a1 = fb.emit_composite_extract(column_ty, lhs, &[1]);
             let b1 = fb.emit_composite_extract(column_ty, rhs, &[1]);
-            let c1 = fb.emit_f_mul(column_ty, a1, b1);
+            let c1 = fb.emit_f_mul(column_ty, a1.into(), b1.into());
             let a2 = fb.emit_composite_extract(column_ty, lhs, &[2]);
             let b2 = fb.emit_composite_extract(column_ty, rhs, &[2]);
-            let c2 = fb.emit_f_mul(column_ty, a2, b2);
+            let c2 = fb.emit_f_mul(column_ty, a2.into(), b2.into());
             let a3 = fb.emit_composite_extract(column_ty, lhs, &[3]);
             let b3 = fb.emit_composite_extract(column_ty, rhs, &[3]);
-            let c3 = fb.emit_f_mul(column_ty, a3, b3);
+            let c3 = fb.emit_f_mul(column_ty, a3.into(), b3.into());
             fb.emit_composite_construct(result_type, &[c0.into(), c1.into(), c2.into(), c3.into()])
         }
         _ => panic!("invalid vector size"),

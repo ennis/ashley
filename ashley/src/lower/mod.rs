@@ -15,11 +15,17 @@ use crate::{
     lower::{
         builtin::{register_builtin_types, BuiltinTypes},
         consteval::try_evaluate_constant_expression,
-        typecheck::{check_signature, lower_builtin_operation, typecheck_builtin_operation, BuiltinOperation},
+        typecheck::{
+            check_signature, lower_builtin_operation, register_builtin_operations, typecheck_builtin_operation,
+            BuiltinOperation,
+        },
     },
     syntax::{ast, ast::AstNode, ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxToken},
 };
-use ashley::lower::typecheck::{OverloadCandidate, SignatureMismatch};
+use ashley::{
+    lower::typecheck::{OverloadCandidate, SignatureMismatch},
+    syntax::UnaryOp,
+};
 use codespan_reporting::{term, term::termcolor::WriteColor};
 use rspirv::spirv;
 use smallvec::SmallVec;
@@ -29,7 +35,7 @@ use std::{
     num::ParseFloatError,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use crate::lower::typecheck::register_builtin_operations;
+use spirv::StorageClass;
 
 // REFACTORS:
 // - return Result<TypedValue,XXX> instead of creating error values when they are not needed
@@ -128,7 +134,7 @@ enum DefKind {
     Function(FuncRef),
     Constant(hir::Constant),
     GlobalVariable(hir::GlobalVariable),
-    BlockVariable(hir::Value),
+    BlockVariable(hir::Local),
 }
 
 struct Def {
@@ -214,7 +220,7 @@ impl<'a> Scope<'a> {
         &mut self,
         name: String,
         location: Option<SourceLocation>,
-        var: hir::Value,
+        var: hir::Local,
     ) -> Option<Def> {
         self.variables_and_functions.insert(
             name,
@@ -544,10 +550,17 @@ fn lower_rvalue_bin_expr(
     match typecheck_builtin_operation(fb, &ctxt.types, operation, &[lhs.ty, rhs.ty]) {
         Ok(result) => {
             // emit implicit conversions
-            let _converted_lhs = lower_implicit_conversion(ctxt, fb, lhs, lhs_loc, result.parameter_types[0])?;
-            let _converted_rhs = lower_implicit_conversion(ctxt, fb, rhs, rhs_loc, result.parameter_types[1])?;
-            todo!("lower builtin op")
-            //lower_builtin_operation(ctxt, b, operation, converted_lhs, converted_rhs)
+            let converted_lhs = lower_implicit_conversion(ctxt, fb, lhs, lhs_loc, result.parameter_types[0])?;
+            let converted_rhs = lower_implicit_conversion(ctxt, fb, rhs, rhs_loc, result.parameter_types[1])?;
+            Ok(lower_builtin_operation(
+                ctxt,
+                fb,
+                operation,
+                result.index,
+                &[converted_lhs.val, converted_rhs.val],
+                &[result.parameter_types[0], result.parameter_types[1]],
+                result.result_type,
+            ))
         }
         Err(_) => {
             // TODO: show operand types and expected signatures
@@ -566,6 +579,49 @@ fn lower_rvalue_bin_expr(
 fn error_value(fb: &mut FunctionBuilder) -> TypedValue {
     let ty = fb.ty_unknown();
     TypedValue::new(fb.emit_undef(ty), ty)
+}
+
+fn lower_prefix_expr(
+    ctxt: &mut LowerCtxt,
+    fb: &mut FunctionBuilder,
+    prefix_expr: ast::PrefixExpr,
+    scope: &Scope,
+) -> Result<TypedValue, LowerError> {
+    let (op_token, ast_operator) = prefix_expr.op_details().ok_or(LowerError)?;
+
+    let operation = match ast_operator {
+        UnaryOp::Not => BuiltinOperation::Not,
+        UnaryOp::Neg => BuiltinOperation::UnaryMinus,
+    };
+
+    let ast_expr = prefix_expr.expr().ok_or(LowerError)?;
+    let loc = ast_expr.source_location();
+    let operand = lower_expr_opt_non_void(ctxt, fb, Some(ast_expr), scope)?;
+
+    match typecheck_builtin_operation(fb, &ctxt.types, operation, &[operand.ty]) {
+        Ok(result) => {
+            let converted_operand = lower_implicit_conversion(ctxt, fb, operand, loc, operand.ty)?;
+            Ok(lower_builtin_operation(
+                ctxt,
+                fb,
+                operation,
+                result.index,
+                &[converted_operand.val],
+                &[converted_operand.ty],
+                result.result_type,
+            ))
+        }
+        Err(_) => {
+            ctxt.diag
+                .error(format!(
+                    "invalid operand types to unary operation `{}`",
+                    op_token.text()
+                ))
+                .primary_label(op_token, "")
+                .emit();
+            Err(LowerError)
+        }
+    }
 }
 
 fn lower_bin_expr(
@@ -639,7 +695,7 @@ fn lower_bin_expr(
             // emit the arithmetic part of the assignment
             // load lhs
             // rhs = lhs + rhs
-            let lhs = fb.emit_load(deref_ty, place_ptr, None);
+            let lhs = fb.emit_load(deref_ty, place_ptr.into(), None);
             rhs = lower_rvalue_bin_expr(
                 ctxt,
                 fb,
@@ -654,7 +710,7 @@ fn lower_bin_expr(
         // implicit conversion to lhs type of assignment
         rhs = lower_implicit_conversion(ctxt, fb, rhs, ast_rhs.source_location(), deref_ty)?;
         // emit assignment
-        fb.emit_store(place_ptr, rhs.val, None);
+        fb.emit_store(place_ptr.into(), rhs.val, None);
         // this expression produces no value
         Ok(None)
     } else if let Some(operation) = operation {
@@ -818,11 +874,12 @@ fn lower_place_expr(
                         DefKind::BlockVariable(var) => {
                             eprintln!("**TODO** check block variables as place expressions");
                             // already of pointer type
-                            let ty = fb.ty(var);
+                            let ty = fb.local_type(var);
+                            let ptr_ty = fb.pointer_type(ty, StorageClass::Function);
                             Ok(Place {
                                 base: var.into(),
                                 indices: vec![],
-                                ptr_ty: ty,
+                                ptr_ty,
                             })
                         }
                         _ => unreachable!(),
@@ -966,14 +1023,21 @@ fn lower_function_call_expr(
         }
     }
 
-    let result = match func_ref {
-        FuncRef::User(func) => fb.emit_function_call(result_type, func, &args),
-        FuncRef::Builtin(builtin) => {
-            lower_builtin_operation(ctxt, fb, builtin, overload_index, &args, &arg_types, result_type)
-        }
-    };
-
-    Ok(Some(TypedValue::new(result, result_type)))
+    match func_ref {
+        FuncRef::User(func) => Ok(Some(TypedValue::new(
+            fb.emit_function_call(result_type, func.into(), &args),
+            result_type,
+        ))),
+        FuncRef::Builtin(builtin) => Ok(Some(lower_builtin_operation(
+            ctxt,
+            fb,
+            builtin,
+            overload_index,
+            &args,
+            &arg_types,
+            result_type,
+        ))),
+    }
 }
 
 /// Generates IR for an expression node.
@@ -999,9 +1063,8 @@ fn lower_expr(
                 .ptr_ty
                 .pointee_type(fb)
                 .expect("lower_place_expr did not produce a pointer value");
-            let ptr_ty = fb.pointer_type(place.ptr_ty, storage_class);
-            let proj = fb.access_chain(ptr_ty, place.base, &place.indices);
-            let val = fb.emit_load(ty, proj, None);
+            let proj = fb.access_chain(place.ptr_ty, place.base, &place.indices);
+            let val = fb.emit_load(ty, proj.into(), None);
             Ok(Some(TypedValue::new(val, ty)))
         }
         ast::Expr::ParenExpr(expr) => lower_expr_opt(ctxt, fb, expr.expr(), scope),
@@ -1053,9 +1116,7 @@ fn lower_expr(
         ast::Expr::ArrayExpr(_) => {
             todo!("array expressions")
         }
-        ast::Expr::PrefixExpr(_) => {
-            todo!("unary expr")
-        }
+        ast::Expr::PrefixExpr(prefix_expr) => lower_prefix_expr(ctxt, fb, prefix_expr, scope).map(Some),
     }
 }
 
@@ -1085,7 +1146,7 @@ fn lower_type(ctxt: &mut LowerCtxt, m: &mut hir::Module, ty: ast::Type, scope: &
                     _ => unreachable!(),
                 }
             } else {
-                ctxt.diag.cannot_find_type(ident.text(), tyref.source_location());
+                ctxt.diag.cannot_find_type(ident.text(), tyref.source_location()).emit();
                 m.error_type()
             }
         }
@@ -1167,10 +1228,11 @@ fn lower_stmt(ctxt: &mut LowerCtxt, b: &mut FunctionBuilder, stmt: ast::Stmt, sc
         ast::Stmt::DiscardStmt(_stmt) => true,
         ast::Stmt::LocalVariable(v) => {
             let ty = lower_type_opt(ctxt, b, v.ty(), scope);
-            let ptr_ty = b.pointer_type(ty, spirv::StorageClass::Function);
+            //let ptr_ty = b.pointer_type(ty, spirv::StorageClass::Function);
+
             let initializer = if let Some(initializer) = v.initializer() {
                 match lower_expr_opt_non_void(ctxt, b, initializer.expr(), scope) {
-                    Ok(val) => {Some(val.val)}
+                    Ok(val) => Some(val.val),
                     Err(_) => {
                         // the error is reported in lower_expr_opt_non_void
                         None
@@ -1180,7 +1242,11 @@ fn lower_stmt(ctxt: &mut LowerCtxt, b: &mut FunctionBuilder, stmt: ast::Stmt, sc
                 None
             };
 
-            let id = b.emit_variable(ptr_ty, spirv::StorageClass::Function, initializer);
+            let name = ident_to_string_opt(v.name());
+            let id = b.add_local(ty, &name);
+            if let Some(initializer) = initializer {
+                b.emit_store(id.into(), initializer, None);
+            }
             scope.define_block_variable(ident_to_string_opt(v.name()), Some(v.source_location()), id);
             false
         }

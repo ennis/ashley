@@ -1186,14 +1186,29 @@ A: As much as possible, avoid polluting the result SPIR-V too much; if we can av
 - Function calls take `Function`s instead of IdRefs
 - infer result types (function calls, arithmetic ops)
   - no implicit conversions though
+- easy-to-use, low syntactical overhead
+  - EDSL-like API?
+
+Instead of another API, maybe add functions with result type inference?
+How to generate that?
+
+```
+let v = b.clamp(v1,v2);
+```
+
 
 # TODOs
+- hir/function: local variables in FunctionData 
+- lower: 
+- lower: let-binding type inference
 - diag: fix `impl WriteColor + 'static` ugliness
 - lower: block termination
+- lower/typecheck: implicit conversions in the builtin table (constructor forms)
 - hir: remove `Cow` in TypeData, as it's pretty much unusable as hashmap keys
 - syntax: automatic whitespace consumption
 - syntax: nth(2) lookahead
 - syntax: method call syntax 
+- lower: for places, figure out whether to prefer the deref type or the pointer type  
 
 # Automatic whitespace in the syntax
 - eat whitespace before `start_node`, `checkpoint`, `expect`
@@ -1201,3 +1216,36 @@ A: As much as possible, avoid polluting the result SPIR-V too much; if we can av
 
 # Function places
 There must be a separate lower_expr function for function calls, since in our IR functions are not first-class values.
+
+# Refactor: typed AST?
+Instead of going directly from untyped AST to HIR, first create a typed, resolved, immutable AST:
+- has source locations
+- implicit conversions are made explicit
+- overloads are resolved
+- values can be void
+- no SSA ids, expression tree instead (generic operations)
+- types are not converted to IDs
+- pointers to the syntax tree
+
+Benefits: more readable syntax when checking lowering rules. 
+
+
+# GLSL instead?
+Rewrite the parser so that it's GLSL-like instead.
+Things to change:
+- let bindings
+- functions
+- globals
+- need lookahead
+- type symbol table
+
+Do not implement:
+- multiple declarations
+- array declarators
+
+No change:
+- as much as possible, keep the AST structure unchanged
+
+Why? 
+- people already familiar with GLSL, plus we're already using GLSL semantics
+- bigger database of examples

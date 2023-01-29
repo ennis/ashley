@@ -39,7 +39,7 @@ impl<T: Eq + Hash, Id: Clone + ArenaBehavior> UniqueArena<T, Id> {
     pub fn get_index_of<U>(&self, value: &U) -> Option<Id::Id>
     where
         T: Borrow<U>,
-        U: Eq + Hash,
+        U: Eq + Hash + ?Sized,
     {
         self.items.get_index_of(value).map(|e| Id::new_id(0, e))
     }

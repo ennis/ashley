@@ -1,6 +1,6 @@
 use crate::{
     diagnostic::{AsSourceLocation, SourceLocation},
-    syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken},
+    syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken, UnaryOp},
     T,
 };
 use std::num::{ParseFloatError, ParseIntError};
@@ -354,6 +354,26 @@ impl LitExpr {
 
 //--------------------------------------------------------------------------------------------------
 
+impl PrefixExpr {
+    pub fn op_details(&self) -> Option<(SyntaxToken, UnaryOp)> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find_map(|c| {
+                let op = match c.kind() {
+                    T![-] => UnaryOp::Neg,
+                    T![!] => UnaryOp::Not,
+                    _ => return None,
+                };
+                Some((c, op))
+            })
+    }
+
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax.children().filter_map(Expr::cast).nth(0)
+    }
+}
+
 impl BinExpr {
     pub fn lhs(&self) -> Option<Expr> {
         self.syntax.children().filter_map(Expr::cast).nth(0)
@@ -368,42 +388,42 @@ impl BinExpr {
             .children_with_tokens()
             .filter_map(|it| it.into_token())
             .find_map(|c| {
-                #[rustfmt::skip] let bin_op = match c.kind() {
-                T![||] => BinaryOp::LogicOp(LogicOp::Or),
-                T![&&] => BinaryOp::LogicOp(LogicOp::And),
+                let bin_op = match c.kind() {
+                    T![||] => BinaryOp::LogicOp(LogicOp::Or),
+                    T![&&] => BinaryOp::LogicOp(LogicOp::And),
 
-                T![==] => BinaryOp::CmpOp(CmpOp::Eq),
-                T![!=] => BinaryOp::CmpOp(CmpOp::Ne),
-                T![<=] => BinaryOp::CmpOp(CmpOp::Le),
-                T![>=] => BinaryOp::CmpOp(CmpOp::Ge),
-                T![<]  => BinaryOp::CmpOp(CmpOp::Lt),
-                T![>]  => BinaryOp::CmpOp(CmpOp::Gt),
+                    T![==] => BinaryOp::CmpOp(CmpOp::Eq),
+                    T![!=] => BinaryOp::CmpOp(CmpOp::Ne),
+                    T![<=] => BinaryOp::CmpOp(CmpOp::Le),
+                    T![>=] => BinaryOp::CmpOp(CmpOp::Ge),
+                    T![<] => BinaryOp::CmpOp(CmpOp::Lt),
+                    T![>] => BinaryOp::CmpOp(CmpOp::Gt),
 
-                T![+]  => BinaryOp::ArithOp(ArithOp::Add),
-                T![*]  => BinaryOp::ArithOp(ArithOp::Mul),
-                T![-]  => BinaryOp::ArithOp(ArithOp::Sub),
-                T![/]  => BinaryOp::ArithOp(ArithOp::Div),
-                T![%]  => BinaryOp::ArithOp(ArithOp::Rem),
-                T![<<] => BinaryOp::ArithOp(ArithOp::Shl),
-                T![>>] => BinaryOp::ArithOp(ArithOp::Shr),
-                T![^]  => BinaryOp::ArithOp(ArithOp::BitXor),
-                T![|]  => BinaryOp::ArithOp(ArithOp::BitOr),
-                T![&]  => BinaryOp::ArithOp(ArithOp::BitAnd),
+                    T![+] => BinaryOp::ArithOp(ArithOp::Add),
+                    T![*] => BinaryOp::ArithOp(ArithOp::Mul),
+                    T![-] => BinaryOp::ArithOp(ArithOp::Sub),
+                    T![/] => BinaryOp::ArithOp(ArithOp::Div),
+                    T![%] => BinaryOp::ArithOp(ArithOp::Rem),
+                    T![<<] => BinaryOp::ArithOp(ArithOp::Shl),
+                    T![>>] => BinaryOp::ArithOp(ArithOp::Shr),
+                    T![^] => BinaryOp::ArithOp(ArithOp::BitXor),
+                    T![|] => BinaryOp::ArithOp(ArithOp::BitOr),
+                    T![&] => BinaryOp::ArithOp(ArithOp::BitAnd),
 
-                T![=]   => BinaryOp::Assignment(None),
-                T![+=]  => BinaryOp::Assignment(Some(ArithOp::Add)),
-                T![*=]  => BinaryOp::Assignment(Some(ArithOp::Mul)),
-                T![-=]  => BinaryOp::Assignment(Some(ArithOp::Sub)),
-                T![/=]  => BinaryOp::Assignment(Some(ArithOp::Div)),
-                T![%=]  => BinaryOp::Assignment(Some(ArithOp::Rem)),
-                T![<<=] => BinaryOp::Assignment(Some(ArithOp::Shl)),
-                T![>>=] => BinaryOp::Assignment(Some(ArithOp::Shr)),
-                T![^=]  => BinaryOp::Assignment(Some(ArithOp::BitXor)),
-                T![|=]  => BinaryOp::Assignment(Some(ArithOp::BitOr)),
-                T![&=]  => BinaryOp::Assignment(Some(ArithOp::BitAnd)),
+                    T![=] => BinaryOp::Assignment(None),
+                    T![+=] => BinaryOp::Assignment(Some(ArithOp::Add)),
+                    T![*=] => BinaryOp::Assignment(Some(ArithOp::Mul)),
+                    T![-=] => BinaryOp::Assignment(Some(ArithOp::Sub)),
+                    T![/=] => BinaryOp::Assignment(Some(ArithOp::Div)),
+                    T![%=] => BinaryOp::Assignment(Some(ArithOp::Rem)),
+                    T![<<=] => BinaryOp::Assignment(Some(ArithOp::Shl)),
+                    T![>>=] => BinaryOp::Assignment(Some(ArithOp::Shr)),
+                    T![^=] => BinaryOp::Assignment(Some(ArithOp::BitXor)),
+                    T![|=] => BinaryOp::Assignment(Some(ArithOp::BitOr)),
+                    T![&=] => BinaryOp::Assignment(Some(ArithOp::BitAnd)),
 
-                _ => return None,
-            };
+                    _ => return None,
+                };
                 Some((c, bin_op))
             })
     }

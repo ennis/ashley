@@ -2,8 +2,8 @@ use crate::{
     hir,
     hir::{
         types::{ImageSampling, ImageType, ScalarType, StructType},
-        Block, Constant, ConstantData, Function, GlobalVariable, IdRef, Module, Operand, TerminatingInstruction, Type,
-        TypeData, Value, ValueOrConstant,
+        Block, Constant, ConstantData, ExtInstSet, Function, GlobalVariable, IdRef, Local, Module, Operand,
+        TerminatingInstruction, Type, TypeData, Value, ValueOrConstant,
     },
     utils::IdMap,
 };
@@ -13,9 +13,11 @@ use rspirv::{
     spirv,
     spirv::{AddressingModel, Capability, LinkageType, MemoryModel, Word},
 };
+use spirv::StorageClass;
 use std::collections::HashMap;
 use tracing::error;
 
+type ExtInstSetMap = IdMap<ExtInstSet, Word>;
 type TypeMap = IdMap<Type, Word>;
 type ConstantMap = IdMap<Constant, Word>;
 type FunctionMap = IdMap<Function, Word>;
@@ -25,6 +27,7 @@ struct Ctxt<'a> {
     module: &'a Module,
     builder: &'a mut rspirv::dr::Builder,
     type_map: TypeMap,
+    ext_inst_sets: ExtInstSetMap,
     constant_map: ConstantMap,
     function_map: FunctionMap,
     global_map: GlobalMap,
@@ -116,7 +119,7 @@ impl<'a> Ctxt<'a> {
             }
         };
 
-        self.constant_map.insert(constant,ssa_id);
+        self.constant_map.insert(constant, ssa_id);
         ssa_id
     }
 
@@ -230,13 +233,15 @@ impl<'a> Ctxt<'a> {
             _ => panic!("invalid function type"),
         };
         let result_type = self.emit_type_recursive(function_type.return_type);
-        let id = self
+        let function_id = self
             .builder
             .begin_function(result_type, None, fdata.function_control, function_type_id)
             .unwrap();
+        self.builder.name(function_id, &fdata.name);
 
         let mut labels = IdMap::with_capacity(fdata.blocks.len());
         let mut values = IdMap::with_capacity(fdata.values.len());
+        let mut locals = IdMap::with_capacity(fdata.locals.len());
 
         for (arg, ty) in fdata.arguments.iter().zip(function_type.arg_types.iter()) {
             let arg_ty = self.emit_type_recursive(*ty);
@@ -245,6 +250,14 @@ impl<'a> Ctxt<'a> {
 
         for (b, _) in fdata.blocks.iter() {
             labels.insert(b, self.builder.begin_block(None).unwrap());
+        }
+
+        for (local, ldata) in fdata.locals.iter() {
+            let ty = self.emit_type_recursive(ldata.ty);
+            let ptr_ty = self.builder.type_pointer(None, StorageClass::Function, ty);
+            let id = self.builder.variable(ptr_ty, None, StorageClass::Function, None);
+            self.builder.name(id, &ldata.name);
+            locals.insert(local, id);
         }
 
         for (ib, (_, bdata)) in fdata.blocks.iter().enumerate() {
@@ -264,7 +277,7 @@ impl<'a> Ctxt<'a> {
 
                 let mut operands = Vec::with_capacity(inst.operands.len());
                 for op in inst.operands.iter() {
-                    operands.push(self.operand_to_rspirv(op, &values, &labels));
+                    operands.push(self.operand_to_rspirv(op, &values, &locals, &labels));
                 }
                 let spvinst = rspirv::dr::Instruction::new(inst.opcode, result_type, result_id, operands);
                 self.builder.insert_into_block(InsertPoint::End, spvinst).unwrap();
@@ -305,6 +318,7 @@ impl<'a> Ctxt<'a> {
                             IdRef::Value(v) => values[*v],
                             IdRef::Constant(c) => self.emit_constant_recursive(*c),
                             IdRef::Global(g) => self.emit_global(*g),
+                            IdRef::Local(l) => locals[*l],
                             IdRef::Function(_) => panic!("invalid return value"),
                         };
                         self.builder.ret_value(id).unwrap();
@@ -321,10 +335,10 @@ impl<'a> Ctxt<'a> {
 
         self.builder.end_function().unwrap();
         if let Some(linkage) = fdata.linkage {
-            self.emit_linkage_decoration(id, &fdata.name, linkage);
+            self.emit_linkage_decoration(function_id, &fdata.name, linkage);
         }
-        self.function_map.insert(function, id);
-        id
+        self.function_map.insert(function, function_id);
+        function_id
     }
 
     fn emit_global(&mut self, g: GlobalVariable) -> Word {
@@ -334,10 +348,12 @@ impl<'a> Ctxt<'a> {
 
         let gdata = &self.module.globals[g];
         let ty = self.emit_type_recursive(gdata.ty);
-        let id = self.builder.variable(ty, None, gdata.storage_class, None); // TODO initializers
+        let ptr_ty = self.builder.type_pointer(None, gdata.storage_class, ty);
+        let id = self.builder.variable(ptr_ty, None, gdata.storage_class, None); // TODO initializers
         if let Some(linkage) = gdata.linkage {
             self.emit_linkage_decoration(id, &gdata.name, linkage);
         }
+        self.builder.name(id, &gdata.name);
         self.global_map.insert(g, id);
         id
     }
@@ -346,9 +362,11 @@ impl<'a> Ctxt<'a> {
         &mut self,
         op: &Operand,
         values: &IdMap<Value, Word>,
+        locals: &IdMap<Local, Word>,
         labels: &IdMap<Block, Word>,
     ) -> rspirv::dr::Operand {
         match *op {
+            Operand::LocalRef(l) => rspirv::dr::Operand::IdRef(locals[l]),
             Operand::ConstantRef(constant) => rspirv::dr::Operand::IdRef(self.emit_constant_recursive(constant)),
             Operand::LiteralExtInstInteger(i) => rspirv::dr::Operand::LiteralExtInstInteger(i),
             Operand::FunctionRef(function) => rspirv::dr::Operand::IdRef(self.emit_function(function)),
@@ -398,6 +416,7 @@ impl<'a> Ctxt<'a> {
             Operand::LiteralString(ref v) => rspirv::dr::Operand::LiteralString(v.clone()),
             Operand::ImageOperands(v) => rspirv::dr::Operand::ImageOperands(v),
             Operand::PackedVectorFormat(v) => rspirv::dr::Operand::LiteralInt32(v as u32),
+            Operand::ExtInstSet(s) => rspirv::dr::Operand::LiteralExtInstInteger(self.ext_inst_sets[s]),
         }
     }
 }
@@ -405,16 +424,21 @@ impl<'a> Ctxt<'a> {
 pub fn write_spirv(module: &Module) -> Vec<u32> {
     let mut builder = rspirv::dr::Builder::new();
 
-    builder.set_version(1, 6);
+    builder.set_version(1, 5);
     builder.capability(Capability::Linkage);
     builder.capability(Capability::Shader);
-    builder.ext_inst_import("GLSL.std.450");
+
+    let mut ext_inst_sets = IdMap::with_capacity(module.ext_inst_sets.len());
+    for (id, name) in module.ext_inst_sets.iter() {
+        ext_inst_sets.insert(id, builder.ext_inst_import(name));
+    }
     builder.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
 
     let mut ctxt = Ctxt {
         module,
         builder: &mut builder,
         type_map: TypeMap::with_capacity(module.types.len()),
+        ext_inst_sets,
         constant_map: ConstantMap::with_capacity(module.constants.len()),
         function_map: FunctionMap::with_capacity(module.functions.len()),
         global_map: GlobalMap::with_capacity(module.globals.len()),

@@ -103,6 +103,7 @@ const EXCLUDED_INSTRUCTIONS: &[&str] = &[
     "OpGroupLogicalXorKHR",
     "OpGroupMemberDecorate",
     "OpPhi",
+    "OpVariable"
 ];
 
 //--------------------------------------------------------------------------------------------------
@@ -542,7 +543,8 @@ fn generate_instruction(inst: &Instruction, ext: Option<(&str, &str)>) -> proc_m
             }
             OperandKind::IdRef => match op.quantifier {
                 None | Some(Quantifier::ZeroOrOne) => {
-                    quote!(impl IntoIdRef)
+                    // it used to be `impl IntoIdRef` but this has changed; now it's the same
+                    quote!(IdRef)
                 }
                 Some(Quantifier::ZeroOrMore) => {
                     quote!(IdRef)
@@ -569,13 +571,13 @@ fn generate_instruction(inst: &Instruction, ext: Option<(&str, &str)>) -> proc_m
                 quote!(u32)
             }
             OperandKind::PairLiteralIntegerIdRef => {
-                quote!((i32, Value))
+                quote!((i32, IdRef))
             }
             OperandKind::PairIdRefLiteralInteger => {
-                quote!((Value, i32))
+                quote!((IdRef, i32))
             }
             OperandKind::PairIdRefIdRef => {
-                quote!((Value, Value))
+                quote!((IdRef, IdRef))
             }
             _ => {
                 panic!("unsupported operand kind")

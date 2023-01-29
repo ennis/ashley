@@ -85,6 +85,9 @@ id_types! {
     /// Handle to a HIR function.
     pub struct Function;
 
+    /// Handle to a function local.
+    pub struct Local;
+
     /// Interned handle to a HIR type.
     pub struct Type;
 
@@ -98,7 +101,7 @@ id_types! {
     pub struct Block;
 
     /// ID representing an imported extended instruction set.
-    pub struct ExtendedInstructionSetId;
+    pub struct ExtInstSet;
 }
 
 impl Type {
@@ -142,6 +145,8 @@ pub enum IdRef {
     Value(Value),
     /// Function
     Function(Function),
+    /// Local variable
+    Local(Local),
     /// Constant
     Constant(Constant),
     /// Global variable
@@ -149,14 +154,14 @@ pub enum IdRef {
 }
 
 impl IdRef {
-    pub fn to_value_or_constant(&self) -> Option<ValueOrConstant> {
+    /*pub fn to_value_or_constant(&self) -> Option<ValueOrConstant> {
         match *self {
             IdRef::Value(v) => Some(ValueOrConstant::Value(v)),
             IdRef::Constant(v) => Some(ValueOrConstant::Constant(v)),
             IdRef::Function(_) => None,
             IdRef::Global(_) => None,
         }
-    }
+    }*/
 
     pub fn to_function(&self) -> Option<Function> {
         match *self {
@@ -190,6 +195,12 @@ impl From<Function> for IdRef {
     }
 }
 
+impl From<Local> for IdRef {
+    fn from(local: Local) -> Self {
+        IdRef::Local(local)
+    }
+}
+
 //--------------------------------------------------------------------------------------------------
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -207,7 +218,9 @@ pub enum Operand {
     FunctionRef(Function),
     ValueRef(Value),
     BlockRef(Block),
+    LocalRef(Local),
     TypeRef(Type),
+    ExtInstSet(ExtInstSet),
 
     FPFastMathMode(spirv::FPFastMathMode),
     SelectionControl(spirv::SelectionControl),
@@ -321,9 +334,10 @@ impl From<IdRef> for Operand {
     fn from(value: IdRef) -> Self {
         match value {
             IdRef::Value(v) => Operand::ValueRef(v),
-            IdRef::Constant(v) => Operand::ConstantRef(v),
-            IdRef::Global(v) => Operand::GlobalRef(v),
-            IdRef::Function(v) => Operand::FunctionRef(v),
+            IdRef::Constant(c) => Operand::ConstantRef(c),
+            IdRef::Global(g) => Operand::GlobalRef(g),
+            IdRef::Function(f) => Operand::FunctionRef(f),
+            IdRef::Local(l) => Operand::LocalRef(l)
         }
     }
 }
@@ -416,6 +430,13 @@ pub struct FunctionParameter {
     pub ty: Type,
 }
 
+
+#[derive(Clone, Debug)]
+pub struct LocalData {
+    pub name: String,
+    pub ty: Type,
+}
+
 /// HIR functions or function declarations.
 #[derive(Clone, Debug)]
 pub struct FunctionData {
@@ -425,6 +446,9 @@ pub struct FunctionData {
     pub name: String,
     pub linkage: Option<spirv::LinkageType>,
     pub values: Arena<ValueData, Value>,
+    // TODO should they be block-local? There are instructions to specify their lifetime within a function (OpLifetimeStart/Stop)
+    // but not sure if they can be used in shaders
+    pub locals: Arena<LocalData, Local>,
     pub blocks: Arena<BlockData, Block>,
     pub entry_block: Option<Block>,
     pub function_control: spirv::FunctionControl,
@@ -441,6 +465,7 @@ impl FunctionData {
     ) -> (FunctionData, Block) {
         let mut blocks = Arena::new();
         let mut values = Arena::new();
+        let mut locals = Arena::new();
 
         let arguments: Vec<_> = parameters
             .iter()
@@ -457,6 +482,7 @@ impl FunctionData {
                 name,
                 linkage,
                 values,
+                locals,
                 blocks,
                 entry_block: Some(entry_block),
                 function_control,
@@ -479,6 +505,7 @@ impl FunctionData {
             function_type,
             name,
             linkage,
+            locals: Default::default(),
             values: Default::default(),
             blocks: Default::default(),
             entry_block: None,
@@ -604,6 +631,7 @@ macro_rules! const_vec_builder {
 pub struct Module {
     pub(crate) types: UniqueArena<TypeData<'static>, Type>,
     pub(crate) constants: UniqueArena<ConstantData, Constant>,
+    pub ext_inst_sets: UniqueArena<String, ExtInstSet>,
     pub functions: id_arena::Arena<FunctionData, Function>,
     pub globals: id_arena::Arena<GlobalVariableData, GlobalVariable>,
     ty_unknown: Type,
@@ -620,6 +648,7 @@ impl Module {
     pub fn new() -> Module {
         let mut types = UniqueArena::new();
         let constants = UniqueArena::new();
+        let extended_instruction_sets = UniqueArena::new();
         let functions = Default::default();
         let globals = Default::default();
         let (ty_unknown, _) = types.insert(TypeData::Unknown);
@@ -628,6 +657,7 @@ impl Module {
         Module {
             types,
             constants,
+            ext_inst_sets: extended_instruction_sets,
             functions,
             globals,
             ty_unknown,
@@ -644,6 +674,14 @@ impl Module {
             id
         } else {
             self.types.insert(ty.into_static()).0
+        }
+    }
+
+    pub fn import_extended_instruction_set(&mut self, set: &str) -> ExtInstSet {
+        if let Some(id) = self.ext_inst_sets.get_index_of(set) {
+            id
+        } else {
+            self.ext_inst_sets.insert(set.to_string()).0
         }
     }
 

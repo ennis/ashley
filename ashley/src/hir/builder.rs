@@ -1,16 +1,17 @@
 use crate::{
     diagnostic::Diagnostics,
     hir::{
-        constant::ConstantData, types::ScalarType, Block, BlockData, Constant, ExtendedInstructionSetId, Function,
-        FunctionData, FunctionParameter, GlobalVariable, IdRef, InstructionData, Module, Operand, PackedVectorFormat,
-        TerminatingInstruction, Type, TypeData, Value, ValueData, ValueOrConstant,
+        constant::ConstantData, types::ScalarType, Block, BlockData, Constant, ExtInstSet, Function, FunctionData,
+        FunctionParameter, GlobalVariable, IdRef, InstructionData, Local, LocalData, Module, Operand,
+        PackedVectorFormat, TerminatingInstruction, Type, TypeData, Value, ValueData, ValueOrConstant,
     },
 };
 use bumpalo::Bump;
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::{grammar::ExtendedInstruction, spirv};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
+use spirv::Op;
 use std::{
     collections::HashMap,
     fmt,
@@ -33,8 +34,12 @@ impl InstBuilder {
         }
     }
 
-    fn new_ext_inst(set: ExtendedInstructionSetId, opcode: spirv::Word) -> InstBuilder {
-        todo!()
+    fn new_ext_inst(set: ExtInstSet, opcode: spirv::Word) -> InstBuilder {
+        InstBuilder {
+            opcode: Op::ExtInst,
+            result_type: None,
+            operands: smallvec![Operand::ExtInstSet(set), Operand::LiteralExtInstInteger(opcode)],
+        }
     }
 
     fn set_result(&mut self, result_type: Type) {
@@ -178,14 +183,6 @@ impl IntoOperand for ImageOperands {
     }
 }
 
-/// Trait for types that refer to an object ID.
-pub trait IntoIdRef: Into<Operand> {}
-
-impl IntoIdRef for Constant {}
-impl IntoIdRef for Value {}
-impl IntoIdRef for GlobalVariable {}
-impl IntoIdRef for Function {}
-impl IntoIdRef for IdRef {}
 
 /// Used to build a HIR function.
 
@@ -240,8 +237,8 @@ impl<'a> FunctionBuilder<'a> {
         result
     }
 
-    pub fn import_extended_instruction_set(&mut self, _set: &str) -> ExtendedInstructionSetId {
-        todo!()
+    pub fn add_local(&mut self, ty: Type, name: impl Into<String>) -> Local {
+        self.function.locals.alloc(LocalData { name: name.into(), ty })
     }
 
     /// Enters a new block.
@@ -270,7 +267,7 @@ impl<'a> FunctionBuilder<'a> {
         self.append_inst(i).unwrap()
     }
 
-    pub fn access_chain(&mut self, result_type: Type, base: impl IntoIdRef, indices: &[IdRef]) -> Value {
+    pub fn access_chain(&mut self, result_type: Type, base: IdRef, indices: &[IdRef]) -> Value {
         let mut i = InstBuilder::new(spirv::Op::AccessChain);
         i.result_type = Some(result_type);
         i.operands.push(base.into());
@@ -281,8 +278,13 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     /// Returns the type of the specified value.
-    pub fn ty(&mut self, v: Value) -> Type {
+    pub fn ty(&self, v: Value) -> Type {
         self.function.values[v].ty
+    }
+
+    /// Returns the type of the specified local variable.
+    pub fn local_type(&self, l: Local) -> Type {
+        self.function.locals[l].ty
     }
 
     /// Switch to the specified block in the current function.
@@ -301,7 +303,7 @@ impl<'a> FunctionBuilder<'a> {
     }
 
     // TODO: fetch result type from function?
-    pub fn emit_function_call(&mut self, result_type: Type, function: impl IntoIdRef, args: &[IdRef]) -> Value {
+    pub fn emit_function_call(&mut self, result_type: Type, function: IdRef, args: &[IdRef]) -> Value {
         let mut inst_builder = InstBuilder::new(spirv::Op::FunctionCall);
         inst_builder.set_result(result_type);
         inst_builder.operands.push(function.into());
@@ -311,7 +313,7 @@ impl<'a> FunctionBuilder<'a> {
         self.append_inst(inst_builder).unwrap()
     }
 
-    pub fn emit_switch(&mut self, selector: impl IntoIdRef, default: impl IntoIdRef, target: &[(i32, Block)]) {
+    pub fn emit_switch(&mut self, selector: IdRef, default: IdRef, target: &[(i32, Block)]) {
         let mut inst_builder = InstBuilder::new(spirv::Op::Switch);
         selector.write_operand(&mut inst_builder);
         default.write_operand(&mut inst_builder);

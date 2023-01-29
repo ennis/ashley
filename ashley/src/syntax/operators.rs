@@ -4,6 +4,7 @@ pub enum UnaryOp {
     Not,
     /// `-`
     Neg,
+    // TODO: complement op
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

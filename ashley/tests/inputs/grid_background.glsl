@@ -1,6 +1,6 @@
 uniform vec2 u_resolution;
 uniform vec2 u_scroll_offset;
-uniform vec2 u_zoom;
+uniform float u_zoom;
 
 in vec2 i_position;
 out vec4 out_color;
@@ -15,16 +15,16 @@ void main() {
     );
     // TODO: properly adapt the grid while zooming in and out.
     float grid_scale = 5.0;
-    if u_zoom < 2.5 {
+    if (u_zoom < 2.5) {
         grid_scale = 1.0;
     }
     vec2 pos = position + u_scroll_offset * u_zoom;
 
-    if mod(pos.x, 20.0 / grid_scale * u_zoom) <= 1.0 || mod(pos.y, 20.0 / grid_scale * u_zoom) <= 1.0 {
+    if (mod(pos.x, 20.0 / grid_scale * u_zoom) <= 1.0 || mod(pos.y, 20.0 / grid_scale * u_zoom) <= 1.0) {
         out_color *= 1.2;
     }
 
-    if mod(pos.x, 100.0 / grid_scale * u_zoom) <= 2.0 || mod(pos.y, 100.0 / grid_scale * u_zoom) <= 2.0 {
+    if (mod(pos.x, 100.0 / grid_scale * u_zoom) <= 2.0 || mod(pos.y, 100.0 / grid_scale * u_zoom) <= 2.0) {
         out_color *= 1.2;
     }
 }

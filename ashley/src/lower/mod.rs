@@ -4,6 +4,7 @@ mod consteval;
 mod mangle;
 mod swizzle;
 mod typecheck;
+mod tast;
 
 use crate::{
     diagnostic::{AsSourceLocation, DiagnosticBuilder, Diagnostics, SourceFileProvider, SourceId, SourceLocation},
@@ -36,11 +37,8 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 use spirv::StorageClass;
-
-// REFACTORS:
-// - return Result<TypedValue,XXX> instead of creating error values when they are not needed
-//   - synthesize undefs only when needed
-// - integrate Constants into TypedValue
+use ashley::syntax::ast::Stmt;
+use crate::lower::swizzle::ComponentIndices;
 
 trait DiagnosticsExt {
     /// "missing generic argument"
@@ -241,7 +239,6 @@ impl<'a> Scope<'a> {
 #[derive(Copy, Clone)]
 struct TypedValue {
     ty: hir::Type,
-    // no values for void
     val: hir::IdRef,
 }
 
@@ -278,10 +275,10 @@ struct LowerCtxt<'a> {
 
 /// Converts an Ident to a String, or generates one if the Ident is empty.
 fn ident_to_string_opt(ident: Option<ast::Ident>) -> String {
-    static ANON_IDENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
     ident
         .map(|ident| ident.text().to_string())
-        .unwrap_or_else(|| format!("__anon_{}", ANON_IDENT_COUNTER.fetch_add(1, Ordering::Relaxed)))
+        .unwrap_or_else(|| format!("__anon_{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -293,7 +290,10 @@ enum FuncRef {
     Builtin(BuiltinOperation),
 }
 
-//fn lower_function_call(ctxt: &mut LowerCtxt, func_ref: FuncRef) {}
+fn error_value(fb: &mut FunctionBuilder) -> TypedValue {
+    let ty = fb.ty_unknown();
+    TypedValue::new(fb.emit_undef(ty), ty)
+}
 
 /// Emits IR for a module.
 fn lower_module(ctxt: &mut LowerCtxt, m: &mut hir::Module, ast: ast::Module, builtin_scope: &Scope<'_>) {
@@ -385,25 +385,19 @@ fn lower_item(ctxt: &mut LowerCtxt, m: &mut hir::Module, item: ast::Item, scope:
     }
 }
 
-#[derive(Debug)]
-struct ImplicitConversionError;
-
-enum ImplicitConversionContext {
-    Assignment,
-    Operation,
-}
-
 /// Generates IR for an implicit conversion.
+///
+/// TODO: provide context for error messages
 fn lower_implicit_conversion(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
     value: TypedValue,
     loc: SourceLocation,
     ty: hir::Type,
-) -> ValueResult {
+) -> TypedValue {
     if ty == value.ty {
         // same types, no conversion
-        return Ok(value);
+        return value;
     }
 
     // all implicit conversions
@@ -455,46 +449,44 @@ fn lower_implicit_conversion(
         }
     };
 
-    Ok(TypedValue::new(v, ty))
+    TypedValue::new(v, ty)
 }
 
 /// Generates IR for an expression node, or returns undef if the expression is `None`.
 fn lower_expr_opt(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    expr: Option<ast::Expr>,
+    expr: Option<&ast::Expr>,
     scope: &Scope,
-) -> Result<Option<TypedValue>, LowerError> {
+) -> Option<TypedValue> {
     if let Some(expr) = expr {
         lower_expr(ctxt, fb, expr, scope)
     } else {
-        Err(LowerError)
+        Some(error_value(fb))
     }
 }
 
 fn lower_expr_opt_non_void(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    expr: Option<ast::Expr>,
+    expr: Option<&ast::Expr>,
     scope: &Scope,
-) -> Result<TypedValue, LowerError> {
+) -> TypedValue {
     if let Some(expr) = expr {
         let loc = expr.source_location();
-        let result = lower_expr(ctxt, fb, expr, scope)?;
+        let result = lower_expr(ctxt, fb, expr, scope);
         match result {
             None => {
                 ctxt.diag
                     .error("expression cannot have void type")
                     .primary_label(loc, "")
                     .emit();
-                let error_type = fb.error_type();
-                let undef = fb.emit_undef(error_type);
-                Ok(TypedValue::new(undef, error_type))
+                error_value(fb)
             }
-            Some(value) => Ok(value),
+            Some(value) => value,
         }
     } else {
-        Err(LowerError)
+        error_value(fb)
     }
 }
 
@@ -546,13 +538,13 @@ fn lower_rvalue_bin_expr(
     rhs: TypedValue,
     rhs_loc: SourceLocation,
     op_token: &SyntaxToken,
-) -> ValueResult {
+) -> TypedValue {
     match typecheck_builtin_operation(fb, &ctxt.types, operation, &[lhs.ty, rhs.ty]) {
         Ok(result) => {
             // emit implicit conversions
-            let converted_lhs = lower_implicit_conversion(ctxt, fb, lhs, lhs_loc, result.parameter_types[0])?;
-            let converted_rhs = lower_implicit_conversion(ctxt, fb, rhs, rhs_loc, result.parameter_types[1])?;
-            Ok(lower_builtin_operation(
+            let converted_lhs = lower_implicit_conversion(ctxt, fb, lhs, lhs_loc, result.parameter_types[0]);
+            let converted_rhs = lower_implicit_conversion(ctxt, fb, rhs, rhs_loc, result.parameter_types[1]);
+            lower_builtin_operation(
                 ctxt,
                 fb,
                 operation,
@@ -560,7 +552,7 @@ fn lower_rvalue_bin_expr(
                 &[converted_lhs.val, converted_rhs.val],
                 &[result.parameter_types[0], result.parameter_types[1]],
                 result.result_type,
-            ))
+            )
         }
         Err(_) => {
             // TODO: show operand types and expected signatures
@@ -571,37 +563,36 @@ fn lower_rvalue_bin_expr(
                 ))
                 .primary_label(op_token, "")
                 .emit();
-            Err(LowerError)
+            error_value(fb)
         }
     }
 }
 
-fn error_value(fb: &mut FunctionBuilder) -> TypedValue {
-    let ty = fb.ty_unknown();
-    TypedValue::new(fb.emit_undef(ty), ty)
-}
 
 fn lower_prefix_expr(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    prefix_expr: ast::PrefixExpr,
+    prefix_expr: &ast::PrefixExpr,
     scope: &Scope,
-) -> Result<TypedValue, LowerError> {
-    let (op_token, ast_operator) = prefix_expr.op_details().ok_or(LowerError)?;
+) -> TypedValue {
+    let Some((op_token, ast_operator)) = prefix_expr.op_details() else {
+        return error_value(fb);
+    };
 
     let operation = match ast_operator {
         UnaryOp::Not => BuiltinOperation::Not,
         UnaryOp::Neg => BuiltinOperation::UnaryMinus,
     };
 
-    let ast_expr = prefix_expr.expr().ok_or(LowerError)?;
-    let loc = ast_expr.source_location();
-    let operand = lower_expr_opt_non_void(ctxt, fb, Some(ast_expr), scope)?;
+    let Some(ast_expr) = prefix_expr.expr() else {
+        return error_value(fb);
+    };
+    let operand = lower_expr_opt_non_void(ctxt, fb, Some(&ast_expr), scope);
 
     match typecheck_builtin_operation(fb, &ctxt.types, operation, &[operand.ty]) {
         Ok(result) => {
-            let converted_operand = lower_implicit_conversion(ctxt, fb, operand, loc, operand.ty)?;
-            Ok(lower_builtin_operation(
+            let converted_operand = lower_implicit_conversion(ctxt, fb, operand, ast_expr.source_location(), operand.ty);
+            lower_builtin_operation(
                 ctxt,
                 fb,
                 operation,
@@ -609,7 +600,7 @@ fn lower_prefix_expr(
                 &[converted_operand.val],
                 &[converted_operand.ty],
                 result.result_type,
-            ))
+            )
         }
         Err(_) => {
             ctxt.diag
@@ -619,7 +610,7 @@ fn lower_prefix_expr(
                 ))
                 .primary_label(op_token, "")
                 .emit();
-            Err(LowerError)
+            error_value(fb)
         }
     }
 }
@@ -627,10 +618,13 @@ fn lower_prefix_expr(
 fn lower_bin_expr(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    bin_expr: ast::BinExpr,
+    bin_expr: &ast::BinExpr,
     scope: &Scope,
-) -> Result<Option<TypedValue>, LowerError> {
-    let (op_token, ast_operator) = bin_expr.op_details().ok_or(LowerError)?;
+) -> Option<TypedValue> {
+    let Some((op_token, ast_operator)) = bin_expr.op_details() else {
+        // syntax error
+        return Some(error_value(fb));
+    };
 
     let conv_arith_op = |arith_op| match arith_op {
         ArithOp::Add => BuiltinOperation::Add,
@@ -680,15 +674,15 @@ fn lower_bin_expr(
         }
     };
 
-    let ast_lhs = bin_expr.lhs().ok_or(LowerError)?;
-    let ast_rhs = bin_expr.rhs().ok_or(LowerError)?;
+    let Some(ast_lhs) = bin_expr.lhs() else { return Some(error_value(fb)) };
+    let Some(ast_rhs) = bin_expr.rhs() else { return Some(error_value(fb)) };
     let lhs_loc = ast_lhs.source_location();
     let rhs_loc = ast_rhs.source_location();
 
-    let mut rhs = lower_expr_opt_non_void(ctxt, fb, bin_expr.rhs(), scope)?;
+    let mut rhs = lower_expr_opt_non_void(ctxt, fb, Some(&ast_rhs), scope);
 
     if is_assignment {
-        let place = lower_place_expr_opt(ctxt, fb, bin_expr.lhs(), scope)?;
+        let place = lower_place_expr(ctxt, fb, &ast_lhs, scope);
         let (deref_ty, _) = place.deref_ty(fb);
         let place_ptr = fb.access_chain(place.ptr_ty, place.base, &place.indices);
         if let Some(operation) = operation {
@@ -705,19 +699,19 @@ fn lower_bin_expr(
                 rhs,
                 rhs_loc,
                 &op_token,
-            )?;
+            );
         }
         // implicit conversion to lhs type of assignment
-        rhs = lower_implicit_conversion(ctxt, fb, rhs, ast_rhs.source_location(), deref_ty)?;
+        rhs = lower_implicit_conversion(ctxt, fb, rhs, ast_rhs.source_location(), deref_ty);
         // emit assignment
         fb.emit_store(place_ptr.into(), rhs.val, None);
         // this expression produces no value
-        Ok(None)
+        None
     } else if let Some(operation) = operation {
-        let lhs = lower_expr_opt_non_void(ctxt, fb, bin_expr.lhs(), scope)?;
-        Ok(Some(lower_rvalue_bin_expr(
+        let lhs = lower_expr_opt_non_void(ctxt, fb, Some(&ast_lhs), scope);
+        Some(lower_rvalue_bin_expr(
             ctxt, fb, operation, lhs, lhs_loc, rhs, rhs_loc, &op_token,
-        )?))
+        ))
     } else {
         // should not happen
         unreachable!("no assignment and no operation")
@@ -795,6 +789,21 @@ fn error_place(fb: &mut FunctionBuilder) -> Place {
     }
 }
 
+enum FieldProjection {
+    Index(usize),
+    Swizzle()
+}
+
+fn resolve_field(ctxt: &mut LowerCtxt, m: &Module, ty: hir::Type, ident: &str) -> ComponentIndices {
+    match m.types[ty] {
+        TypeData::Vector(scalar_type, len) => {
+            // swizzle expr
+
+        }
+        TypeData::Struct()
+    }
+}
+
 /// Generates IR for a place expression (lvalue).
 ///
 /// `expr` should be a `IndexExpr`, `PathExpr`, or `FieldExpr`.
@@ -807,25 +816,26 @@ fn lower_place_expr(
     fb: &mut FunctionBuilder,
     expr: &ast::Expr,
     scope: &Scope,
-) -> Result<Place, LowerError> {
+) -> Place {
     match expr {
         // `place[index]`
         ast::Expr::IndexExpr(index_expr) => {
-            let array = index_expr.array().ok_or(LowerError)?;
-            let index = index_expr.index().ok_or(LowerError)?;
+            let Some(array) = index_expr.array() else { return error_place(fb) };
+            let Some(index) = index_expr.index()else { return error_place(fb) };
 
-            let mut array_place = lower_place_expr(ctxt, fb, &array, scope)?;
+            let mut array_place = lower_place_expr(ctxt, fb, &array, scope);
             let (array_ty, storage_class) = array_place.deref_ty(fb);
 
             let elem_type = match fb.types[array_ty] {
                 TypeData::Array(t, _) => t,
                 TypeData::RuntimeArray(t) => t,
+                // TODO: index into vectors
                 _ => {
                     ctxt.diag
                         .error("cannot index into value")
-                        .primary_label(&array, "")
+                        .location(&array)
                         .emit();
-                    return Err(LowerError);
+                    return error_place(fb);
                 }
             };
             let elem_ptr_type = fb.pointer_type(elem_type, storage_class);
@@ -836,27 +846,27 @@ fn lower_place_expr(
                 array_place.ptr_ty = elem_ptr_type;
             } else {
                 // Non-const
-                let i = lower_expr_opt_non_void(ctxt, fb, Some(index), scope)?;
+                let i = lower_expr_opt_non_void(ctxt, fb, Some(&index), scope);
                 eprintln!("**TODO** check type of indices");
                 // can't be void
                 array_place.indices.push(i.val);
                 array_place.ptr_ty = elem_ptr_type;
             }
 
-            Ok(array_place)
+            array_place
         }
         // path reference
         ast::Expr::PathExpr(path_expr) => {
-            let ident = path_expr.ident().ok_or(LowerError)?;
+            let Some(ident) = path_expr.ident() else { return error_place(fb) };
             match scope.resolve(DefNameKind::Variable, ident.text()) {
                 Some(def) => {
                     match def.kind {
                         DefKind::Constant(_) => {
                             ctxt.diag
                                 .error("cannot use a constant as an lvalue")
-                                .primary_label(&path_expr, "")
+                                .location(&path_expr)
                                 .emit();
-                            Err(LowerError)
+                            error_place(fb)
                         }
                         DefKind::GlobalVariable(global_variable) => {
                             eprintln!("**TODO** check global variables as place expressions");
@@ -865,22 +875,22 @@ fn lower_place_expr(
                             // TODO: global
                             let ptr_ty = fb.pointer_type(ty, storage_class);
 
-                            Ok(Place {
+                            Place {
                                 ptr_ty,
                                 indices: vec![],
                                 base: global_variable.into(),
-                            })
+                            }
                         }
                         DefKind::BlockVariable(var) => {
                             eprintln!("**TODO** check block variables as place expressions");
                             // already of pointer type
                             let ty = fb.local_type(var);
                             let ptr_ty = fb.pointer_type(ty, StorageClass::Function);
-                            Ok(Place {
+                            Place {
                                 base: var.into(),
                                 indices: vec![],
                                 ptr_ty,
-                            })
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -890,12 +900,19 @@ fn lower_place_expr(
                         .error(format!("could not find variable `{}` in scope", ident.text()))
                         .primary_label(&ident, "")
                         .emit();
-                    Err(LowerError)
+                    error_place(fb)
                 }
             }
         }
         // `value.field` or swizzle patterns
-        ast::Expr::FieldExpr(_field_expr) => {
+        ast::Expr::FieldExpr(field_expr) => {
+
+            let Some(expr) = field_expr.expr() else { return error_place(fb) };
+            let Some(field_ident) = field_expr.field() else {return error_place(fb) };
+
+            let left_place = lower_place_expr(ctxt, fb, &expr, scope);
+            let place_ty =
+
             todo!("field place expr")
         }
         _ => {
@@ -907,39 +924,39 @@ fn lower_place_expr(
 
 fn lower_place_expr_opt(
     ctxt: &mut LowerCtxt,
-    func: &mut FunctionBuilder,
-    expr: Option<ast::Expr>,
+    fb: &mut FunctionBuilder,
+    expr: Option<&ast::Expr>,
     scope: &Scope,
-) -> Result<Place, LowerError> {
+) -> Place {
     if let Some(expr) = expr {
-        lower_place_expr(ctxt, func, &expr, scope)
+        lower_place_expr(ctxt, fb, &expr, scope)
     } else {
-        Err(LowerError)
+        error_place(fb)
     }
 }
 
 /// Lowers a function reference.
-fn lower_function_ref(ctxt: &mut LowerCtxt, expr: Option<ast::Expr>, scope: &Scope) -> Result<FuncRef, LowerError> {
-    let Some(expr) = expr else { return Err(LowerError) };
+fn resolve_function_ref(ctxt: &mut LowerCtxt, expr: Option<&ast::Expr>, scope: &Scope) -> Option<FuncRef> {
+    let Some(expr) = expr else { return None };
     match expr {
         ast::Expr::PathExpr(p) => {
             let ident_str = ident_to_string_opt(p.ident());
             let Some(def) = scope.resolve(DefNameKind::Variable, &ident_str) else {
                 ctxt.diag.error(format!("unresolved identifier: `{}`", &ident_str)).primary_label(&p, "").emit();
-                return Err(LowerError)
+                return None
             };
             let DefKind::Function(func) = def.kind else {
                 ctxt.diag.error(format!("`{}` did not resolve to a function", &ident_str)).primary_label(&p, "").emit();
-                return Err(LowerError);
+                return None
             };
-            Ok(func)
+            Some(func)
         }
         _ => {
             ctxt.diag
                 .error("invalid function reference")
                 .primary_label(&expr, "")
                 .emit();
-            Err(LowerError)
+            None
         }
     }
 }
@@ -947,11 +964,13 @@ fn lower_function_ref(ctxt: &mut LowerCtxt, expr: Option<ast::Expr>, scope: &Sco
 fn lower_function_call_expr(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    call_expr: ast::CallExpr,
+    call_expr: &ast::CallExpr,
     scope: &Scope,
-) -> Result<Option<TypedValue>, LowerError> {
+) -> Option<TypedValue> {
     // TODO do not return early if function is unresolved, also check the validity of argument expressions
-    let func_ref = lower_function_ref(ctxt, call_expr.func(), scope)?;
+    let Some(func_ref) = resolve_function_ref(ctxt, call_expr.func().as_ref(), scope) else {
+        return Some(error_value(fb))
+    };
 
     // TODO there are 4 vector allocations in this function, remove them all
 
@@ -963,7 +982,7 @@ fn lower_function_call_expr(
         for arg in arg_list.arguments() {
             // TODO: check all argument expressions
             let location = arg.source_location();
-            let arg_val = lower_expr_opt_non_void(ctxt, fb, Some(arg), scope)?;
+            let arg_val = lower_expr_opt_non_void(ctxt, fb, Some(&arg), scope);
             arg_types.push(arg_val.ty);
             args.push(arg_val.val);
             arg_locations.push(location);
@@ -992,7 +1011,7 @@ fn lower_function_call_expr(
                         .error(format!("no matching overload found for `{op:?}`"))
                         .primary_label(&call_expr, "")
                         .emit();
-                    return Err(LowerError);
+                    return Some(error_value(fb));
                 }
             }
         }
@@ -1000,35 +1019,23 @@ fn lower_function_call_expr(
 
     // apply implicit conversions
     for i in 0..args.len() {
-        match lower_implicit_conversion(
+        let value = lower_implicit_conversion(
             ctxt,
             fb,
             TypedValue::new(args[i], arg_types[i]),
             arg_locations[i],
             parameter_types[i],
-        ) {
-            Ok(value) => {
-                args[i] = value.val;
-                arg_types[i] = value.ty;
-            }
-            Err(_) => {
-                // TODO print arg/param types
-                ctxt.diag
-                    .error(format!("could not convert argument {i}"))
-                    .primary_label(arg_locations[i], "")
-                    .emit();
-                // Don't return: still emit something so that compilation can proceed.
-                // Remember: it's preferable to check and report as much errors as possible; don't bail early
-            }
-        }
+        );
+        args[i] = value.val;
+        arg_types[i] = value.ty;
     }
 
     match func_ref {
-        FuncRef::User(func) => Ok(Some(TypedValue::new(
+        FuncRef::User(func) => Some(TypedValue::new(
             fb.emit_function_call(result_type, func.into(), &args),
             result_type,
-        ))),
-        FuncRef::Builtin(builtin) => Ok(Some(lower_builtin_operation(
+        )),
+        FuncRef::Builtin(builtin) => Some(lower_builtin_operation(
             ctxt,
             fb,
             builtin,
@@ -1036,7 +1043,7 @@ fn lower_function_call_expr(
             &args,
             &arg_types,
             result_type,
-        ))),
+        )),
     }
 }
 
@@ -1048,9 +1055,9 @@ fn lower_function_call_expr(
 fn lower_expr(
     ctxt: &mut LowerCtxt,
     fb: &mut FunctionBuilder,
-    expr: ast::Expr,
+    expr: &ast::Expr,
     scope: &Scope,
-) -> Result<Option<TypedValue>, LowerError> {
+) -> Option<TypedValue> {
     match expr {
         ast::Expr::BinExpr(bin_expr) => lower_bin_expr(ctxt, fb, bin_expr, scope),
         ast::Expr::CallExpr(call_expr) => lower_function_call_expr(ctxt, fb, call_expr, scope),
@@ -1058,16 +1065,16 @@ fn lower_expr(
             // lower place expression and dereference
             // TODO move into a separate function?
             // TODO functions should not be dereferenced
-            let place = lower_place_expr(ctxt, fb, &expr, scope)?;
+            let place = lower_place_expr(ctxt, fb, &expr, scope);
             let (ty, storage_class) = place
                 .ptr_ty
                 .pointee_type(fb)
                 .expect("lower_place_expr did not produce a pointer value");
             let proj = fb.access_chain(place.ptr_ty, place.base, &place.indices);
             let val = fb.emit_load(ty, proj.into(), None);
-            Ok(Some(TypedValue::new(val, ty)))
+            Some(TypedValue::new(val, ty))
         }
-        ast::Expr::ParenExpr(expr) => lower_expr_opt(ctxt, fb, expr.expr(), scope),
+        ast::Expr::ParenExpr(expr) => lower_expr_opt(ctxt, fb, expr.expr().as_ref(), scope),
         ast::Expr::LitExpr(lit) => match lit.kind() {
             ast::LiteralKind::String(_str) => {
                 todo!("literal string")
@@ -1078,14 +1085,15 @@ fn lower_expr(
                         // TODO warn about overflow
                         // TODO unsigned suffixes
                         let c = fb.const_i32(v as i32);
-                        Ok(Some(TypedValue::new(c, ctxt.types.int)))
+                        Some(TypedValue::new(c, ctxt.types.int))
                     }
                     Err(err) => {
                         ctxt.diag
                             .error("error parsing integer value: {err}")
                             .primary_label(&v, "")
                             .emit();
-                        Err(LowerError)
+                        let ty = ctxt.types.int;
+                        Some(TypedValue::new(fb.emit_undef(ty), ty))
                     }
                 }
             }
@@ -1094,20 +1102,21 @@ fn lower_expr(
                     Ok(v) => {
                         // TODO warn about non-representable floats
                         let c = fb.const_f32(v as f32);
-                        Ok(Some(TypedValue::new(c, ctxt.types.float)))
+                        Some(TypedValue::new(c, ctxt.types.float))
                     }
                     Err(err) => {
                         ctxt.diag
                             .error("error parsing floating-point value: {err}")
                             .primary_label(&v, "")
                             .emit();
-                        Err(LowerError)
+                        let ty = ctxt.types.float;
+                        Some(TypedValue::new(fb.emit_undef(ty), ty))
                     }
                 }
             }
             ast::LiteralKind::Bool(v) => {
                 let b = fb.const_bool(v);
-                Ok(Some(TypedValue::new(b, ctxt.types.bool)))
+                Some(TypedValue::new(b, ctxt.types.bool))
             }
         },
         ast::Expr::TupleExpr(_) => {
@@ -1116,7 +1125,7 @@ fn lower_expr(
         ast::Expr::ArrayExpr(_) => {
             todo!("array expressions")
         }
-        ast::Expr::PrefixExpr(prefix_expr) => lower_prefix_expr(ctxt, fb, prefix_expr, scope).map(Some),
+        ast::Expr::PrefixExpr(prefix_expr) => Some(lower_prefix_expr(ctxt, fb, &prefix_expr, scope)),
     }
 }
 
@@ -1196,83 +1205,106 @@ fn lower_type_opt(ctxt: &mut LowerCtxt, m: &mut hir::Module, ty: Option<ast::Typ
 }
 
 /// Emits IR for a block statement.
-fn lower_stmt(ctxt: &mut LowerCtxt, b: &mut FunctionBuilder, stmt: ast::Stmt, scope: &mut Scope) -> bool {
+fn lower_stmt(ctxt: &mut LowerCtxt, fb: &mut FunctionBuilder, stmt: &ast::Stmt, scope: &mut Scope) -> bool {
     let terminated = match stmt {
         ast::Stmt::ExprStmt(expr) => {
-            match lower_expr_opt(ctxt, b, expr.expr(), scope) {
-                Ok(_) => {}
-                Err(_) => {
-                    //ctxt.diag.bug("lowering ExprStmt failed").primary_label(&expr,"").emit()
-                }
-            }
+            lower_expr_opt(ctxt, fb, expr.expr().as_ref(), scope);
             false
         }
         ast::Stmt::ReturnStmt(stmt) => {
             if let Some(expr) = stmt.expr() {
-                let Ok(value) = lower_expr(ctxt, b, expr, scope) else { return false; };
+                let value = lower_expr(ctxt, fb, &expr, scope);
                 if let Some(value) = value {
-                    b.ret_value(value.val);
+                    fb.ret_value(value.val);
                 } else {
                     // TODO emit warning here (return with unit-valued expression)
-                    b.ret();
+                    fb.ret();
                 }
             } else {
                 // return void
-                b.ret();
+                fb.ret();
             }
             true
+        }
+        ast::Stmt::BlockStmt(stmt) => {
+            if let Some(block) = stmt.block() {
+                lower_block(ctxt, fb, &block, scope);
+            }
+            false
         }
         ast::Stmt::WhileStmt(_stmt) => false,
         ast::Stmt::BreakStmt(_stmt) => true,
         ast::Stmt::ContinueStmt(_stmt) => true,
         ast::Stmt::DiscardStmt(_stmt) => true,
         ast::Stmt::LocalVariable(v) => {
-            let ty = lower_type_opt(ctxt, b, v.ty(), scope);
+            let ty = lower_type_opt(ctxt, fb, v.ty(), scope);
             //let ptr_ty = b.pointer_type(ty, spirv::StorageClass::Function);
 
             let initializer = if let Some(initializer) = v.initializer() {
-                match lower_expr_opt_non_void(ctxt, b, initializer.expr(), scope) {
-                    Ok(val) => Some(val.val),
-                    Err(_) => {
-                        // the error is reported in lower_expr_opt_non_void
-                        None
-                    }
-                }
+                Some(lower_expr_opt_non_void(ctxt, fb, initializer.expr().as_ref(), scope).val)
             } else {
                 None
             };
 
             let name = ident_to_string_opt(v.name());
-            let id = b.add_local(ty, &name);
+            let id = fb.add_local(ty, &name);
             if let Some(initializer) = initializer {
-                b.emit_store(id.into(), initializer, None);
+                fb.emit_store(id.into(), initializer, None);
             }
             scope.define_block_variable(ident_to_string_opt(v.name()), Some(v.source_location()), id);
             false
         }
-        ast::Stmt::IfStmt(_if_stmt) => {
-            //todo!("if statements")
+        ast::Stmt::IfStmt(if_stmt) => {
+            let Some(ast_condition) = if_stmt.condition() else { return false };
+            let Some(ast_condition) = ast_condition.expr() else { return false };
+            let Some(stmt) = if_stmt.stmt() else { return false };
+
+            let condition = lower_expr_opt_non_void(ctxt, fb, Some(&ast_condition), scope);
+            if condition.ty != ctxt.types.bool {
+                ctxt.diag.error("expected boolean expression").location(&ast_condition).emit();
+            }
+
+            let merge_block = fb.create_block();
+            let true_block = fb.create_block();
+            let false_block = fb.create_block();
+
+            fb.emit_selection_merge(merge_block, spirv::SelectionControl::NONE);
+            fb.branch_conditional(condition.val, true_block, false_block);
+            fb.select_block(true_block);
+            lower_stmt(ctxt, fb, &stmt, scope);
+            fb.branch(merge_block);
+            fb.select_block(false_block);
+            if let Some(else_branch) = if_stmt.else_branch() {
+                if let Some(stmt) = else_branch.stmt() {
+                    lower_stmt(ctxt, fb, &stmt, scope);
+                }
+            }
+            fb.branch(merge_block);
+            fb.select_block(merge_block);
             false
+        }
+        Stmt::ForStmt(_) => {
+            todo!("for loops")
         }
     };
     terminated
 }
 
 /// Emits IR for a block.
-fn lower_block(ctxt: &mut LowerCtxt, b: &mut FunctionBuilder, block: ast::Block, scope: &Scope) {
+fn lower_block(ctxt: &mut LowerCtxt, b: &mut FunctionBuilder, block: &ast::Block, scope: &Scope) {
     // start block scope
     let mut block_scope = Scope::new(Some(scope));
-    let mut terminated = false;
+    //let mut terminated = false;
     for stmt in block.stmts() {
-        if terminated {
+        /*if terminated {
             ctxt.diag.error("unreachable statement").primary_label(&stmt, "").emit();
-        }
-        terminated |= lower_stmt(ctxt, b, stmt, &mut block_scope);
+        }*/
+        lower_stmt(ctxt, b, &stmt, &mut block_scope);
     }
-    if !terminated {
+    /*if !terminated {
         // auto-return
         b.ret();
-    }
+    }*/
 }
 
 /// Lowers a function definition or declaration
@@ -1333,7 +1365,11 @@ fn lower_function(
         let (mut func_data, entry_block_id) =
             FunctionData::new(name.clone(), func_type, params, linkage, spirv::FunctionControl::NONE);
         let mut builder = FunctionBuilder::new(m, &mut func_data, entry_block_id);
-        lower_block(ctxt, &mut builder, block, scope);
+        lower_block(ctxt, &mut builder, &block, scope);
+        if !builder.is_block_terminated() {
+            // TODO check for return type
+            builder.ret()
+        }
         func_data
     } else {
         FunctionData::new_declaration(name.clone(), func_type, params, linkage, spirv::FunctionControl::NONE)

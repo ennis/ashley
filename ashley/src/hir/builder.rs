@@ -139,6 +139,12 @@ impl Default for ImageOperands {
     }
 }
 
+fn write_operand_opt<T: IntoOperand>(operand: Option<T>, builder: &mut InstBuilder) {
+    if let Some(operand) = operand {
+        operand.write_operand(builder)
+    }
+}
+
 impl IntoOperand for ImageOperands {
     fn write_operand(self, builder: &mut InstBuilder) {
         let mut bits = spirv::ImageOperands::empty();
@@ -155,34 +161,58 @@ impl IntoOperand for ImageOperands {
         bits.set(spirv::ImageOperands::ZERO_EXTEND, self.zero_extend);
         bits.write_operand(builder);
 
-        if let Some(bias) = self.bias {
-            bias.write_operand(builder);
-        }
-        if let Some(lod) = self.lod {
-            lod.write_operand(builder);
-        }
+        write_operand_opt(self.bias, builder);
+        write_operand_opt(self.lod, builder);
         if let Some(grad) = self.grad {
             grad.0.write_operand(builder);
             grad.1.write_operand(builder);
         }
-        if let Some(const_offset) = self.const_offset {
-            const_offset.write_operand(builder);
-        }
-        if let Some(offset) = self.offset {
-            offset.write_operand(builder);
-        }
-        if let Some(const_offsets) = self.const_offsets {
-            const_offsets.write_operand(builder);
-        }
-        if let Some(sample) = self.sample {
-            sample.write_operand(builder);
-        }
-        if let Some(min_lod) = self.min_lod {
-            min_lod.write_operand(builder);
-        }
+        write_operand_opt(self.const_offset, builder);
+        write_operand_opt(self.offset, builder);
+        write_operand_opt(self.const_offsets, builder);
+        write_operand_opt(self.sample, builder);
+        write_operand_opt(self.min_lod, builder);
     }
 }
 
+pub struct LoopControl {
+    pub unroll: bool,
+    pub dont_unroll: bool,
+    pub dependency_infinite: bool,
+    pub dependency_length: Option<i32>,
+    pub min_iterations: Option<i32>,
+    pub max_iterations: Option<i32>,
+    pub iteration_multiple: Option<i32>,
+    pub peel_count: Option<i32>,
+    pub partial_count: Option<i32>,
+}
+
+impl IntoOperand for LoopControl {
+    fn write_operand(self, builder: &mut InstBuilder) {
+        let mut bits = spirv::LoopControl::empty();
+        // NOTE: the order is important: operands indicated by smaller-numbered bits should appear first
+        bits.set(spirv::LoopControl::UNROLL, self.unroll);
+        bits.set(spirv::LoopControl::DONT_UNROLL, self.dont_unroll);
+        bits.set(spirv::LoopControl::DEPENDENCY_INFINITE, self.dependency_infinite);
+        bits.set(spirv::LoopControl::DEPENDENCY_LENGTH, self.dependency_length.is_some());
+        bits.set(spirv::LoopControl::MIN_ITERATIONS, self.min_iterations.is_some());
+        bits.set(spirv::LoopControl::MAX_ITERATIONS, self.max_iterations.is_some());
+        bits.set(
+            spirv::LoopControl::ITERATION_MULTIPLE,
+            self.iteration_multiple.is_some(),
+        );
+        bits.set(spirv::LoopControl::PEEL_COUNT, self.peel_count.is_some());
+        bits.set(spirv::LoopControl::PARTIAL_COUNT, self.partial_count.is_some());
+        bits.write_operand(builder);
+
+        write_operand_opt(self.dependency_length, builder);
+        write_operand_opt(self.min_iterations, builder);
+        write_operand_opt(self.max_iterations, builder);
+        write_operand_opt(self.iteration_multiple, builder);
+        write_operand_opt(self.peel_count, builder);
+        write_operand_opt(self.partial_count, builder);
+    }
+}
 
 /// Used to build a HIR function.
 
@@ -241,6 +271,14 @@ impl<'a> FunctionBuilder<'a> {
         self.function.locals.alloc(LocalData { name: name.into(), ty })
     }
 
+    /// Creates a new block without switching the current one.
+    pub fn create_block(&mut self) -> Block {
+        self.function.blocks.alloc(BlockData {
+            instructions: vec![],
+            terminator: None,
+        })
+    }
+
     /// Enters a new block.
     pub fn begin_block(&mut self) -> Block {
         let block = self.function.blocks.alloc(BlockData {
@@ -249,6 +287,11 @@ impl<'a> FunctionBuilder<'a> {
         });
         self.block = block;
         block
+    }
+
+    /// Returns whether the current block is terminated.
+    pub fn is_block_terminated(&self) -> bool {
+        self.function.blocks[self.block].terminator.is_some()
     }
 
     /// References the specified constant.
@@ -334,16 +377,18 @@ impl<'a> FunctionBuilder<'a> {
         self.append_inst(inst_builder).unwrap()
     }
 
-    pub fn emit_selection_merge(&mut self, merge_block: Block) {
+    pub fn emit_selection_merge(&mut self, merge_block: Block, control: spirv::SelectionControl) {
         let mut i = InstBuilder::new(spirv::Op::SelectionMerge);
         i.operands.push(Operand::BlockRef(merge_block));
+        i.operands.push(control.into());
         self.append_inst(i);
     }
 
-    pub fn emit_loop_merge(&mut self, merge_block: Block, continue_target: Block) {
+    pub fn emit_loop_merge(&mut self, merge_block: Block, continue_target: Block, control: LoopControl) {
         let mut i = InstBuilder::new(spirv::Op::LoopMerge);
         i.operands.push(Operand::BlockRef(merge_block));
         i.operands.push(Operand::BlockRef(continue_target));
+        control.write_operand(&mut i);
         self.append_inst(i);
     }
 
@@ -351,7 +396,7 @@ impl<'a> FunctionBuilder<'a> {
         self.terminate_block(TerminatingInstruction::Branch(target));
     }
 
-    pub fn branch_conditional(&mut self, condition: ValueOrConstant, true_block: Block, false_block: Block) {
+    pub fn branch_conditional(&mut self, condition: IdRef, true_block: Block, false_block: Block) {
         self.terminate_block(TerminatingInstruction::BranchConditional {
             condition,
             true_block,

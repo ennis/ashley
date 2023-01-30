@@ -829,7 +829,7 @@ macro_rules! builtin_operations {
         pub(super) fn $register(m: &mut Module, scope: &mut Scope) {
             $(
                 // FIXME this also registers operators as functions => don't do that
-                scope.define_function(std::stringify!($op_name).to_string(), None, FuncRef::Builtin($enum_name::$op_name));
+                scope.define_function(std::stringify!($op_name).trim_start_matches("r#").to_string(), None, FuncRef::Builtin($enum_name::$op_name));
             )*
         }
     };
@@ -1066,7 +1066,7 @@ builtin_operations! {
         dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_glsl_fract(ret, args[0]);
     }
 
-    mod_ {
+    r#mod {
         vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
         dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
         vecN(vecN,float)   => |_ctxt, fb, args, _types, ret| todo!();

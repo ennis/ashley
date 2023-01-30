@@ -1551,25 +1551,6 @@ impl<'a> FunctionBuilder<'a> {
         value.write_operand(&mut inst_builder);
         self.append_inst(inst_builder).unwrap()
     }
-    pub fn emit_branch(&mut self, target_label: IdRef) {
-        let mut inst_builder = InstBuilder::new(spirv::Op::Branch);
-        target_label.write_operand(&mut inst_builder);
-        self.append_inst(inst_builder);
-    }
-    pub fn emit_branch_conditional(
-        &mut self,
-        condition: IdRef,
-        true_label: IdRef,
-        false_label: IdRef,
-        branch_weights: &[i32],
-    ) {
-        let mut inst_builder = InstBuilder::new(spirv::Op::BranchConditional);
-        condition.write_operand(&mut inst_builder);
-        true_label.write_operand(&mut inst_builder);
-        false_label.write_operand(&mut inst_builder);
-        branch_weights.write_operand(&mut inst_builder);
-        self.append_inst(inst_builder);
-    }
     pub fn emit_kill(&mut self) {
         let mut inst_builder = InstBuilder::new(spirv::Op::Kill);
         self.append_inst(inst_builder);

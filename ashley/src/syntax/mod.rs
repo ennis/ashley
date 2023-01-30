@@ -506,26 +506,24 @@ impl<'a> Parser<'a> {
         match self.next() {
             Some(T!['(']) => {
                 // function
+                self.start_node_at(cp, FN_DEF);
                 self.parse_fn_param_list();
 
                 match self.next() {
                     Some(T!['{']) => {
-                        self.b.start_node_at(cp, FN_DEF.into());
                         self.parse_block();
                     }
                     Some(T![;]) => {
-                        self.b.start_node_at(cp, FN_DECL.into());
                         self.eat();
                     }
                     _ => {
                         // TODO better recovery
                         let span = self.span();
                         self.diag.error("unexpected token").primary_label_opt(span, "").emit();
-                        self.b.start_node_at(cp, FN_DEF.into());
                         self.eat();
                     }
                 }
-                self.finish_node(); // FN_DEF or FN_DECL
+                self.finish_node(); // FN_DEF
             }
             _ => {
                 // variable declaration
@@ -701,7 +699,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block(&mut self) {
-        eprintln!("parse_block");
+        //eprintln!("parse_block");
         self.start_node(BLOCK);
         self.expect(L_CURLY);
         self.parse_stmt_list();
@@ -947,6 +945,11 @@ impl<'a> Parser<'a> {
     fn parse_stmt(&mut self) {
         eprintln!("parse_stmt");
         match self.next() {
+            Some(T!['{']) => {
+                self.start_node(BLOCK_STMT);
+                self.parse_block();
+                self.finish_node(); // BLOCK_STMT
+            },
             Some(RETURN_KW) => self.parse_return(),
             Some(IF_KW) => self.parse_if_stmt(),
             Some(BREAK_KW) => self.parse_break_stmt(),
@@ -970,6 +973,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // TODO: declaration lists
     fn parse_local_variable_stmt(&mut self) {
         eprintln!("parse_local_variable_stmt");
         self.start_node(LOCAL_VARIABLE);
@@ -1009,37 +1013,56 @@ impl<'a> Parser<'a> {
     fn parse_while_stmt(&mut self) {
         self.start_node(WHILE_STMT);
         self.expect(WHILE_KW);
+        self.expect(T!['(']);
         self.start_node(CONDITION);
         self.parse_expr();
         self.finish_node(); // CONDITION
-        self.parse_block();
+        self.expect(T![')']);
+        self.parse_stmt();
         self.finish_node(); // WHILE_STMT
+    }
+
+    fn parse_for_stmt(&mut self) {
+        self.start_node(FOR_STMT);
+        self.expect(FOR_KW);
+        self.expect(T!['(']);
+        self.start_node(FOR_INIT);
+        if self.next_is_type() {
+            self.parse_local_variable_stmt();
+        } else {
+            self.parse_expr_stmt();
+        }
+        self.finish_node(); // FOR_INIT
+        self.start_node(CONDITION);
+        if self.next() != Some(T![;]) {
+            self.parse_expr();
+        }
+        self.finish_node(); // CONDITION
+        if self.next() != Some(T![')']) {
+            self.parse_expr();
+        }
+        self.expect(T![')']);
+        self.parse_stmt();
+        self.finish_node(); // FOR_STMT
     }
 
     fn parse_if_stmt(&mut self) {
         self.start_node(IF_STMT);
         self.expect(IF_KW);
+        self.expect(T!['(']);
         self.start_node(CONDITION);
         self.parse_expr();
         self.finish_node();
-        self.parse_block();
+        self.expect(T![')']);
+        self.parse_stmt();
         if self.next() == Some(ELSE_KW) {
             self.start_node(ELSE_BRANCH);
             self.eat();
-            if self.next() == Some(IF_KW) {
-                // else if
-                self.parse_if_stmt();
-            } else {
-                self.parse_block();
-            }
+            self.parse_stmt();
             self.finish_node(); // ELSE_BRANCH
         }
         self.finish_node(); // IF_STMT
     }
-
-    /*fn parse_for_stmt(&mut self) {
-
-    }*/
 
     fn parse_expr_stmt(&mut self) {
         eprintln!("parse_expr_stmt");
@@ -1126,7 +1149,7 @@ impl<'a> Parser<'a> {
         eprintln!("parse_expr_bp");
         let cp = self.checkpoint();
         match self.next() {
-            Some(op @ T![+] | op @ T![-] | op @ T![!]) => {
+            Some(op @ T![+] | op @ T![-] | op @ T![!] | op @ T![++] | op @ T![--]) => {
                 self.start_node(PREFIX_EXPR);
                 self.eat();
                 let r_bp = prefix_binding_power(op);
@@ -1172,9 +1195,20 @@ impl<'a> Parser<'a> {
                     | op @ T![>>]
                     | op @ T![%],
                 ) => op,
+                Some(op @ T![++] | op @ T![--]) => {
+                    // postfix
+                    let l_bp = postfix_binding_power(op);
+                    if l_bp < min_bp {
+                        break;
+                    }
+                    self.start_node_at(cp, POSTFIX_EXPR);
+                    self.eat();
+                    self.finish_node();
+                    continue;
+                }
                 Some(T!['[']) => {
                     // the array index binds closer to everything else, no need to check binding power
-                    self.b.start_node_at(cp, INDEX_EXPR.into());
+                    self.start_node_at(cp, INDEX_EXPR);
                     self.eat();
                     self.parse_expr();
                     self.expect(T![']']);
@@ -1182,13 +1216,13 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 Some(T!['(']) => {
-                    self.b.start_node_at(cp, CALL_EXPR.into());
+                    self.start_node_at(cp, CALL_EXPR);
                     self.parse_call_args();
                     self.finish_node();
                     continue;
                 }
                 Some(T![.]) => {
-                    self.b.start_node_at(cp, FIELD_EXPR.into());
+                    self.start_node_at(cp, FIELD_EXPR);
                     self.eat();
                     self.expect_ident("field identifier");
                     self.finish_node();
@@ -1201,13 +1235,20 @@ impl<'a> Parser<'a> {
             if l_bp < min_bp {
                 break;
             }
-
-            self.b.start_node_at(cp, BIN_EXPR.into());
-
-            self.eat();
-            self.parse_expr_bp(r_bp);
-
-            self.finish_node();
+            if op == T![?] {
+                // ternary
+                self.start_node_at(cp, TERNARY_EXPR);
+                let true_alt = self.parse_expr_bp(0);
+                self.expect(T![:]);
+                let false_alt = self.parse_expr_bp(r_bp);
+                self.finish_node(); // TERNARY_EXPR
+                continue
+            } else {
+                self.b.start_node_at(cp, BIN_EXPR.into());
+                self.eat();
+                self.parse_expr_bp(r_bp);
+                self.finish_node(); // BIN_EXPR
+            }
         }
     }
 }
@@ -1215,6 +1256,7 @@ impl<'a> Parser<'a> {
 fn prefix_binding_power(op: SyntaxKind) -> u8 {
     match op {
         T![+] | T![-] | T![!] => 22,
+        T![++] | T![--] => 22,
         _ => panic!("bad op: {:?}", op),
     }
 }
@@ -1222,6 +1264,7 @@ fn prefix_binding_power(op: SyntaxKind) -> u8 {
 fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
     match op {
         T![=] | T![+=] | T![-=] | T![*=] | T![/=] | T![%=] | T![&=] | T![|=] | T![^=] | T![<<=] | T![>>=] => (2, 1),
+        T![?] => (3, 2),
         T![||] => (4, 5),
         T![&&] => (6, 7),
         T![==] | T![!=] | T![<=] | T![>=] | T![<] | T![>] => (8, 9),
@@ -1231,6 +1274,14 @@ fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
         T![<<] | T![>>] => (16, 17),
         T![+] | T![-] => (18, 19),
         T![*] | T![/] | T![%] => (20, 21),
+        _ => panic!("bad op: {op:?}"),
+    }
+}
+
+fn postfix_binding_power(op: SyntaxKind) -> u8 {
+    match op {
+        T![++] => 23,
+        T![--] => 23,
         _ => panic!("bad op: {op:?}"),
     }
 }
@@ -1359,28 +1410,25 @@ void expr_test() {
         insta::assert_debug_snapshot!(parse_source_text(
             r#"
 void main() {
-    if one {
+    if (one) {
         ok();
     }
 
-    if one {
+    if (one) {
         ok();
     } else {
         not_ok();
     }
 
-    if one {
+    if (one) {
     } else if two {
     } else if three {
     } else {
     }
 
-    if one {
+    if (one) {
     } else if two {
     } else if three {
-    }
-
-    while true {
     }
 
     while (true) {

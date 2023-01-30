@@ -250,18 +250,21 @@ impl<'a> Ctxt<'a> {
 
         for (b, _) in fdata.blocks.iter() {
             labels.insert(b, self.builder.begin_block(None).unwrap());
-        }
-
-        for (local, ldata) in fdata.locals.iter() {
-            let ty = self.emit_type_recursive(ldata.ty);
-            let ptr_ty = self.builder.type_pointer(None, StorageClass::Function, ty);
-            let id = self.builder.variable(ptr_ty, None, StorageClass::Function, None);
-            self.builder.name(id, &ldata.name);
-            locals.insert(local, id);
+            self.builder.select_block(None).unwrap();
         }
 
         for (ib, (_, bdata)) in fdata.blocks.iter().enumerate() {
             self.builder.select_block(Some(ib)).unwrap();
+            if ib == 0 {
+                // entry block, add local variables
+                for (local, ldata) in fdata.locals.iter() {
+                    let ty = self.emit_type_recursive(ldata.ty);
+                    let ptr_ty = self.builder.type_pointer(None, StorageClass::Function, ty);
+                    let id = self.builder.variable(ptr_ty, None, StorageClass::Function, None);
+                    self.builder.name(id, &ldata.name);
+                    locals.insert(local, id);
+                }
+            }
             for inst in bdata.instructions.iter() {
                 let result_id;
                 let result_type;
@@ -296,8 +299,9 @@ impl<'a> Ctxt<'a> {
                         false_block,
                     } => {
                         let condition_id = match condition {
-                            ValueOrConstant::Value(v) => values[*v],
-                            ValueOrConstant::Constant(c) => self.emit_constant_recursive(*c),
+                            IdRef::Value(v) => values[*v],
+                            IdRef::Constant(c) => self.emit_constant_recursive(*c),
+                            _ => panic!("invalid branch condition")
                         };
                         self.builder
                             .branch_conditional(condition_id, labels[*true_block], labels[*false_block], [])

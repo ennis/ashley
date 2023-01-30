@@ -289,6 +289,11 @@ impl<'a> DiagnosticBuilder<'a> {
     }
 
     /// Sets the primary label of the diagnostic.
+    pub fn location<L: AsSourceLocation>(self, loc: L) -> DiagnosticBuilder<'a> {
+        self.label(loc, LabelStyle::Primary, "")
+    }
+
+    /// Sets the primary label of the diagnostic.
     pub fn primary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
         self.label(loc, LabelStyle::Primary, message)
     }

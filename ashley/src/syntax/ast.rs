@@ -173,29 +173,33 @@ impl_ast_node!(FnDef<FN_DEF>
                 node block: Block,
                 token name: Ident]);
 
-impl_ast_node!(FnDecl<FN_DECL>
+/*impl_ast_node!(FnDecl<FN_DECL>
                [node extern_: Extern,
                 node ret_type: RetType,
                 node param_list: ParamList,
                 node block: Block,
-                token name: Ident]);
+                token name: Ident]);*/
 
+impl_ast_node!(Condition     <CONDITION>   [node expr: Expr]);
+impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: ExprStmt]);
 impl_ast_node!(ArgList       <ARG_LIST>    [nodes arguments: Expr]);
 impl_ast_node!(RetType       <RET_TYPE>    [node ty: Type]);
 impl_ast_node!(ExprStmt      <EXPR_STMT>   [node expr: Expr]);
 impl_ast_node!(ReturnStmt    <RETURN_STMT> [node expr: Expr]);
+impl_ast_node!(BlockStmt     <BLOCK_STMT>  [node block: Block]);
 impl_ast_node!(BreakStmt     <BREAK_STMT> []);
 impl_ast_node!(ContinueStmt  <CONTINUE_STMT> []);
 impl_ast_node!(DiscardStmt   <DISCARD_STMT> []);
-impl_ast_node!(IfStmt        <IF_STMT>     [node condition: Expr, node block: Block, node else_branch: ElseBranch]);
-impl_ast_node!(WhileStmt     <WHILE_STMT>  [node condition: Expr, node block: Block]);
-impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node block: Block]);
+impl_ast_node!(IfStmt        <IF_STMT>     [node condition: Condition, node stmt: Stmt, node else_branch: ElseBranch]);
+impl_ast_node!(WhileStmt     <WHILE_STMT>  [node condition: Condition, node stmt: Stmt]);
+impl_ast_node!(ForStmt       <FOR_STMT>    [node initializer: ForInit, node condition: Condition, node stmt: Stmt]);
+impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node stmt: Stmt]);
 impl_ast_node!(BinExpr       <BIN_EXPR>    []);
 impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
 impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
 impl_ast_node!(CallExpr      <CALL_EXPR>   [node func: Expr, node arg_list: ArgList]);
 impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
-impl_ast_node!(FieldExpr     <FIELD_EXPR>  []);
+impl_ast_node!(FieldExpr     <FIELD_EXPR>  [node expr: Expr, token field: Ident]);
 impl_ast_node!(LitExpr       <LIT_EXPR>    []);
 impl_ast_node!(PathExpr      <PATH_EXPR>   [token ident: Ident]);
 impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
@@ -211,12 +215,14 @@ impl_ast_variant_node!(Item, [ FN_DEF => FnDef, FN_DECL => FnDecl, GLOBAL => Glo
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
     RETURN_STMT => ReturnStmt,
+    BLOCK_STMT => BlockStmt,
     WHILE_STMT => WhileStmt,
     BREAK_STMT => BreakStmt,
     CONTINUE_STMT => ContinueStmt,
     DISCARD_STMT => DiscardStmt,
     LOCAL_VARIABLE => LocalVariable,
-    IF_STMT => IfStmt
+    IF_STMT => IfStmt,
+    FOR_STMT => ForStmt
 ]);
 impl_ast_variant_node!(Expr, [
     BIN_EXPR => BinExpr,
@@ -437,15 +443,6 @@ impl IndexExpr {
     pub fn index(&self) -> Option<Expr> {
         self.syntax.children().filter_map(Expr::cast).nth(1)
     }
-}
-
-/// Describes the kind of a global program variable.
-#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum QualifierKind {
-    Uniform,
-    Const,
-    In,
-    Out,
 }
 
 fn first_token(node: &SyntaxNode) -> SyntaxToken {

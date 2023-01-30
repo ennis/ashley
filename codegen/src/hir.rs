@@ -20,6 +20,8 @@ use std::{
 const EXCLUDED_INSTRUCTIONS: &[&str] = &[
     "OpLoopMerge",
     "OpSelectionMerge",
+    "OpBranch",
+    "OpBranchConditional",
     "OpSwitch",
     "OpString",
     "OpExtInstImport",

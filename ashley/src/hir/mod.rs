@@ -450,6 +450,7 @@ pub struct FunctionData {
     // but not sure if they can be used in shaders
     pub locals: Arena<LocalData, Local>,
     pub blocks: Arena<BlockData, Block>,
+    /// TODO remove this, the entry block should be the first one in the arena
     pub entry_block: Option<Block>,
     pub function_control: spirv::FunctionControl,
 }
@@ -527,12 +528,12 @@ pub enum IntegerLiteral {
 pub enum TerminatingInstruction {
     Branch(Block),
     BranchConditional {
-        condition: ValueOrConstant,
+        condition: IdRef,
         true_block: Block,
         false_block: Block,
     },
     Switch {
-        selector: ValueOrConstant,
+        selector: IdRef,
         default: Block,
         target: Vec<(IntegerLiteral, Block)>,
     },

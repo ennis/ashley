@@ -27,6 +27,10 @@ pub enum SyntaxKind {
     R_BRACK,
     #[token(".")]
     DOT,
+    #[token("++")]
+    PLUSPLUS,
+    #[token("--")]
+    MINUSMINUS,
     #[token("+")]
     PLUS,
     #[token("-")]
@@ -176,7 +180,6 @@ pub enum SyntaxKind {
     QUALIFIER,
     EXTERN,
     FN_DEF,
-    FN_DECL,
     STRUCT_DEF,
     STRUCT_FIELD,
     GLOBAL,
@@ -189,7 +192,9 @@ pub enum SyntaxKind {
     LIT_EXPR,
     CONST_EXPR,
     BIN_EXPR,
+    TERNARY_EXPR,
     PREFIX_EXPR,
+    POSTFIX_EXPR,
     INDEX_EXPR,
     INDEX,
     PAREN_EXPR,
@@ -211,10 +216,12 @@ pub enum SyntaxKind {
     CONTINUE_STMT,
     WHILE_STMT,
     FOR_STMT,
+    FOR_INIT,
     IF_STMT,
     CONDITION,
     ELSE_BRANCH,
     RETURN_STMT,
+    BLOCK_STMT,
     #[regex("[ \t\r\n]*")]
     WHITESPACE, // whitespaces is explicit
     ERROR, // as well as errors
@@ -292,6 +299,8 @@ macro_rules ! T {
     [>>] => { $ crate :: syntax :: SyntaxKind :: SHR } ;
     [<<=] => { $ crate :: syntax :: SyntaxKind :: SHLEQ } ;
     [>>=] => { $ crate :: syntax :: SyntaxKind :: SHREQ } ;
+    [++] => { $ crate :: syntax :: SyntaxKind :: PLUSPLUS } ;
+    [--] => { $ crate :: syntax :: SyntaxKind :: MINUSMINUS } ;
     [as] => { $ crate :: syntax :: SyntaxKind :: AS_KW } ;
     //[async] => { $ crate :: syntax :: SyntaxKind :: ASYNC_KW } ;
     //[await] => { $ crate :: syntax :: SyntaxKind :: AWAIT_KW } ;

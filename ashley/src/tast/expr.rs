@@ -5,18 +5,13 @@ use crate::{
     syntax::{ast, BinaryOp, UnaryOp},
     tast::{
         consteval::ConstantValue,
-        def::{FunctionDef, StructDef},
-        overload::OverloadResolutionError,
+        def::{DefKind, FunctionDef, StructDef},
+        overload::{check_signature, OverloadCandidate, OverloadResolutionError, SignatureMismatch},
         scope::Res,
         swizzle::{get_component_indices, ComponentIndices},
         ty::Type,
-        DefId, ExprId, LocalVarId, PlaceId, ScalarType, TypeKind, Types,
+        Def, DefId, ExprId, LocalVarId, PlaceId, ScalarType, TypeCheckBodyCtxt, TypeKind, Types,
     },
-};
-use ashley::tast::{
-    def::DefKind,
-    overload::{check_signature, OverloadCandidate, SignatureMismatch},
-    Def, TypeCheckBodyCtxt,
 };
 use ordered_float::OrderedFloat;
 use std::{ops::Deref, sync::Arc};
@@ -321,8 +316,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         };
         match self.typecheck_builtin_operation(operation, &[value.ty.clone()]) {
             Ok(overload) => {
-                let conv_expr =
-                    self.apply_implicit_conversion(value, None, overload.parameter_types[0].clone());
+                let conv_expr = self.apply_implicit_conversion(value, None, overload.parameter_types[0].clone());
                 TypedExpr {
                     expr: ExprKind::Unary {
                         op: op.1,
@@ -691,7 +685,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                                 lhs: self.add_expr(lhs_conv),
                                 rhs: self.add_expr(rhs_conv),
                             },
-                            ty: ,
+                            ty: todo!(),
                         }
                     }
                 }

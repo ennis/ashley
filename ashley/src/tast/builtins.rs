@@ -1,5 +1,4 @@
 //! Registration of builtin functions and variables during type checking.
-use ashley::builtins::expand_generic_builtin_signature;
 use crate::{
     builtins::{BuiltinTypes, PseudoType},
     tast::{
@@ -7,18 +6,63 @@ use crate::{
         Def, FunctionType, Type, TypeCheckCtxt, TypeKind, Visibility,
     },
 };
+use crate::builtins::ImageClass;
 
 
 impl TypeCheckCtxt<'_, '_> {
     pub(crate) fn define_builtin_functions(&mut self) {
         for builtin in crate::builtins::OPERATION_SIGNATURES {
             for sig in builtin.signatures {
-                expand_generic_builtin_signature(sig, &self.tyctxt.builtins, |args, ret| {
-                    // convert generic builtin signatures to actual function signatures
-                    let function_type = self.tyctxt.ty(FunctionType { arg_types, return_type });
+                // convert generic builtin signatures to actual function signatures
+                // TODO factor this out
+                let is_vector_generic = sig.parameter_types.iter().any(|ty| {
+                    use PseudoType::*;
+                    matches!(ty, vecN | bvecN | ivecN | uvecN | dvecN)
+                });
+                let is_image_type_generic = sig.parameter_types.iter().any(|ty| {
+                    use PseudoType::*;
+                    matches!(
+                        ty,
+                        gimage1D
+                            | gimage1DArray
+                            | gimage2D
+                            | gimage2DArray
+                            | gimage2DMS
+                            | gimage2DMSArray
+                            | gimage2DRect
+                            | gimage3D
+                            | gimageCube
+                            | gimageCubeArray
+                            | gimageBuffer
+                            | gtexture1D
+                            | gtexture1DArray
+                            | gtexture2D
+                            | gtexture2DArray
+                            | gtexture2DMS
+                            | gtexture2DMSArray
+                            | gtexture2DRect
+                            | gtexture3D
+                            | gtextureCube
+                            | gtextureCubeArray
+                            | gtextureBuffer
+                            | gvec4
+                    )
+                });
+                let max_vec_len = if is_vector_generic {
+                    4
+                } else {
+                    /*dummy*/
+                    1
+                };
+                let image_classes = if is_image_type_generic {
+                    &[ImageClass::F, ImageClass::SI, ImageClass::UI][..]
+                } else {
+                    /*dummy*/
+                    &[ImageClass::F][..]
+                };
 
-                })
-
+                for ic in image_classes {
+                    for vec_len in 1..=max_vec_len {
                         let arg_types: Vec<_> = sig
                             .parameter_types
                             .iter()
@@ -26,6 +70,7 @@ impl TypeCheckCtxt<'_, '_> {
                             .collect();
                         let return_type =
                             pseudo_type_to_concrete_type(sig.result_type, &self.tyctxt.builtins, vec_len, *ic);
+                        let function_type = self.tyctxt.ty(FunctionType { arg_types, return_type });
                         self.module.defs.push(Def {
                             package: None,
                             location: None,

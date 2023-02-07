@@ -1,11 +1,11 @@
-use smallvec::SmallVec;
 use crate::{
     hir,
     tast::{
         ty::{ImageSampling, ImageType},
-        Module, ScalarType, Type, TypeKind, Types
+        Module, ScalarType, Type, TypeKind, Types,
     },
 };
+use smallvec::SmallVec;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -356,9 +356,9 @@ pub enum PseudoType {
 pub struct BuiltinSignature {
     pub parameter_types: &'static [PseudoType],
     pub result_type: PseudoType,
-    pub lower: fn(&mut(), &mut hir::FunctionBuilder, args: &[hir::IdRef], types: &[hir::Type], ret: hir::Type) -> hir::Value,
+    pub lower:
+        fn(&mut (), &mut hir::FunctionBuilder, args: &[hir::IdRef], types: &[hir::Type], ret: hir::Type) -> hir::Value,
 }
-
 
 #[derive(Copy, Clone)]
 pub(crate) enum ImageClass {
@@ -673,70 +673,8 @@ fn pseudo_type_to_concrete_type(
     }
 }
 
-pub(crate) fn expand_generic_builtin_signature(sig: &BuiltinSignature, builtin_types: &BuiltinTypes, cb: impl FnMut(SmallVec<[Type;2]>, Type)) {
-    // convert generic builtin signatures to actual function signatures
-    let is_vector_generic = sig.parameter_types.iter().any(|ty| {
-        use PseudoType::*;
-        matches!(ty, vecN | bvecN | ivecN | uvecN | dvecN)
-    });
-    let is_image_type_generic = sig.parameter_types.iter().any(|ty| {
-        use PseudoType::*;
-        matches!(
-                        ty,
-                        gimage1D
-                            | gimage1DArray
-                            | gimage2D
-                            | gimage2DArray
-                            | gimage2DMS
-                            | gimage2DMSArray
-                            | gimage2DRect
-                            | gimage3D
-                            | gimageCube
-                            | gimageCubeArray
-                            | gimageBuffer
-                            | gtexture1D
-                            | gtexture1DArray
-                            | gtexture2D
-                            | gtexture2DArray
-                            | gtexture2DMS
-                            | gtexture2DMSArray
-                            | gtexture2DRect
-                            | gtexture3D
-                            | gtextureCube
-                            | gtextureCubeArray
-                            | gtextureBuffer
-                            | gvec4
-                    )
-    });
-    let max_vec_len = if is_vector_generic {
-        4
-    } else {
-        /*dummy*/
-        1
-    };
-    let image_classes = if is_image_type_generic {
-        &[ImageClass::F, ImageClass::SI, ImageClass::UI][..]
-    } else {
-        /*dummy*/
-        &[ImageClass::F][..]
-    };
-
-    for ic in image_classes {
-        for vec_len in 1..=max_vec_len {
-            let arg_types: Vec<_> = sig
-                .parameter_types
-                .iter()
-                .map(|ty| pseudo_type_to_concrete_type(*ty, builtin_types, vec_len, *ic))
-                .collect();
-            let return_type =
-                pseudo_type_to_concrete_type(sig.result_type, builtin_types, vec_len, *ic);
-            cb(&arg_types, return_type);
-        }
-    }
-}
-
 /// Describes a built-in operation (function or operator).
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct BuiltinOperation {
     pub name: &'static str,
     pub signatures: &'static [BuiltinSignature],

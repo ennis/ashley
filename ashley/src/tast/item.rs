@@ -170,6 +170,7 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
                 function_control: spirv::FunctionControl::NONE,
                 function_type: func_type.clone(),
                 parameters: params,
+                builtin: None,
             }),
         };
         // TODO: check for duplicate definitions

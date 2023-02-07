@@ -1,13 +1,12 @@
 //! Component access & swizzle checks
-
 use smallvec::SmallVec;
 
-pub(super) enum ComponentSyntaxError {
+pub(crate) enum ComponentSyntaxError {
     InvalidSyntax,
     TooManyComponents,
 }
 
-pub(super) type ComponentIndices = SmallVec<[u32;4]>;
+pub(crate) type ComponentIndices = SmallVec<[u32;4]>;
 
 /// Converts a component selection syntax into corresponding component indices.
 ///
@@ -26,7 +25,7 @@ pub(super) type ComponentIndices = SmallVec<[u32;4]>;
 ///
 /// * "rgba" => `vec![0,1,2,3]`
 /// * "yyxx" => `vec![1,1,2,2]`
-fn get_component_indices(selection: &str, num_components: usize) -> Result<ComponentIndices, ComponentSyntaxError> {
+pub(crate) fn get_component_indices(selection: &str, num_components: usize) -> Result<ComponentIndices, ComponentSyntaxError> {
     let check_component_name_set =
         |names: &str| -> Option<ComponentIndices> { selection.chars().map(|c| names.find(c).map(|i| i as u32)).collect() };
 

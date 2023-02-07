@@ -49,9 +49,12 @@ fn validate_spirv(code: &[u32]) {
 #[test]
 fn test_lower() {
     insta::glob!("inputs/*.glsl", |path| {
-        let source: Arc<str> = fs::read_to_string(path).unwrap().into();
+
         let mut sources = ashley::diagnostic::SourceFileProvider::new();
+        let source: Arc<str> = fs::read_to_string(path).unwrap().into();
         let src_id = sources.register_source(path.to_str().unwrap(), source.clone());
+        let diag = ashley::diagnostic::Diagnostics::new(source_provider, file, diag_writer, term::Config::default());
+
         let ast_module;
 
         // 1. parse AST

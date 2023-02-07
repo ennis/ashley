@@ -104,12 +104,12 @@ pub enum SyntaxKind {
     #[token("->")]
     THIN_ARROW,
 
-    #[token("fn")]
-    FN_KW,
     #[token("const")]
     CONST_KW,
     #[token("import")]
     IMPORT_KW,
+    #[token("public")]
+    PUBLIC_KW,
     #[token("extern")]
     EXTERN_KW,
     #[token("if")]
@@ -118,10 +118,6 @@ pub enum SyntaxKind {
     ELSE_KW,
     #[token("return")]
     RETURN_KW,
-    #[token("let")]
-    LET_KW,
-    #[token("var")]
-    VAR_KW,
     #[token("break")]
     BREAK_KW,
     #[token("continue")]
@@ -177,8 +173,9 @@ pub enum SyntaxKind {
     IMPORT_DECL,
     IMPORT_PARAM_LIST,
     IMPORT_ALIAS,
+    VISIBILTITY,
     QUALIFIER,
-    EXTERN,
+    LINKAGE,
     FN_DEF,
     STRUCT_DEF,
     STRUCT_FIELD,

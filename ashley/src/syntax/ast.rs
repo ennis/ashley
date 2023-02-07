@@ -1,7 +1,7 @@
 use crate::{
-    diagnostic::{AsSourceLocation, SourceLocation},
+    diagnostic::{AsSourceLocation, SourceId, SourceLocation},
     syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken, UnaryOp},
-    T,
+    tast, T,
 };
 use std::num::{ParseFloatError, ParseIntError};
 
@@ -144,6 +144,11 @@ macro_rules! impl_ast_variant_node {
     };
 }
 
+pub struct Root {
+    pub source_id: SourceId,
+    pub module: Module,
+}
+
 impl_ast_token!(Ident<IDENT>);
 impl_ast_token!(AstString<STRING>);
 impl_ast_token!(IntNumber<INT_NUMBER>);
@@ -157,9 +162,9 @@ impl_ast_node!(ImportParamList <IMPORT_PARAM_LIST>  []);
 impl_ast_node!(ImportAlias <IMPORT_ALIAS> [token alias: Ident]);
 impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident]);
 impl_ast_node!(TupleType   <TUPLE_TYPE>   [nodes fields: Type]);
-impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node  element_type: Type, node length: Expr]);
+impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node element_type: Type, node length: Expr]);
 impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node ret_type: RetType]);
-impl_ast_node!(StructDef   <STRUCT_DEF>   [nodes fields: StructField]);
+impl_ast_node!(StructDef   <STRUCT_DEF>   [node visibility: Visibility, token ident: Ident, nodes fields: StructField]);
 impl_ast_node!(StructField <STRUCT_FIELD> [token ident: Ident, node ty: Type]);
 impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
 impl_ast_node!(FnParam     <FN_PARAM>     [token ident: Ident, node ty: Type]);
@@ -167,18 +172,19 @@ impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
 impl_ast_node!(ClosureParamList   <CLOSURE_PARAM_LIST>   [nodes parameters: Type]);
 
 impl_ast_node!(FnDef<FN_DEF>
-               [node extern_: Extern,
+               [node visibility: Visibility,
+                node extern_: Linkage,
                 node ret_type: RetType,
                 node param_list: ParamList,
                 node block: Block,
                 token name: Ident]);
 
 /*impl_ast_node!(FnDecl<FN_DECL>
-               [node extern_: Extern,
-                node ret_type: RetType,
-                node param_list: ParamList,
-                node block: Block,
-                token name: Ident]);*/
+[node extern_: Extern,
+ node ret_type: RetType,
+ node param_list: ParamList,
+ node block: Block,
+ token name: Ident]);*/
 
 impl_ast_node!(Condition     <CONDITION>   [node expr: Expr]);
 impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: ExprStmt]);
@@ -197,7 +203,7 @@ impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node stmt: Stmt])
 impl_ast_node!(BinExpr       <BIN_EXPR>    []);
 impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
 impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
-impl_ast_node!(CallExpr      <CALL_EXPR>   [node func: Expr, node arg_list: ArgList]);
+impl_ast_node!(CallExpr      <CALL_EXPR>   [node callee: Expr, node arg_list: ArgList]);
 impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
 impl_ast_node!(FieldExpr     <FIELD_EXPR>  [node expr: Expr, token field: Ident]);
 impl_ast_node!(LitExpr       <LIT_EXPR>    []);
@@ -206,12 +212,13 @@ impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
 impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Qualifier     <QUALIFIER>   []);
-impl_ast_node!(Extern        <EXTERN>      []);
-impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node extern_: Extern, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(Visibility    <VISIBILTITY>   []);
+impl_ast_node!(Linkage        <LINKAGE>      []);
+impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node visibility: Visibility, node extern_: Linkage, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType, ARRAY_TYPE => ArrayType, CLOSURE_TYPE => ClosureType ]);
-impl_ast_variant_node!(Item, [ FN_DEF => FnDef, FN_DECL => FnDecl, GLOBAL => Global, STRUCT_DEF => StructDef, IMPORT_DECL => ImportDecl ]);
+impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global, STRUCT_DEF => StructDef, IMPORT_DECL => ImportDecl ]);
 impl_ast_variant_node!(Stmt, [
     EXPR_STMT => ExprStmt,
     RETURN_STMT => ReturnStmt,
@@ -457,12 +464,38 @@ impl Qualifier {
         first_token(self.syntax())
     }
 
-    pub fn global_kind(&self) -> Option<QualifierKind> {
+    pub fn qualifier(&self) -> Option<tast::Qualifier> {
         match self.token().kind() {
-            SyntaxKind::UNIFORM_KW => Some(QualifierKind::Uniform),
-            SyntaxKind::IN_KW => Some(QualifierKind::In),
-            SyntaxKind::OUT_KW => Some(QualifierKind::Out),
-            SyntaxKind::CONST_KW => Some(QualifierKind::Const),
+            SyntaxKind::UNIFORM_KW => Some(tast::Qualifier::Uniform),
+            SyntaxKind::IN_KW => Some(tast::Qualifier::In),
+            SyntaxKind::OUT_KW => Some(tast::Qualifier::Out),
+            SyntaxKind::CONST_KW => Some(tast::Qualifier::Const),
+            _ => None,
+        }
+    }
+}
+
+impl Linkage {
+    pub fn token(&self) -> SyntaxToken {
+        first_token(self.syntax())
+    }
+
+    pub fn is_extern(&self) -> bool {
+        match self.token().kind() {
+            SyntaxKind::EXTERN_KW => true,
+            _ => false,
+        }
+    }
+}
+
+impl Visibility {
+    pub fn token(&self) -> SyntaxToken {
+        first_token(self.syntax())
+    }
+
+    pub fn visibility(&self) -> Option<tast::Visibility> {
+        match self.token().kind() {
+            SyntaxKind::PUBLIC_KW => Some(tast::Visibility::Public),
             _ => None,
         }
     }
@@ -473,17 +506,21 @@ impl Qualifier {
 #[cfg(test)]
 mod tests {
     use crate::{
-        diagnostic::SourceFileProvider,
+        diagnostic::{Diagnostics, SourceFileProvider},
         syntax,
-        syntax::ast::{AstNode, Item, Module},
+        syntax::ast::{Item, Module},
     };
-    use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+    use codespan_reporting::{
+        term,
+        term::termcolor::{ColorChoice, StandardStream},
+    };
 
-    fn parse_module(text: &str) -> Option<Module> {
+    fn parse_module(text: &str) -> Module {
         let mut sources = SourceFileProvider::new();
         let src_id = sources.register_source("<input>", text);
         let mut writer = StandardStream::stderr(ColorChoice::Always);
-        Module::cast(dbg!(syntax::parse(text, src_id, sources, writer)))
+        let mut diagnostics = Diagnostics::new(sources, src_id, &mut writer, term::Config::default());
+        syntax::parse(text, src_id, &mut diagnostics).module
     }
 
     #[test]
@@ -493,8 +530,7 @@ mod tests {
 fn main() {
 }
         "#,
-        )
-        .unwrap();
+        );
 
         let item = m.items().next().unwrap();
         match item {

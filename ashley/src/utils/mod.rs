@@ -1,10 +1,53 @@
 use id_arena::ArenaBehavior;
-use std::{
-    marker::PhantomData,
-    ops::{Index, IndexMut},
-};
+use std::{marker::PhantomData, ops::Index};
 
 pub mod interner;
+mod typed_vec;
+pub use typed_vec::{Id, TypedIndexMap, TypedIndexSet, TypedVec};
+
+/// Defines arena ID types.
+macro_rules! id_types {
+    ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
+        $(
+        $(#[$m])*
+        #[derive(Copy,Clone,Debug,Eq,PartialEq,Ord,PartialOrd,Hash)]
+        #[repr(transparent)]
+        $v struct $n(NonZeroU32);
+
+        impl $n {
+            $v fn index(&self) -> usize {
+                (self.0.get() - 1) as usize
+            }
+
+            $v fn from_index(index: usize) -> $n {
+                $n(unsafe { NonZeroU32::new_unchecked((index+1) as u32) })
+            }
+        }
+
+        impl id_arena::ArenaBehavior for $n {
+            type Id = Self;
+
+            fn new_id(_arena_id: u32, index: usize) -> Self::Id {
+                $n(unsafe { NonZeroU32::new_unchecked((index+1) as u32) })
+            }
+
+            fn index(id: Self::Id) -> usize {
+                (id.0.get() - 1) as usize
+            }
+
+            fn arena_id(_: Self::Id) -> u32 {
+                0
+            }
+
+            fn new_arena_id() -> u32 {
+                0
+            }
+        }
+        )*
+    };
+}
+
+pub(crate) use id_types;
 
 /// A "side-map" for items allocated in an IdArena.
 /// TODO: the API is shit, needs T: Default+Clone, only used once, needs mut access for reading
@@ -13,7 +56,7 @@ pub struct IdMap<Id, T> {
     _phantom: PhantomData<fn() -> Id>,
 }
 
-impl<Id: ArenaBehavior, T: Default+Clone> IdMap<Id, T> {
+impl<Id: ArenaBehavior, T: Default + Clone> IdMap<Id, T> {
     pub fn new() -> IdMap<Id, T> {
         IdMap {
             map: vec![],

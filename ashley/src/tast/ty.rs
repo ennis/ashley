@@ -1,13 +1,40 @@
-use std::sync::Arc;
-use crate::hir;
-use crate::syntax::ast;
-use crate::tast::ast_identity;
-use crate::tast::decl::StructDef;
+use crate::{hir, syntax::ast, tast::DefId};
+use std::{
+    hash::{Hash, Hasher},
+    ops::Deref,
+    ptr,
+    sync::Arc,
+};
 
-pub type ScalarType = crate::hir::types::ScalarType;
+pub use hir::types::{ImageSampling, ImageType};
+pub type ScalarType = hir::types::ScalarType;
 
-#[derive(Clone)]
-pub struct Type(Arc<TypeKind>);
+// TODO: arcs are probably not necessary here, we could replace them with a straight reference, but then
+// we'd need an arena for the types
+#[derive(Clone, Debug)]
+pub struct Type(pub(crate) Arc<TypeKind>);
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Type {}
+
+impl Hash for Type {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        ptr::hash(Arc::as_ptr(&self.0), state);
+    }
+}
+
+impl Deref for Type {
+    type Target = TypeKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// Function or closure type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -16,8 +43,8 @@ pub struct FunctionType {
     pub arg_types: Vec<Type>,
 }
 
-#[derive(Clone,Eq,PartialEq)]
-enum TypeKind {
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum TypeKind {
     /// Void (or unit) type.
     Unit,
     /// Scalar type.
@@ -25,20 +52,22 @@ enum TypeKind {
     /// Vector type (element type + size).
     Vector(ScalarType, u8),
     /// Matrix type (element type + row count + column count).
-    Matrix { component_type: ScalarType, columns: u8, rows: u8 },
+    Matrix {
+        component_type: ScalarType,
+        columns: u8,
+        rows: u8,
+    },
     /// Array type (element type + size).
     Array(Type, u32),
     /// Runtime array type. Array without a known length.
     RuntimeArray(Type),
     /// Structure type (array of (offset, type) tuples).
-    Struct(Arc<StructDef>),
-    /// Sampled image type (e.g. `texture2D`).
-    SampledImage(hir::types::ImageType),
-    /// Unsampled image type (e.g. `image2D`).
+    Struct(DefId),
+    /// Unsampled image type.
     Image(hir::types::ImageType),
     /// Pointer.
     Pointer {
-        pointee_type: Arc<Type>,
+        pointee_type: Type,
         storage_class: spirv::StorageClass,
     },
     /// Function or closure type.
@@ -49,6 +78,28 @@ enum TypeKind {
     /// Strings.
     String,
     Unknown,
+    Error,
+}
+
+impl From<ScalarType> for TypeKind {
+    fn from(s: ScalarType) -> Self {
+        TypeKind::Scalar(s)
+    }
+}
+
+impl From<FunctionType> for TypeKind {
+    fn from(fty: FunctionType) -> Self {
+        TypeKind::Function(fty)
+    }
+}
+
+impl TypeKind {
+    pub fn as_function(&self) -> Option<&FunctionType> {
+        match self {
+            TypeKind::Function(fty) => Some(fty),
+            _ => None,
+        }
+    }
 }
 
 /// A type as it appears in the AST, and its resolved form.
@@ -56,4 +107,3 @@ pub struct TypeSpec {
     pub ast: ast::Type,
     pub ty: Type,
 }
-ast_identity!(TypeSpec);

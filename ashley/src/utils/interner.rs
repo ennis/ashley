@@ -1,13 +1,6 @@
 use id_arena::ArenaBehavior;
 use indexmap::IndexSet;
-use std::{
-    borrow::Borrow,
-    cell::RefCell,
-    collections::{hash_map::Entry, HashMap},
-    hash::Hash,
-    marker::PhantomData,
-    ops::{Index, IndexMut},
-};
+use std::{borrow::Borrow, hash::Hash, marker::PhantomData, ops::Index};
 
 /// Associates unique handles to equal values.
 pub struct UniqueArena<T, Id> {

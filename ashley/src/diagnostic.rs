@@ -6,6 +6,7 @@ use codespan_reporting::{
 };
 use rowan::TextRange;
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ops::Range,
     sync::{Arc, Mutex, RwLock},
@@ -158,7 +159,10 @@ impl AsSourceLocation for SourceLocation {
     }
 }
 
-impl<T> AsSourceLocation for &T where T: AsSourceLocation {
+impl<T> AsSourceLocation for &T
+where
+    T: AsSourceLocation,
+{
     fn source_location(&self) -> SourceLocation {
         (*self).source_location()
     }
@@ -174,39 +178,43 @@ impl<T> AsSourceLocation for &T where T: AsSourceLocation {
     }
 }*/
 
-struct DiagnosticsInner {
-    writer: Box<dyn WriteColor>,
+struct DiagnosticsInner<'a> {
+    writer: &'a mut dyn WriteColor,
     //current_source:
     bug_count: usize,
     error_count: usize,
     warning_count: usize,
 }
 
-pub struct Diagnostics {
+pub struct Diagnostics<'a> {
     config: term::Config,
     files: SourceFileProvider,
     default_source: SourceId,
-    inner: parking_lot::Mutex<DiagnosticsInner>,
+    inner: DiagnosticsInner<'a>,
 }
 
-impl Diagnostics {
-    pub(crate) fn new(
+impl<'a> Diagnostics<'a> {
+    pub fn new(
         files: SourceFileProvider,
         default_source: SourceId,
-        writer: impl WriteColor + 'static,
+        writer: &'a mut dyn WriteColor,
         config: term::Config,
     ) -> Diagnostics {
         Diagnostics {
             files,
             config,
             default_source,
-            inner: parking_lot::Mutex::new(DiagnosticsInner {
-                writer: Box::new(writer),
+            inner: DiagnosticsInner {
+                writer,
                 bug_count: 0,
                 error_count: 0,
                 warning_count: 0,
-            }),
+            },
         }
+    }
+
+    pub(crate) fn set_current_source(&mut self, source: SourceId) {
+        self.default_source = source;
     }
 
     /// Creates a new diagnostic with `Bug` severity.
@@ -221,7 +229,7 @@ impl Diagnostics {
     /// ```
     ///
     ///
-    pub fn bug(&self, message: impl Into<String>) -> DiagnosticBuilder {
+    pub fn bug<'b>(&'b mut self, message: impl Into<String>) -> DiagnosticBuilder<'b, 'a> {
         DiagnosticBuilder {
             sink: self,
             diag: CsDiagnostic::new(Severity::Bug).with_message(message.into()),
@@ -231,7 +239,7 @@ impl Diagnostics {
     /// Creates a new diagnostic with `Warning` severity.
     ///
     /// Emit the diagnostic by calling `DiagnosticBuilder::emit`.
-    pub fn warn(&self, message: impl Into<String>) -> DiagnosticBuilder {
+    pub fn warn<'b>(&'b mut self, message: impl Into<String>) -> DiagnosticBuilder<'b, 'a> {
         DiagnosticBuilder {
             sink: self,
             diag: CsDiagnostic::new(Severity::Warning).with_message(message.into()),
@@ -241,7 +249,7 @@ impl Diagnostics {
     /// Creates a new diagnostic with `Error` severity.
     ///
     /// Emit the diagnostic by calling `DiagnosticBuilder::emit`.
-    pub fn error(&self, message: impl Into<String>) -> DiagnosticBuilder {
+    pub fn error<'b>(&'b mut self, message: impl Into<String>) -> DiagnosticBuilder<'b, 'a> {
         DiagnosticBuilder {
             sink: self,
             diag: CsDiagnostic::new(Severity::Error).with_message(message.into()),
@@ -250,33 +258,33 @@ impl Diagnostics {
 
     /// Returns the number of emitted error diagnostics.
     pub fn error_count(&self) -> usize {
-        self.inner.lock().error_count
+        self.inner.error_count
     }
 
     /// Returns the number of emitted warning diagnostics.
     pub fn warning_count(&self) -> usize {
-        self.inner.lock().warning_count
+        self.inner.warning_count
     }
 
     /// Returns the number of emitted bug diagnostics.
     pub fn bug_count(&self) -> usize {
-        self.inner.lock().bug_count
+        self.inner.bug_count
     }
 }
 
 /// Used to build and emit diagnostic messages.
-pub struct DiagnosticBuilder<'a> {
-    sink: &'a Diagnostics,
+pub struct DiagnosticBuilder<'a, 'b> {
+    sink: &'a mut Diagnostics<'b>,
     diag: CsDiagnostic<SourceId>,
 }
 
-impl<'a> DiagnosticBuilder<'a> {
+impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
     fn label<L: AsSourceLocation>(
         mut self,
         loc: L,
         style: LabelStyle,
         message: impl Into<String>,
-    ) -> DiagnosticBuilder<'a> {
+    ) -> DiagnosticBuilder<'a, 'b> {
         let span = loc.source_location();
         let file_id = span.file.unwrap_or(self.sink.default_source);
         self.diag.labels.push(Label {
@@ -289,17 +297,21 @@ impl<'a> DiagnosticBuilder<'a> {
     }
 
     /// Sets the primary label of the diagnostic.
-    pub fn location<L: AsSourceLocation>(self, loc: L) -> DiagnosticBuilder<'a> {
+    pub fn location<L: AsSourceLocation>(self, loc: L) -> DiagnosticBuilder<'a, 'b> {
         self.label(loc, LabelStyle::Primary, "")
     }
 
     /// Sets the primary label of the diagnostic.
-    pub fn primary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+    pub fn primary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a, 'b> {
         self.label(loc, LabelStyle::Primary, message)
     }
 
     /// Sets the primary label of the diagnostic, only if `loc` is not `None`.
-    pub fn primary_label_opt(mut self, loc: Option<SourceLocation>, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+    pub fn primary_label_opt(
+        mut self,
+        loc: Option<SourceLocation>,
+        message: impl Into<String>,
+    ) -> DiagnosticBuilder<'a, 'b> {
         if let Some(loc) = loc {
             self.label(loc, LabelStyle::Primary, message)
         } else {
@@ -307,31 +319,35 @@ impl<'a> DiagnosticBuilder<'a> {
         }
     }
 
-    pub fn secondary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+    pub fn secondary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a, 'b> {
         self.label(loc, LabelStyle::Secondary, message)
     }
 
-    pub fn note(mut self, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+    pub fn note(mut self, message: impl Into<String>) -> DiagnosticBuilder<'a, 'b> {
         self.diag.notes.push(message.into());
         self
     }
 
     pub fn emit(mut self) {
-        let mut inner = self.sink.inner.lock();
         match self.diag.severity {
             Severity::Bug => {
-                inner.bug_count += 1;
+                self.sink.inner.bug_count += 1;
             }
             Severity::Error => {
-                inner.error_count += 1;
+                self.sink.inner.error_count += 1;
             }
             Severity::Warning => {
-                inner.warning_count += 1;
+                self.sink.inner.warning_count += 1;
             }
             _ => {}
         }
-        term::emit(&mut inner.writer, &self.sink.config, &self.sink.files, &self.diag)
-            .expect("diagnostic output failed")
+        term::emit(
+            &mut self.sink.inner.writer,
+            &self.sink.config,
+            &self.sink.files,
+            &self.diag,
+        )
+        .expect("diagnostic output failed")
     }
 }
 

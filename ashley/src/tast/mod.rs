@@ -1,100 +1,290 @@
 //! Typed AST representation
-
-mod ty;
-mod decl;
+mod consteval;
+mod def;
+mod expr;
 mod item;
+mod scope;
+mod stmt;
+mod swizzle;
+pub mod ty;
+mod overload;
+mod builtins;
 
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use crate::hir;
-use crate::hir::types::ScalarType;
-use crate::lower::swizzle::ComponentIndices;
-use crate::lower::typecheck::BuiltinOperation;
-use crate::syntax::ast;
+pub use def::{Def, Qualifier, Visibility};
+pub use expr::{Expr, FunctionRef};
+pub use ty::{FunctionType, ScalarType, Type, TypeKind};
+
+use crate::{
+    builtins::BuiltinTypes,
+    diagnostic::Diagnostics,
+    syntax::ast,
+    tast::{
+        scope::{Scope},
+        stmt::Stmt,
+    },
+    utils::{Id, TypedVec},
+};
+use std::{
+    collections::{HashSet},
+    hash::{Hash},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
+use ashley::tast::def::DefKind;
+use crate::tast::expr::Place;
+use crate::tast::scope::Res;
 
 // TODO: separate the items / types from the bodies of functions and initializers
 
-macro_rules! ast_identity {
-    ($t:ident) => {
-        impl PartialEq for $t {
-            fn eq(&self, other: &Self) -> bool {
-                self.ast.eq(&other.ast)
-            }
-        }
+pub type ExprId = Id<Expr>;
+pub type PlaceId = Id<Place>;
+pub type StmtId = Id<Stmt>;
+pub type BlockId = Id<Block>;
+pub type PackageImportId = Id<Package>;
+pub type LocalDefId = Id<Def>;
+pub type LocalVarId = Id<LocalVar>;
 
-        impl Eq for $t {}
-
-        impl Hash for $t {
-            fn hash<H: Hasher>(&self, state: &mut H) {
-                self.ast.hash(state)
-            }
-        }
-    };
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct DefId {
+    pub package: Option<PackageImportId>,
+    pub local_def: LocalDefId,
 }
 
-use ast_identity;
-
-
-pub struct ExprStmt {
-    pub ast: ast::ExprStmt,
-    pub expr: Expr,
+impl From<LocalDefId> for DefId {
+    fn from(local_def: LocalDefId) -> Self {
+        DefId {
+            package: None,
+            local_def,
+        }
+    }
 }
 
-struct Expr {
-    pub ast: ast::Expr,
+pub struct LocalVar {
+    pub name: String,
     pub ty: Type,
-    pub kind: ExprKind
 }
 
-pub enum Operation {
-    Builtin(BuiltinOperation),
-    FunctionCall(Arc<FunctionDef>),
+pub struct Block {
+    pub stmts: Vec<StmtId>,
 }
 
-#[derive(Clone,Debug)]
-pub struct OpExpr {
-    pub operation: Operation,
-    pub arguments: Vec<Expr>
+impl Block {
+    pub fn new() -> Block {
+        Block {
+            stmts: Vec::new(),
+        }
+    }
 }
 
-#[derive(Clone,Debug)]
-pub struct IndexExpr {
-    pub ast: IndexExpr,
-    pub array: Box<Expr>,
-    pub index: Box<Expr>,
+pub struct TypedBody {
+    pub stmts: TypedVec<Stmt>,
+    pub exprs: TypedVec<Expr>,
+    pub local_vars: TypedVec<LocalVar>,
+    pub blocks: TypedVec<Block>
 }
 
-pub struct FieldExpr {
-    pub ast: FieldExpr,
-    pub def: Arc<StructDef>,
-    pub index: usize,
+impl TypedBody {
+    pub fn new() -> TypedBody {
+        TypedBody {
+            stmts: TypedVec::new(),
+            exprs: TypedVec::new(),
+            local_vars: TypedVec::new(),
+            blocks: TypedVec::new(),
+        }
+    }
 }
 
-pub struct ComponentAccessExpr {
-    pub ast: FieldExpr,
-    pub components: ComponentIndices,
+#[derive(Debug)]
+pub struct Package {
+    pub defs: TypedVec<Def, LocalDefId>,
+}
+
+impl Package {
+    /// Imports all the definitions of this package into the given scope.
+    pub(crate) fn import(&self, scope: &mut Scope) {
+        for (id,def) in self.defs.iter_full() {
+            scope.add_def(DefId::from(id), def);
+        }
+    }
+}
+
+/// The API is simply name (+arguments) -> Package (set of definitions).
+///
+/// The resolver is responsible for looking up the package name in the filesystem, or other sources
+/// (it could be a procedurally generated package).
+pub trait PackageResolver {
+    fn resolve(&self, name: &str) -> Option<Package>;
+}
+
+pub struct DummyPackageResolver;
+
+impl PackageResolver for DummyPackageResolver {
+    fn resolve(&self, _name: &str) -> Option<Package> {
+        None
+    }
+}
+
+trait IdentExt {
+    // TODO rename this to to_unique_name
+    fn to_string_opt(&self) -> String;
+}
+
+impl IdentExt for Option<ast::Ident> {
+    fn to_string_opt(&self) -> String {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        self.as_ref()
+            .map(|ident| ident.text().to_string())
+            .unwrap_or_else(|| format!("__anon_{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
+    }
+}
+
+/// Represents a type-checked module.
+///
+/// Bodies of items (functions and initializers) are type-checked on-demand.
+#[derive(Debug)]
+pub struct Module {
+    /// Imported packages.
+    packages: TypedVec<Package, PackageImportId>,
+    /// All definitions in this module.
+    defs: TypedVec<Def>,
+}
+
+impl Module {
+    /// Creates a new module.
+    pub fn new() -> Module {
+        Module {
+            packages: Default::default(),
+            defs: Default::default(),
+        }
+    }
+
+
+    /// Returns the definition with the given ID.
+    pub fn def(&self, id: DefId) -> &Def {
+        match id.package {
+            Some(package) => &self.packages[package].defs[id.local_def],
+            None => &self.defs[id.local_def],
+        }
+    }
+}
+
+/// Types interner.
+pub struct Types {
+    types: HashSet<Arc<TypeKind>>,
+}
+
+impl Types {
+    pub fn new() -> Self {
+        Types {
+            types: HashSet::new(),
+        }
+    }
+
+    /// Interns a type.
+    pub fn intern(&mut self, kind: impl Into<TypeKind>) -> Type {
+        // TODO replace with get_or_insert_owned once stabilized
+        let kind = kind.into();
+        if let Some(ty) = self.types.get(&kind) {
+            Type(ty.clone())
+        } else {
+            let ty = Arc::new(kind);
+            self.types.insert(ty.clone());
+            Type(ty)
+        }
+    }
+}
+
+/// Context for type-checking a single source file.
+pub(crate) struct TypeCheckCtxt<'a, 'diag> {
+    module: &'a mut Module,
+    diag: &'a mut Diagnostics<'diag>,
+    tyctxt: &'a mut TypeCtxt,
+    package_resolver: &'a mut dyn PackageResolver,
+    scopes: Vec<Scope>,
+}
+
+pub struct TypeCtxt {
+    /// Interned set of types.
+    types: Types,
+    builtins: BuiltinTypes,
+    error: Type,
+}
+
+impl TypeCtxt {
+    pub fn new() -> Self {
+        let mut types = Types::new();
+        let error_type = types.intern(TypeKind::Error);
+        let builtin_types = BuiltinTypes::new(&mut types);
+        TypeCtxt {
+            types,
+            builtins: builtin_types,
+            error: error_type,
+        }
+    }
+
+
+    pub fn ty(&mut self, kind: impl Into<TypeKind>) -> Type {
+        self.types.intern(kind)
+    }
+
+    pub fn typecheck_items(&mut self, ast: ast::Root,
+                           package_resolver: &mut dyn PackageResolver,
+                           diag: &mut Diagnostics) -> Module
+    {
+        let mut module = Module::new();
+        diag.set_current_source(ast.source_id);
+        let mut ctxt = TypeCheckCtxt {
+            module: &mut module,
+            diag,
+            tyctxt: self,
+            package_resolver,
+            scopes: Vec::new(),
+        };
+        ctxt.typecheck_module(&ast.module);
+        module
+    }
+
+    pub fn typecheck_item_body(&mut self, module: &Module, def: LocalDefId, diag: &mut Diagnostics) -> TypedBody {
+        let mut scope = Scope::new();
+        // bring package contents in scope
+        for package in module.packages.iter() {
+            package.import(&mut scope);
+        }
+        // reconstruct the set of visible declarations before the item body (there are no forward references in GLSL)
+        for def_index in 0..def.index() {
+            let id = LocalDefId::from_index(def_index);
+            let def = &module.defs[id];
+            scope.add_def(DefId::from(id), def);
+        }
+
+        let mut typed_body = TypedBody::new();
+        let error_type = self.ty(TypeKind::Error);
+
+        let mut ctxt = TypeCheckBodyCtxt {
+            module,
+            diag,
+            tyctxt: self,
+            scopes: vec![scope],
+            typed_body: &mut typed_body,
+            error_type
+        };
+
+        typed_body
+    }
 }
 
 
-pub struct CallExpr {
-    pub ast: ast::CallExpr,
-    pub function:
+pub struct TypeCheckBodyCtxt<'a, 'diag> {
+    module: &'a Module,
+    tyctxt: &'a mut TypeCtxt,
+    diag: &'a mut Diagnostics<'diag>,
+    scopes: Vec<Scope>,
+    typed_body: &'a mut TypedBody,
+    error_type: Type,
 }
 
-enum ExprKind {
-    Operation(OpExpr),
-    Call(CallExpr),
-    Index(IndexExpr),
-    Field(FieldExpr),
-    ComponentAccess(ComponentAccessExpr),
-    Error,
-}
-
-
-enum Statement {
-
-}
-
-struct Module {
-
+#[cfg(test)]
+mod tests {
 }

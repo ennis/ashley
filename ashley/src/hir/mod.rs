@@ -6,13 +6,7 @@ pub mod transform;
 pub mod types;
 mod visit;
 
-use crate::{
-    diagnostic::{DiagnosticBuilder, Diagnostics, SourceLocation},
-    hir::{
-        list::{List, ListNode},
-        types::{Field, ScalarType, StructType},
-    },
-};
+use crate::{hir::types::ScalarType, utils::id_types};
 use ashley::utils::interner::UniqueArena;
 use bumpalo::Bump;
 use id_arena::Arena;
@@ -34,47 +28,6 @@ use std::{
 pub use self::{builder::FunctionBuilder, constant::ConstantData, types::TypeData};
 
 //--------------------------------------------------------------------------------------------------
-
-macro_rules! id_types {
-    ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
-        $(
-        $(#[$m])*
-        #[derive(Copy,Clone,Debug,Eq,PartialEq,Ord,PartialOrd,Hash)]
-        #[repr(transparent)]
-        $v struct $n(NonZeroU32);
-
-        impl $n {
-            $v fn index(&self) -> usize {
-                (self.0.get() - 1) as usize
-            }
-
-            $v fn from_index(index: usize) -> $n {
-                $n(unsafe { NonZeroU32::new_unchecked((index+1) as u32) })
-            }
-        }
-
-        impl id_arena::ArenaBehavior for $n {
-            type Id = Self;
-
-            fn new_id(_arena_id: u32, index: usize) -> Self::Id {
-                $n(unsafe { NonZeroU32::new_unchecked((index+1) as u32) })
-            }
-
-            fn index(id: Self::Id) -> usize {
-                (id.0.get() - 1) as usize
-            }
-
-            fn arena_id(_: Self::Id) -> u32 {
-                0
-            }
-
-            fn new_arena_id() -> u32 {
-                0
-            }
-        }
-        )*
-    };
-}
 
 // Define the handle types for elements in the context arrays
 id_types! {
@@ -337,7 +290,7 @@ impl From<IdRef> for Operand {
             IdRef::Constant(c) => Operand::ConstantRef(c),
             IdRef::Global(g) => Operand::GlobalRef(g),
             IdRef::Function(f) => Operand::FunctionRef(f),
-            IdRef::Local(l) => Operand::LocalRef(l)
+            IdRef::Local(l) => Operand::LocalRef(l),
         }
     }
 }
@@ -429,7 +382,6 @@ pub struct FunctionParameter {
     /// Type of the parameter
     pub ty: Type,
 }
-
 
 #[derive(Clone, Debug)]
 pub struct LocalData {

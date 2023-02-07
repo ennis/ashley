@@ -1,16 +1,13 @@
-extern crate self as ashley;
 extern crate core;
+extern crate self as ashley;
 
+pub mod builtins;
 pub mod diagnostic;
-//pub mod dialect;
 pub mod hir;
-pub mod lower;
-pub mod syntax;
-mod utils;
 mod package;
-mod tast;
-//mod lower;
-//mod lower;
+pub mod syntax;
+pub mod tast;
+mod utils;
 
 // High-level workflow:
 // - register source code into the session object

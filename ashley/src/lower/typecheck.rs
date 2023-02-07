@@ -8,7 +8,7 @@ use crate::{
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 
-/// Pseudo-type used in signatures of built-in function.
+/// Pseudo-type used in signatures of built-in functions.
 ///
 /// This is mainly used so that we can specify vector overloads in a more compact way (`vecN` instead
 /// of duplicating signatures four times).
@@ -1368,7 +1368,7 @@ builtin_operations! {
     fb.emit_logical_and(lhs.ty, lhs.val, rhs.val)
 }*/
 
-fn lower_matrix_comp_mult(
+pub(crate) fn lower_matrix_comp_mult(
     ctxt: &LowerCtxt,
     fb: &mut FunctionBuilder,
     args: &[IdRef],

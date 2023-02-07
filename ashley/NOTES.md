@@ -1249,3 +1249,25 @@ No change:
 Why? 
 - people already familiar with GLSL, plus we're already using GLSL semantics
 - bigger database of examples
+
+
+Rowan doesn't include a source ID in TextRange, and it's extremely annoying. 
+
+# Issue: the parser needs the imports in order to build a symbol table for types
+fcking useless
+
+Need to query the module provider for a list of symbols
+Issue: if the import module imports stuff from the module being parsed -> infinite loop
+
+# Should builtin functions be definitions?
+Pros:
+* somewhat more uniform code to type-check builtins and regular functions
+
+Cons:
+* pollutes modules with hundreds of functions
+
+Alternative:
+* register builtin functions in the name resolution
+
+# Should operators be definitions?
+No

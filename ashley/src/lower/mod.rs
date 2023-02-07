@@ -2,9 +2,7 @@
 mod builtin;
 mod consteval;
 mod mangle;
-mod swizzle;
 mod typecheck;
-mod tast;
 
 use crate::{
     diagnostic::{AsSourceLocation, DiagnosticBuilder, Diagnostics, SourceFileProvider, SourceId, SourceLocation},
@@ -38,7 +36,6 @@ use std::{
 };
 use spirv::StorageClass;
 use ashley::syntax::ast::Stmt;
-use crate::lower::swizzle::ComponentIndices;
 
 trait DiagnosticsExt {
     /// "missing generic argument"
@@ -65,15 +62,15 @@ trait DiagnosticsExt {
     fn consteval_failure(&self, loc: SourceLocation) -> DiagnosticBuilder;
 }
 
-impl DiagnosticsExt for Diagnostics {
-    fn missing_generic_argument(&self, instantiation_loc: SourceLocation, expected_forms: &str) -> DiagnosticBuilder {
+impl<'a> DiagnosticsExt for Diagnostics<'a> {
+    fn missing_generic_argument(&mut self, instantiation_loc: SourceLocation, expected_forms: &str) -> DiagnosticBuilder {
         self.error("missing generic argument")
             .primary_label(instantiation_loc, "")
             .note(format!("expected: `{expected_forms}`"))
     }
 
     fn extra_generic_arguments(
-        &self,
+        &mut self,
         instantiation_loc: SourceLocation,
         expected: usize,
         got: usize,
@@ -84,7 +81,7 @@ impl DiagnosticsExt for Diagnostics {
         )
     }
 
-    fn already_defined(&self, name: &str, loc: SourceLocation, prev_loc: Option<SourceLocation>) -> DiagnosticBuilder {
+    fn already_defined(&mut self, name: &str, loc: SourceLocation, prev_loc: Option<SourceLocation>) -> DiagnosticBuilder {
         let mut diag = self
             .error(format!(
                 "`{name}`an item with the same name has already been defined in this scope"
@@ -140,7 +137,7 @@ struct Def {
     kind: DefKind,
 }
 
-struct Scope<'a> {
+pub(crate) struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     types: HashMap<String, Def>,
     variables_and_functions: HashMap<String, Def>,
@@ -266,7 +263,7 @@ fn lower_value_opt(fb: &mut FunctionBuilder, v: Option<TypedValue>, loc: SourceL
     }
 }
 
-struct LowerCtxt<'a> {
+pub(super) struct LowerCtxt<'a> {
     diag: &'a Diagnostics,
     types: BuiltinTypes,
     error_type: hir::Type,
@@ -307,9 +304,6 @@ fn lower_item(ctxt: &mut LowerCtxt, m: &mut hir::Module, item: ast::Item, scope:
     match item {
         ast::Item::FnDef(def) => {
             lower_fn_def(ctxt, m, def, scope);
-        }
-        ast::Item::FnDecl(decl) => {
-            lower_fn_decl(ctxt, m, decl, scope);
         }
         ast::Item::Global(global) => {
             // no diagnostic, this is a syntax error
@@ -794,7 +788,7 @@ enum FieldProjection {
     Swizzle()
 }
 
-fn resolve_field(ctxt: &mut LowerCtxt, m: &Module, ty: hir::Type, ident: &str) -> ComponentIndices {
+/*fn resolve_field(ctxt: &mut LowerCtxt, m: &Module, ty: hir::Type, ident: &str) -> ComponentIndices {
     match m.types[ty] {
         TypeData::Vector(scalar_type, len) => {
             // swizzle expr
@@ -802,7 +796,7 @@ fn resolve_field(ctxt: &mut LowerCtxt, m: &Module, ty: hir::Type, ident: &str) -
         }
         TypeData::Struct()
     }
-}
+}*/
 
 /// Generates IR for a place expression (lvalue).
 ///
@@ -907,11 +901,11 @@ fn lower_place_expr(
         // `value.field` or swizzle patterns
         ast::Expr::FieldExpr(field_expr) => {
 
-            let Some(expr) = field_expr.expr() else { return error_place(fb) };
+            /*let Some(expr) = field_expr.expr() else { return error_place(fb) };
             let Some(field_ident) = field_expr.field() else {return error_place(fb) };
 
             let left_place = lower_place_expr(ctxt, fb, &expr, scope);
-            let place_ty =
+            let place_ty =*/
 
             todo!("field place expr")
         }
@@ -1313,7 +1307,7 @@ fn lower_function(
     m: &mut hir::Module,
     name: String,
     loc: SourceLocation,
-    extern_: Option<ast::Extern>,
+    extern_: Option<ast::Linkage>,
     param_list: Option<ast::ParamList>,
     ret_type: Option<ast::RetType>,
     block: Option<ast::Block>,
@@ -1380,23 +1374,6 @@ fn lower_function(
     // insert function in scope
     scope.define_function(name, Some(loc), FuncRef::User(func));
     func
-}
-
-/// Lowers a function declaration.
-fn lower_fn_decl(ctxt: &mut LowerCtxt, m: &mut hir::Module, fn_decl: ast::FnDecl, scope: &mut Scope) -> hir::Function {
-    let loc = fn_decl.source_location();
-    let name = ident_to_string_opt(fn_decl.name());
-    lower_function(
-        ctxt,
-        m,
-        name,
-        loc,
-        fn_decl.extern_(),
-        fn_decl.param_list(),
-        fn_decl.ret_type(),
-        fn_decl.block(),
-        scope,
-    )
 }
 
 /// Emits IR for a function definition.

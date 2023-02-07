@@ -1,6 +1,6 @@
-uniform vec2 u_resolution;
-uniform vec2 u_scroll_offset;
-uniform float u_zoom;
+public uniform vec2 u_resolution;
+public uniform vec2 u_scroll_offset;
+public uniform float u_zoom;
 
 in vec2 i_position;
 out vec4 out_color;

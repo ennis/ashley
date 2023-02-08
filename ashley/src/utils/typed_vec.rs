@@ -112,7 +112,7 @@ impl<T, I: TypedIndex> TypedVec<T, I> {
     /// Inserts an item and returns its ID.
     pub fn push(&mut self, item: T) -> I {
         self.items.push(item);
-        unsafe { I::from_index(self.items.len() - 1 as u32) }
+        unsafe { I::from_index(self.items.len() - 1) }
     }
 
     /// Returns the index of the next item to be inserted.

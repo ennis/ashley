@@ -1,23 +1,11 @@
-use crate::{
-    diagnostic::Diagnostics,
-    hir::{
-        constant::ConstantData, types::ScalarType, Block, BlockData, Constant, ExtInstSet, Function, FunctionData,
-        FunctionParameter, GlobalVariable, IdRef, InstructionData, Local, LocalData, Module, Operand,
-        PackedVectorFormat, TerminatingInstruction, Type, TypeData, Value, ValueData, ValueOrConstant,
-    },
+use crate::hir::{
+    Block, BlockData, Constant, ExtInstSet, FunctionData, GlobalVariable, IdRef, InstructionData, Local, LocalData,
+    Module, Operand, TerminatingInstruction, Type, Value, ValueData, ValueOrConstant,
 };
-use bumpalo::Bump;
-use id_arena::Arena;
-use ordered_float::OrderedFloat;
-use rspirv::{grammar::ExtendedInstruction, spirv};
+use rspirv::spirv;
 use smallvec::{smallvec, SmallVec};
 use spirv::Op;
-use std::{
-    collections::HashMap,
-    fmt,
-    hash::Hash,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 struct InstBuilder {
     opcode: spirv::Op,

@@ -2,19 +2,19 @@ use crate::{
     builtins,
     builtins::{BuiltinOperation, BuiltinSignature},
     diagnostic::{AsSourceLocation, SourceLocation},
-    syntax::{ast, BinaryOp, UnaryOp},
+    syntax::ast,
     tast::{
         consteval::ConstantValue,
-        def::{DefKind, FunctionDef, StructDef},
-        overload::{check_signature, OverloadCandidate, OverloadResolutionError, SignatureMismatch},
+        def::DefKind,
+        overload::OverloadResolutionError,
         scope::Res,
         swizzle::{get_component_indices, ComponentIndices},
         ty::Type,
-        Def, DefId, ExprId, LocalVarId, PlaceId, ScalarType, TypeCheckBodyCtxt, TypeKind, Types,
+        DefId, ExprId, LocalVarId, ScalarType, TypeCheckBodyCtxt, TypeKind,
     },
 };
 use ordered_float::OrderedFloat;
-use std::{ops::Deref, sync::Arc};
+use std::ops::Deref;
 
 /*pub enum FunctionRef {
     Builtin(BuiltinOperation, u32),
@@ -39,14 +39,6 @@ pub struct Expr {
     pub kind: ExprKind,
 }
 
-#[derive(Clone, Debug)]
-pub struct Place {
-    pub ast: Option<ast::Expr>,
-    /// Type of the value stored in this place. Not the pointer type.
-    pub ty: Type,
-    pub kind: PlaceKind,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImplicitConversionKind {
     IntBitcast,
@@ -59,7 +51,7 @@ pub enum ImplicitConversionKind {
 #[derive(Clone, Debug)]
 pub enum ExprKind {
     Binary {
-        op: BinaryOp,
+        op: ast::BinaryOp,
         /// Signature of the binary operation.
         // TODO replace this with a DefId to the operator function
         signature: BuiltinSignature,
@@ -67,7 +59,7 @@ pub enum ExprKind {
         rhs: ExprId,
     },
     BinaryAssign {
-        op: BinaryOp,
+        op: ast::BinaryOp,
         /// Signature of the operation that is used to compute the value to assign.
         // TODO replace this with a DefId to the operator function
         signature: BuiltinSignature,
@@ -75,7 +67,7 @@ pub enum ExprKind {
         rhs: ExprId,
     },
     Unary {
-        op: UnaryOp,
+        op: ast::UnaryOp,
         /// Signature of the unary operation.
         // TODO replace this with a DefId to the operator function
         signature: BuiltinSignature,
@@ -146,21 +138,6 @@ impl TypedExpr {
     }*/
 }
 
-pub(crate) struct TypedPlace {
-    pub(crate) place: PlaceKind,
-    pub(crate) ty: TypeKind,
-}
-
-impl TypedPlace {
-    pub(crate) fn new(place: PlaceKind, ty: TypeKind) -> Self {
-        TypedPlace { place, ty }
-    }
-
-    pub(crate) fn error() -> Self {
-        TypedPlace::new(PlaceKind::Error, TypeKind::Error)
-    }
-}
-
 enum AccessKind {
     Index(usize),
     Field(usize),
@@ -187,15 +164,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         TypedExpr::new(ExprKind::Undef, self.tyctxt.ty(TypeKind::Error))
     }
 
-    fn add_place(&mut self, place: TypedPlace) -> PlaceId {
-        self.typed_body.places.push(Place {
-            ast: None, // TODO
-            ty: self.tyctxt.ty(place.ty),
-            kind: place.place,
-        })
-    }
-
-    fn add_expr(&mut self, expr: TypedExpr) -> ExprId {
+    pub(crate) fn add_expr(&mut self, expr: TypedExpr) -> ExprId {
         self.typed_body.exprs.push(Expr {
             ast: None,
             ty: expr.ty,
@@ -225,6 +194,44 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
+    fn typecheck_index_expr(&mut self, index_expr: &ast::IndexExpr) -> TypedExpr {
+        let Some(array_expr) = index_expr.array() else { return self.error_expr() };
+        let Some(index_expr) = index_expr.index() else { return self.error_expr() };
+
+        let array = self.typecheck_expr(&array_expr);
+        let index = self.typecheck_expr(&index_expr);
+
+        let ty = match array.ty.deref() {
+            TypeKind::Array(elem_ty, _) | TypeKind::RuntimeArray(elem_ty) => elem_ty.clone(),
+            _ => {
+                self.diag
+                    .error("indexing into non-array type")
+                    .location(&array_expr)
+                    .emit();
+                return self.error_expr();
+            }
+        };
+
+        match index.ty.deref() {
+            TypeKind::Scalar(ScalarType::Int) => {}
+            _ => {
+                self.diag
+                    .error("index must be of type int")
+                    .location(&index_expr)
+                    .emit();
+                return self.error_expr();
+            }
+        };
+
+        TypedExpr {
+            expr: ExprKind::Index {
+                array: self.add_expr(array),
+                index: self.add_expr(index),
+            },
+            ty,
+        }
+    }
+
     fn typecheck_call_expr(&mut self, call_expr: &ast::CallExpr) -> TypedExpr {
         let Some(ast_callee) = call_expr.callee() else {return self.error_expr() };
         let Some(arg_list) = call_expr.arg_list() else {return self.error_expr() };
@@ -232,7 +239,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         //let callee = self.typecheck_expr(&ast_callee);
 
         let overloads = match ast_callee {
-            ast::Expr::PathExpr(func_path) => {
+            ast::Expr::PathExpr(ref func_path) => {
                 // resolve function
                 let Some(ident) = func_path.ident() else { return self.error_expr() };
                 match self.resolve_name(ident.text()) {
@@ -260,18 +267,10 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
 
         match self.resolve_overload(&overloads, &arg_types) {
-            Ok(i) => {
-                let function_ty = self
-                    .module
-                    .def(overloads[i])
-                    .as_function()
-                    .unwrap()
-                    .function_type
-                    .as_function()
-                    .unwrap();
+            Ok(candidate) => {
                 let args: Vec<_> = args
                     .into_iter()
-                    .zip(function_ty.arg_types.iter())
+                    .zip(candidate.parameter_types.iter())
                     .map(|(arg, target)| {
                         let conv_arg = self.apply_implicit_conversion(arg, None, target.clone());
                         self.add_expr(conv_arg)
@@ -280,10 +279,10 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
                 TypedExpr {
                     expr: ExprKind::Call {
-                        function: overloads[i],
+                        function: overloads[candidate.index],
                         args,
                     },
-                    ty: function_ty.return_type.clone(),
+                    ty: candidate.result_type.clone(),
                 }
             }
             Err(OverloadResolutionError::NoMatch) => {
@@ -320,18 +319,18 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 TypedExpr {
                     expr: ExprKind::Unary {
                         op: op.1,
-                        signature: operation[overload.index],
+                        signature: operation.signatures[overload.index],
                         expr: self.add_expr(conv_expr),
                     },
-                    ty: overload.return_type,
+                    ty: overload.result_type.clone(),
                 }
             }
             Err(_) => {
                 // TODO display operand types
-                self.emit_error(
-                    expr.source_location(),
-                    format!("no overload for unary operation `{}`", op.0),
-                );
+                self.diag
+                    .error(format!("no overload for unary operation `{}`", op.0))
+                    .location(&prefix_expr)
+                    .emit();
                 self.error_expr()
             }
         }
@@ -339,7 +338,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
     fn typecheck_expr_with_implicit_conversion(&mut self, expr: &ast::Expr, target_ty: Type) -> TypedExpr {
         let e = self.typecheck_expr(expr);
-        self.apply_implicit_conversion(e, expr.source_location(), target_ty)
+        self.apply_implicit_conversion(e, Some(expr.source_location()), target_ty)
     }
 
     fn typecheck_path_expr(&mut self, path_expr: &ast::PathExpr) -> TypedExpr {
@@ -353,7 +352,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .error("cannot use a function as a place")
                             .location(path_expr)
                             .emit();
-                        TypedExpr::error()
+                        self.error_expr()
                     }
                     Res::Global(def) => {
                         let ty = match &self.module.def(def).kind {
@@ -386,14 +385,14 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .error("name did not resolve to a value")
                             .location(path_expr)
                             .emit();
-                        TypedExpr::error()
+                        self.error_expr()
                     }
                 }
             }
             None => {
                 // TODO better error message
                 self.diag.error("unresolved name").location(path_expr).emit();
-                TypedExpr::error()
+                self.error_expr()
             }
         }
     }
@@ -404,9 +403,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let base = self.typecheck_expr(&base);
 
         let Some(field_name) = field_expr.field() else { return self.error_expr() };
-        match base.ty {
+        match base.ty.deref() {
             TypeKind::Struct(def) => {
-                let def = self.module.def(def);
+                let def = self.module.def(*def);
                 let struct_def = def.as_struct().unwrap();
                 if let Some(field_index) = struct_def
                     .fields
@@ -431,13 +430,13 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         ))
                         .location(&field_name)
                         .emit();
-                    TypedExpr::error()
+                    self.error_expr()
                 }
             }
             TypeKind::Vector(scalar_type, size) => {
-                match get_component_indices(field_name.text(), size as usize) {
+                match get_component_indices(field_name.text(), *size as usize) {
                     Ok(components) => {
-                        let ty = self.tyctxt.ty(TypeKind::Vector(scalar_type, components.len() as u8));
+                        let ty = self.tyctxt.ty(TypeKind::Vector(*scalar_type, components.len() as u8));
                         // base expression is not a place
                         TypedExpr {
                             expr: ExprKind::ComponentAccess {
@@ -452,7 +451,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .error(format!("invalid component selection: `{}`", field_name.text()))
                             .location(&field_name)
                             .emit();
-                        TypedExpr::error()
+                        self.error_expr()
                     }
                 }
             }
@@ -462,7 +461,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     .error("invalid field or component selection")
                     .location(field_expr)
                     .emit();
-                TypedExpr::error()
+                self.error_expr()
             }
         }
     }
@@ -521,7 +520,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     if let Some(loc) = loc {
                         self.diag.error("mismatched types").location(loc).emit();
                     }
-                    TypedExpr::error()
+                    self.error_expr()
                 }
             },
             (TK::Vector(tsrc, n2), TK::Vector(tdst, n1)) if n1 == n2 => match (tsrc, tdst) {
@@ -558,7 +557,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     if let Some(loc) = loc {
                         self.diag.error("mismatched types").location(loc).emit();
                     }
-                    TypedExpr::error()
+                    self.error_expr()
                 }
             },
             (
@@ -585,7 +584,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     if let Some(loc) = loc {
                         self.diag.error("mismatched types").location(loc).emit();
                     }
-                    TypedExpr::error()
+                    self.error_expr()
                 }
             },
             _ => {
@@ -593,7 +592,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 if let Some(loc) = loc {
                     self.diag.error("mismatched types").location(loc).emit();
                 }
-                TypedExpr::error()
+                self.error_expr()
             }
         }
     }
@@ -601,7 +600,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
     fn typecheck_bin_expr(&mut self, bin_expr: &ast::BinExpr) -> TypedExpr {
         let Some((op_token, ast_operator)) = bin_expr.op_details() else {
             // syntax error
-            return TypedExpr::error();
+            return self.error_expr()
         };
 
         let conv_arith_op = |arith_op| match arith_op {
@@ -654,9 +653,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
         };
 
-        let Some(ast_lhs) = bin_expr.lhs() else { return TypedExpr::error() };
-        let Some(ast_rhs) = bin_expr.rhs() else { return TypedExpr::error() };
-        let lhs_loc = ast_lhs.source_location();
+        let Some(ast_lhs) = bin_expr.lhs() else { return self.error_expr() };
+        let Some(ast_rhs) = bin_expr.rhs() else { return self.error_expr() };
+        //let lhs_loc = ast_lhs.source_location();
         let rhs_loc = ast_rhs.source_location();
 
         let lhs = self.typecheck_expr(&ast_lhs);
@@ -685,7 +684,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                                 lhs: self.add_expr(lhs_conv),
                                 rhs: self.add_expr(rhs_conv),
                             },
-                            ty: todo!(),
+                            ty: overload.result_type.clone(),
                         }
                     }
                 }
@@ -694,50 +693,23 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         .error(format!("no overload for binary operation `{op_token}`"))
                         .location(op_token.source_location())
                         .emit();
+                    self.error_expr()
                 }
             }
-        }
-
-        if is_assignment {
-            let place = lower_place_expr(ctxt, fb, &ast_lhs, scope);
-            let (deref_ty, _) = place.deref_ty(fb);
-            let place_ptr = fb.access_chain(place.ptr_ty, place.base, &place.indices);
-            if let Some(operation) = operation {
-                // emit the arithmetic part of the assignment
-                // load lhs
-                // rhs = lhs + rhs
-                let lhs = fb.emit_load(deref_ty, place_ptr.into(), None);
-                rhs = lower_rvalue_bin_expr(
-                    ctxt,
-                    fb,
-                    operation,
-                    TypedValue::new(lhs, deref_ty),
-                    lhs_loc,
-                    rhs,
-                    rhs_loc,
-                    &op_token,
-                );
-            }
-            // implicit conversion to lhs type of assignment
-            rhs = lower_implicit_conversion(ctxt, fb, rhs, ast_rhs.source_location(), deref_ty);
-            // emit assignment
-            fb.emit_store(place_ptr.into(), rhs.val, None);
-            // this expression produces no value
-            None
-        } else if let Some(operation) = operation {
-            let lhs = lower_expr_opt_non_void(ctxt, fb, Some(&ast_lhs), scope);
-            Some(lower_rvalue_bin_expr(
-                ctxt, fb, operation, lhs, lhs_loc, rhs, rhs_loc, &op_token,
-            ))
         } else {
-            // should not happen
-            unreachable!("no assignment and no operation")
+            let rhs_conv = self.apply_implicit_conversion(rhs, Some(rhs_loc), lhs.ty.clone());
+            TypedExpr {
+                expr: ExprKind::Assign {
+                    lhs: self.add_expr(lhs),
+                    rhs: self.add_expr(rhs_conv),
+                },
+                ty: self.tyctxt.builtins.void.clone(),
+            }
         }
     }
 
     /// Typechecks a literal expression.
     pub(crate) fn typecheck_lit_expr(&mut self, lit_expr: &ast::LitExpr) -> TypedExpr {
-        use TypeKind as TK;
         match lit_expr.kind() {
             ast::LiteralKind::String(_str) => {
                 todo!("literal string")

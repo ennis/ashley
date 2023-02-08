@@ -1,4 +1,4 @@
-use crate::tast::{Def, DefId, LocalVarId, Module, Type, TypeCheckCtxt, TypeCtxt};
+use crate::tast::{Def, DefId, LocalVarId, Type, TypeCheckCtxt, TypeCtxt};
 use std::{collections::HashMap, sync::Arc};
 use ashley::tast::TypeCheckBodyCtxt;
 use crate::tast::def::DefKind;

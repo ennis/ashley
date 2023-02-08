@@ -3,7 +3,17 @@ use proc_macro::{Diagnostic, Level};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use std::collections::HashSet;
-use syn::{braced, bracketed, parenthesized, parse::{Parse, ParseStream}, parse_macro_input, parse_quote, punctuated::Punctuated, spanned::Spanned, token, token::{Brace, Paren, Token}, AngleBracketedGenericArguments, Block, Data, GenericParam, Generics, Ident, LitStr, ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatWild, Path, Token, ExprClosure};
+use syn::{
+    braced, bracketed, parenthesized,
+    parse::{Parse, ParseStream},
+    parse_macro_input, parse_quote,
+    punctuated::Punctuated,
+    spanned::Spanned,
+    token,
+    token::{Brace, Paren, Token},
+    AngleBracketedGenericArguments, Block, Data, ExprClosure, GenericParam, Generics, Ident, LitStr,
+    ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatWild, Path, Token,
+};
 
 struct GenCtxt {
     bound_vars: HashSet<Ident>,
@@ -13,7 +23,7 @@ struct GenCtxt {
 
 enum AttributeConstraint {
     Type(syn::Type),
-    Value(syn::Expr)
+    Value(syn::Expr),
 }
 
 /// An attribute pattern.
@@ -22,7 +32,7 @@ enum AttributeConstraint {
 /// `attribute = expr`
 struct AttributePattern {
     name: Ident,
-    constraint: Option<AttributeConstraint>
+    constraint: Option<AttributeConstraint>,
 }
 
 impl Parse for AttributePattern {
@@ -32,7 +42,6 @@ impl Parse for AttributePattern {
 }
 
 //--------------------------------------------------------------------------------------------------
-
 
 /// A variable name or a placeholder.
 ///
@@ -84,7 +93,6 @@ impl Parse for SliceElementPattern {
         }
     }
 }
-
 
 struct OperationPattern {
     mnemonic: syn::LitStr,
@@ -367,7 +375,6 @@ impl StructLikePattern {
 
 //--------------------------------------------------------------------------------------------------
 
-
 /// Patterns.
 enum Pattern {
     /// An operation pattern.
@@ -417,7 +424,6 @@ impl Pattern {
         }
     }
 }
-
 
 /// Represents a variable bound to a pattern, generally of the form `variable : Pattern`.
 ///

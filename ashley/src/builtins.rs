@@ -2,10 +2,11 @@ use crate::{
     hir,
     tast::{
         ty::{ImageSampling, ImageType},
-        Module, ScalarType, Type, TypeKind, Types,
+        ScalarType, Type, TypeKind, Types,
     },
 };
-use smallvec::SmallVec;
+use core::fmt;
+use std::fmt::Debug;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -351,6 +352,43 @@ pub enum PseudoType {
     samplerShadow,
 }
 
+impl PseudoType {
+    pub(crate) fn is_image_type_generic(&self) -> bool {
+        use PseudoType::*;
+        matches!(
+            *self,
+            gimage1D
+                | gimage1DArray
+                | gimage2D
+                | gimage2DArray
+                | gimage2DMS
+                | gimage2DMSArray
+                | gimage2DRect
+                | gimage3D
+                | gimageCube
+                | gimageCubeArray
+                | gimageBuffer
+                | gtexture1D
+                | gtexture1DArray
+                | gtexture2D
+                | gtexture2DArray
+                | gtexture2DMS
+                | gtexture2DMSArray
+                | gtexture2DRect
+                | gtexture3D
+                | gtextureCube
+                | gtextureCubeArray
+                | gtextureBuffer
+                | gvec4
+        )
+    }
+
+    pub(crate) fn is_vector_generic(&self) -> bool {
+        use PseudoType::*;
+        matches!(*self, vecN | bvecN | ivecN | uvecN | dvecN)
+    }
+}
+
 /// Signature of a built-in operation (function or operator).
 #[derive(Copy, Clone)]
 pub struct BuiltinSignature {
@@ -360,6 +398,23 @@ pub struct BuiltinSignature {
         fn(&mut (), &mut hir::FunctionBuilder, args: &[hir::IdRef], types: &[hir::Type], ret: hir::Type) -> hir::Value,
 }
 
+impl fmt::Debug for BuiltinSignature {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "BuiltinSignature {{ ")?;
+        write!(f, "parameter_types: [")?;
+        for (i, t) in self.parameter_types.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{:?}", t)?;
+        }
+        write!(f, "], ")?;
+        write!(f, "result_type: {:?}, ", self.result_type)?;
+        write!(f, "lower: <fn>, ")?;
+        write!(f, "}}")
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(crate) enum ImageClass {
     F,
@@ -367,7 +422,7 @@ pub(crate) enum ImageClass {
     UI,
 }
 
-fn pseudo_type_to_concrete_type(
+pub(crate) fn pseudo_type_to_concrete_type(
     pseudo_type: PseudoType,
     builtins: &BuiltinTypes,
     vec_len: u8,
@@ -375,7 +430,6 @@ fn pseudo_type_to_concrete_type(
 ) -> Type {
     use ImageClass as IC;
     use PseudoType as PT;
-    use TypeKind as TK;
     match pseudo_type {
         PT::void => builtins.void.clone(),
         PT::float => builtins.float.clone(),

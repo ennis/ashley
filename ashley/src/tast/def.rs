@@ -1,14 +1,10 @@
-use ashley::builtins::BuiltinSignature;
-use ashley::tast::PackageImportId;
 use crate::{
+    builtins::BuiltinSignature,
+    diagnostic::SourceLocation,
     syntax,
     syntax::{ast, SyntaxKind},
-    tast::{
-        ty::{Type},
-    },
+    tast::{ty::Type, PackageImportId},
 };
-use crate::builtins::BuiltinOperation;
-use crate::diagnostic::SourceLocation;
 
 /// Describes the kind of a global program variable.
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -60,7 +56,7 @@ pub struct FunctionDef {
     pub function_control: spirv::FunctionControl,
     pub function_type: Type,
     pub parameters: Vec<FunctionParam>,
-    pub builtin: Option<&'static BuiltinSignature>
+    pub builtin: Option<&'static BuiltinSignature>,
 }
 
 #[derive(Debug)]

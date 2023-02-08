@@ -1,9 +1,65 @@
 use crate::{
     diagnostic::{AsSourceLocation, SourceId, SourceLocation},
-    syntax::{ArithOp, BinaryOp, CmpOp, LogicOp, SyntaxKind, SyntaxNode, SyntaxToken, UnaryOp},
+    syntax::{SyntaxKind, SyntaxNode, SyntaxToken},
     tast, T,
 };
 use std::num::{ParseFloatError, ParseIntError};
+
+//--------------------------------------------------------------------------------------------------
+// Operators
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum UnaryOp {
+    /// `!`
+    Not,
+    /// `-`
+    Neg,
+    // TODO: complement op
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BinaryOp {
+    LogicOp(LogicOp),
+    ArithOp(ArithOp),
+    CmpOp(CmpOp),
+    Assignment(Option<ArithOp>),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LogicOp {
+    And,
+    Or,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ArithOp {
+    Add,
+    Mul,
+    Sub,
+    Div,
+    Rem,
+    Shl,
+    Shr,
+    BitXor,
+    BitOr,
+    BitAnd,
+}
+
+
+//--------------------------------------------------------------------------------------------------
+// AST nodes
+
+
 
 pub trait AstNode {
     fn cast(syntax: SyntaxNode) -> Option<Self>

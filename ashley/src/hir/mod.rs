@@ -6,24 +6,15 @@ pub mod transform;
 pub mod types;
 mod visit;
 
-use crate::{hir::types::ScalarType, utils::id_types};
-use ashley::utils::interner::UniqueArena;
-use bumpalo::Bump;
+use crate::{
+    hir::types::ScalarType,
+    utils::{id_types, interner::UniqueArena},
+};
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
-use rspirv::{
-    spirv,
-    spirv::{LinkageType, MemorySemantics},
-};
+use rspirv::{spirv, spirv::LinkageType};
 use smallvec::SmallVec;
-use spirv::Op;
-use std::{
-    fmt,
-    hash::Hash,
-    num::NonZeroU32,
-    ops::{Bound, Deref, DerefMut, RangeBounds},
-    sync::Arc,
-};
+use std::{fmt, hash::Hash, num::NonZeroU32};
 
 pub use self::{builder::FunctionBuilder, constant::ConstantData, types::TypeData};
 

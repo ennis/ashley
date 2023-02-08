@@ -1,8 +1,8 @@
 use crate::{
     syntax::ast,
     tast::{
-        consteval::ConstantValue, expr::ExprKind, scope::Scope, Block, BlockId, Expr, ExprId, StmtId,
-        TypeCheckBodyCtxt, TypedBody,
+        scope::Scope, Block, BlockId, Expr, ExprId, StmtId,
+        TypeCheckBodyCtxt,
     },
 };
 
@@ -23,6 +23,9 @@ pub enum StmtKind {
     ExprStmt {
         expr: ExprId,
     },
+    Block {
+        block: BlockId,
+    },
     Error,
 }
 
@@ -31,11 +34,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
     pub fn typecheck_block(&mut self, block: &ast::Block) -> BlockId {
         let mut stmts = Vec::new();
         for stmt in block.stmts() {
-            let id = self.typed_body.stmts.push(Stmt {
-                ast: stmt.clone(),
-                kind: self.typecheck_stmt(&stmt),
-            });
-            stmts.push(id);
+            stmts.push(self.typecheck_stmt(&stmt));
         }
         self.typed_body.blocks.push(Block { stmts })
     }
@@ -46,6 +45,10 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             kind: StmtKind::Error,
         })
     }*/
+
+    fn add_stmt(&mut self, stmt: Stmt) -> StmtId {
+        self.typed_body.stmts.push(stmt)
+    }
 
     fn typecheck_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> StmtKind {
         let Some(ast_condition) = if_stmt.condition().and_then(|c| c.expr()) else {
@@ -66,16 +69,11 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
                 .emit();
         }
 
-        self.scopes.push(Scope::new());
-        let true_stmt = self.typecheck_stmt(&stmt);
-        self.scopes.pop();
+        let true_branch = self.typecheck_stmt_in_new_scope(&stmt);
 
-        let false_stmt = if let Some(else_branch) = if_stmt.else_branch() {
-            if let Some(stmt) = else_branch.stmt() {
-                self.scopes.push(Scope::new());
-                let id = self.typecheck_stmt(&stmt);
-                self.scopes.pop();
-                Some(id)
+        let false_branch = if let Some(else_branch) = if_stmt.else_branch() {
+            if let Some(else_stmt) = else_branch.stmt() {
+                Some(self.typecheck_stmt_in_new_scope(&else_stmt))
             } else {
                 None
             }
@@ -83,10 +81,11 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             None
         };
 
+        let condition = self.add_expr(condition);
         StmtKind::Select {
-            condition: condition.id,
-            true_branch: true_stmt,
-            false_branch: false_stmt,
+            condition,
+            true_branch,
+            false_branch,
         }
     }
 
@@ -97,7 +96,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             let id = self.typed_body.exprs.push(Expr {
                 ast: Some(ast_expr.clone()),
                 ty: expr.ty,
-                kind: expr.kind,
+                kind: expr.expr,
             });
             StmtKind::ExprStmt { expr: id }
         } else {
@@ -105,19 +104,53 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         }
     }
 
-    /// Typechecks a statement and return the statement kind.
-    pub fn typecheck_stmt(&mut self, stmt: &ast::Stmt) -> StmtKind {
-        match stmt {
-            ast::Stmt::ExprStmt(expr_stmt) => self.typecheck_expr_stmt(&expr_stmt),
-            ast::Stmt::ReturnStmt(_) => {}
-            ast::Stmt::BlockStmt(_) => {}
-            ast::Stmt::WhileStmt(_) => {}
-            ast::Stmt::BreakStmt(_) => {}
-            ast::Stmt::ContinueStmt(_) => {}
-            ast::Stmt::DiscardStmt(_) => {}
-            ast::Stmt::LocalVariable(_) => {}
-            ast::Stmt::IfStmt(if_stmt) => self.typecheck_if_stmt(if_stmt),
-            ast::Stmt::ForStmt(_) => {}
+    fn typecheck_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> StmtKind {
+        let Some(block) = block_stmt.block() else {
+            return StmtKind::Error
+        };
+        StmtKind::Block {
+            block: self.typecheck_block(&block),
         }
+    }
+
+    /// Typechecks a statement and return the statement kind.
+    pub fn typecheck_stmt(&mut self, stmt: &ast::Stmt) -> StmtId {
+        let kind = match stmt {
+            ast::Stmt::ExprStmt(expr_stmt) => self.typecheck_expr_stmt(&expr_stmt),
+            ast::Stmt::ReturnStmt(_) => {
+                todo!("return stmt")
+            }
+            ast::Stmt::BlockStmt(block) => self.typecheck_block_stmt(block),
+            ast::Stmt::WhileStmt(_) => {
+                todo!("while stmt")
+            }
+            ast::Stmt::BreakStmt(_) => {
+                todo!("break stmt")
+            }
+            ast::Stmt::ContinueStmt(_) => {
+                todo!("continue stmt")
+            }
+            ast::Stmt::DiscardStmt(_) => {
+                todo!("discard stmt")
+            }
+            ast::Stmt::LocalVariable(_) => {
+                todo!("local variable stmt")
+            }
+            ast::Stmt::IfStmt(if_stmt) => self.typecheck_if_stmt(if_stmt),
+            ast::Stmt::ForStmt(_) => {
+                todo!("for stmt")
+            }
+        };
+        self.typed_body.stmts.push(Stmt {
+            ast: stmt.clone(),
+            kind,
+        })
+    }
+
+    pub fn typecheck_stmt_in_new_scope(&mut self, stmt: &ast::Stmt) -> StmtId {
+        self.scopes.push(Scope::new());
+        let id = self.typecheck_stmt(stmt);
+        self.scopes.pop();
+        id
     }
 }

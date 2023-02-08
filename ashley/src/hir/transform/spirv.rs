@@ -1,9 +1,8 @@
 use crate::{
-    hir,
     hir::{
-        types::{ImageSampling, ImageType, ScalarType, StructType},
+        types::{ImageSampling, ImageType, ScalarType},
         Block, Constant, ConstantData, ExtInstSet, Function, GlobalVariable, IdRef, Local, Module, Operand,
-        TerminatingInstruction, Type, TypeData, Value, ValueOrConstant,
+        TerminatingInstruction, Type, TypeData, Value,
     },
     utils::IdMap,
 };
@@ -14,7 +13,6 @@ use rspirv::{
     spirv::{AddressingModel, Capability, LinkageType, MemoryModel, Word},
 };
 use spirv::StorageClass;
-use std::collections::HashMap;
 use tracing::error;
 
 type ExtInstSetMap = IdMap<ExtInstSet, Word>;

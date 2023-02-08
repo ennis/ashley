@@ -1,7 +1,8 @@
 use crate::{syntax::ast, tast::TypeCheckCtxt};
 use ordered_float::OrderedFloat;
 
-pub(crate) enum ConstantValue {
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ConstantValue {
     Int(i32),
     Float(OrderedFloat<f32>),
     Bool(bool),

@@ -1,5 +1,4 @@
 use crate::hir::{constant::ConstantData, Constant, Function, FunctionData, Module, Operand, Type, TypeData};
-use std::collections::HashMap;
 
 struct LinkInput<'a> {
     module: &'a Module,

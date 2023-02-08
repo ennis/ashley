@@ -1,17 +1,17 @@
 //! Typed AST representation
+mod builtins;
 mod consteval;
 mod def;
 mod expr;
 mod item;
+mod overload;
 mod scope;
 mod stmt;
 mod swizzle;
 pub mod ty;
-mod overload;
-mod builtins;
 
 pub use def::{Def, Qualifier, Visibility};
-pub use expr::{Expr, FunctionRef};
+pub use expr::Expr;
 pub use ty::{FunctionType, ScalarType, Type, TypeKind};
 
 use crate::{
@@ -25,21 +25,17 @@ use crate::{
     utils::{Id, TypedVec},
 };
 use std::{
-    collections::{HashSet},
-    hash::{Hash},
+    collections::HashSet,
+    hash::Hash,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
 };
-use ashley::tast::def::DefKind;
-use crate::tast::expr::Place;
-use crate::tast::scope::Res;
 
 // TODO: separate the items / types from the bodies of functions and initializers
 
 pub type ExprId = Id<Expr>;
-pub type PlaceId = Id<Place>;
 pub type StmtId = Id<Stmt>;
 pub type BlockId = Id<Block>;
 pub type PackageImportId = Id<Package>;
@@ -72,9 +68,7 @@ pub struct Block {
 
 impl Block {
     pub fn new() -> Block {
-        Block {
-            stmts: Vec::new(),
-        }
+        Block { stmts: Vec::new() }
     }
 }
 
@@ -82,7 +76,7 @@ pub struct TypedBody {
     pub stmts: TypedVec<Stmt>,
     pub exprs: TypedVec<Expr>,
     pub local_vars: TypedVec<LocalVar>,
-    pub blocks: TypedVec<Block>
+    pub blocks: TypedVec<Block>,
 }
 
 impl TypedBody {
@@ -104,7 +98,7 @@ pub struct Package {
 impl Package {
     /// Imports all the definitions of this package into the given scope.
     pub(crate) fn import(&self, scope: &mut Scope) {
-        for (id,def) in self.defs.iter_full() {
+        for (id, def) in self.defs.iter_full() {
             scope.add_def(DefId::from(id), def);
         }
     }
@@ -160,7 +154,6 @@ impl Module {
         }
     }
 
-
     /// Returns the definition with the given ID.
     pub fn def(&self, id: DefId) -> &Def {
         match id.package {
@@ -177,9 +170,7 @@ pub struct Types {
 
 impl Types {
     pub fn new() -> Self {
-        Types {
-            types: HashSet::new(),
-        }
+        Types { types: HashSet::new() }
     }
 
     /// Interns a type.
@@ -224,15 +215,16 @@ impl TypeCtxt {
         }
     }
 
-
     pub fn ty(&mut self, kind: impl Into<TypeKind>) -> Type {
         self.types.intern(kind)
     }
 
-    pub fn typecheck_items(&mut self, ast: ast::Root,
-                           package_resolver: &mut dyn PackageResolver,
-                           diag: &mut Diagnostics) -> Module
-    {
+    pub fn typecheck_items(
+        &mut self,
+        ast: ast::Root,
+        package_resolver: &mut dyn PackageResolver,
+        diag: &mut Diagnostics,
+    ) -> Module {
         let mut module = Module::new();
         diag.set_current_source(ast.source_id);
         let mut ctxt = TypeCheckCtxt {
@@ -268,13 +260,12 @@ impl TypeCtxt {
             tyctxt: self,
             scopes: vec![scope],
             typed_body: &mut typed_body,
-            error_type
+            error_type,
         };
 
         typed_body
     }
 }
-
 
 pub struct TypeCheckBodyCtxt<'a, 'diag> {
     module: &'a Module,
@@ -286,5 +277,4 @@ pub struct TypeCheckBodyCtxt<'a, 'diag> {
 }
 
 #[cfg(test)]
-mod tests {
-}
+mod tests {}

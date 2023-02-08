@@ -1,16 +1,10 @@
 //! Overload resolution.
 use crate::{
-    builtins::{BuiltinOperation, BuiltinTypes, PseudoType},
-    tast::{DefId, ScalarType, Type, TypeKind},
+    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, BuiltinTypes, ImageClass, PseudoType},
+    tast::{DefId, ScalarType, Type, TypeCheckBodyCtxt, TypeKind},
 };
-use ashley::tast::TypeCheckBodyCtxt;
 use smallvec::SmallVec;
 use std::{cmp::Ordering, ops::Deref};
-use crate::tast::TypeCheckCtxt;
-
-/// Error returned by `check_signature`
-#[derive(Debug)]
-pub(super) struct SignatureMismatch;
 
 type ImplicitConversionRanks = SmallVec<[i32; 2]>;
 
@@ -32,7 +26,7 @@ fn compare_conversion_ranks(a: &[i32], b: &[i32]) -> Ordering {
     }
 }
 
-/// Resolves the preferred overload from a list of conversion ranks.
+/*/// Resolves the preferred overload from a list of conversion ranks.
 fn resolve_preferred_overload(ranks: &mut [(usize, ImplicitConversionRanks)]) -> Option<usize> {
     ranks.sort_by(|(_, a), (_, b)| compare_conversion_ranks(a, b));
     if ranks.len() >= 2 && compare_conversion_ranks(&ranks[0].1, &ranks[1].1) == Ordering::Less {
@@ -40,7 +34,7 @@ fn resolve_preferred_overload(ranks: &mut [(usize, ImplicitConversionRanks)]) ->
     } else {
         None
     }
-}
+}*/
 
 /// Checks argument types against an operation signature.
 ///
@@ -60,14 +54,14 @@ fn resolve_preferred_overload(ranks: &mut [(usize, ImplicitConversionRanks)]) ->
 pub(crate) fn check_signature(
     signature: &[Type],
     arguments: &[Type],
-) -> Result<ImplicitConversionRanks, SignatureMismatch> {
+) -> Result<ImplicitConversionRanks, OverloadResolutionError> {
     use TypeKind as TK;
 
     eprintln!("chksig: {:?} against arguments {:?}", signature, arguments);
 
     if arguments.len() != signature.len() {
         // return early on arg count mismatch
-        return Err(SignatureMismatch);
+        return Err(OverloadResolutionError::NoMatch);
     }
 
     let mut conversion_ranks = SmallVec::new();
@@ -80,7 +74,7 @@ pub(crate) fn check_signature(
 
         // check type of argument, if it doesn't work, retry with an implicit conversion
         //eprintln!("chk param sig:{:?} arg:{:?}", &m.types[*sigty], &m.types[*argty]);
-        let conversion_rank = match (sigty, argty) {
+        let conversion_rank = match (sigty.deref(), argty.deref()) {
             // Source type => implicitly converts to
             (TK::Scalar(targ), TK::Scalar(tsig)) => match (targ, tsig) {
                 (ScalarType::Int, ScalarType::UnsignedInt) => 1,
@@ -123,7 +117,7 @@ pub(crate) fn check_signature(
 
     if conversion_ranks.len() != signature.len() {
         // we exited the loop early, meaning that we failed to match an argument
-        return Err(SignatureMismatch);
+        return Err(OverloadResolutionError::NoMatch);
     }
 
     eprintln!("chksig OK: {:?} against arguments {:?}", signature, arguments);
@@ -182,12 +176,35 @@ pub(crate) enum OverloadResolutionError {
     Ambiguous,
 }
 
+fn best_overload(mut candidates: Vec<OverloadCandidate>) -> Result<OverloadCandidate, OverloadResolutionError> {
+    match &candidates[..] {
+        &[] => Err(OverloadResolutionError::NoMatch),
+        &[_] => Ok(candidates.into_iter().next().unwrap()),
+        _ => {
+            // rank candidates
+            candidates.sort_by(|a, b| compare_conversion_ranks(&a.conversion_ranks, &b.conversion_ranks));
+
+            // if there's a candidate above all others, select it
+            if compare_conversion_ranks(&candidates[0].conversion_ranks, &candidates[1].conversion_ranks)
+                == Ordering::Less
+            {
+                Ok(candidates.into_iter().next().unwrap())
+            } else {
+                Err(OverloadResolutionError::Ambiguous)
+            }
+        }
+    }
+}
 
 impl TypeCheckBodyCtxt<'_, '_> {
     ///
-    pub(crate) fn resolve_overload(&mut self, overloads: &[DefId], args: &[Type]) -> Result<usize, OverloadResolutionError> {
-        let mut candidates : Vec<(usize, ImplicitConversionRanks)> = Vec::new();
-        for (i,overload) in overloads.iter().enumerate() {
+    pub(crate) fn resolve_overload(
+        &mut self,
+        overloads: &[DefId],
+        args: &[Type],
+    ) -> Result<OverloadCandidate, OverloadResolutionError> {
+        let mut candidates: Vec<OverloadCandidate> = Vec::new();
+        for (i, overload) in overloads.iter().enumerate() {
             let func = self.module.def(*overload).as_function().unwrap();
             let fty = func.function_type.as_function().unwrap();
             if fty.arg_types.len() != args.len() {
@@ -195,87 +212,40 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             match check_signature(&fty.arg_types, &args) {
                 Ok(conversion_ranks) => {
-                    candidates.push((i, conversion_ranks));
+                    let exact_match = conversion_ranks.iter().all(|x| *x == 0);
+                    candidates.push(OverloadCandidate {
+                        index: i,
+                        conversion_ranks,
+                        parameter_types: fty.arg_types.clone().into(),
+                        result_type: fty.return_type.clone(),
+                    });
                     // break early if it is an exact match
-                    if conversion_ranks.iter().all(|r| *r == 0) {
+                    if exact_match {
                         break;
                     }
                 }
                 Err(_) => continue,
             }
         }
-
-        match &candidates[..] {
-            &[] => Err(OverloadResolutionError::NoMatch),
-            &[(overload, _)] => Ok(overload),
-            _ => {
-                // rank candidates
-                candidates.sort_by(|a, b| compare_conversion_ranks(&a.1, &b.1));
-
-                // if there's a candidate above all others, select it
-                if compare_conversion_ranks(&candidates[0].1, &candidates[1].1) == Ordering::Less {
-                    Ok(candidates.into_iter().next().unwrap().0)
-                } else {
-                    Err(OverloadResolutionError::Ambiguous)
-                }
-            }
-        }
+        best_overload(candidates)
     }
 
-    // TODO: this is only used for operators, the rest goes through `resolve_overload`.
     // Maybe refactor so that operators also go through `resolve_overload`.
     // Or maybe refactor so that this only handles operators.
     pub(crate) fn typecheck_builtin_operation(
         &mut self,
         op: &BuiltinOperation,
         arguments: &[Type],
-    ) -> Result<OverloadCandidate, SignatureMismatch> {
+    ) -> Result<OverloadCandidate, OverloadResolutionError> {
         let mut candidates: Vec<OverloadCandidate> = Vec::new();
 
         'check_signatures: for (index, sig) in op.signatures.iter().enumerate() {
-            let is_vector_generic = sig.parameter_types.iter().any(|ty| {
-                use PseudoType::*;
-                matches!(ty, vecN | bvecN | ivecN | uvecN | dvecN)
-            });
-            let is_image_type_generic = sig.parameter_types.iter().any(|ty| {
-                use PseudoType::*;
-                matches!(
-                    ty,
-                    gimage1D
-                        | gimage1DArray
-                        | gimage2D
-                        | gimage2DArray
-                        | gimage2DMS
-                        | gimage2DMSArray
-                        | gimage2DRect
-                        | gimage3D
-                        | gimageCube
-                        | gimageCubeArray
-                        | gimageBuffer
-                        | gtexture1D
-                        | gtexture1DArray
-                        | gtexture2D
-                        | gtexture2DArray
-                        | gtexture2DMS
-                        | gtexture2DMSArray
-                        | gtexture2DRect
-                        | gtexture3D
-                        | gtextureCube
-                        | gtextureCubeArray
-                        | gtextureBuffer
-                        | gvec4
-                )
-            });
-            let max_vec_len = if is_vector_generic {
-                4
-            } else {
-                /*dummy*/
-                1
-            };
+            let is_vector_generic = sig.parameter_types.iter().any(PseudoType::is_vector_generic);
+            let is_image_type_generic = sig.parameter_types.iter().any(PseudoType::is_image_type_generic);
+            let max_vec_len = if is_vector_generic { 4 } else { 1 };
             let image_classes = if is_image_type_generic {
                 &[ImageClass::F, ImageClass::SI, ImageClass::UI][..]
             } else {
-                /*dummy*/
                 &[ImageClass::F][..]
             };
 
@@ -297,27 +267,6 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
         }
 
-        eprintln!("{op:?} candidates: {:?}", candidates);
-
-        if candidates.is_empty() {
-            return Err(SignatureMismatch);
-        }
-
-        if candidates.len() == 1 {
-            // only one candidate
-            Ok(candidates.into_iter().next().unwrap())
-        } else {
-            // rank candidates
-            candidates.sort_by(|a, b| compare_conversion_ranks(&a.conversion_ranks, &b.conversion_ranks));
-
-            // if there's a candidate above all others, select it
-            if compare_conversion_ranks(&candidates[0].conversion_ranks, &candidates[1].conversion_ranks)
-                == Ordering::Less
-            {
-                Ok(candidates.into_iter().next().unwrap())
-            } else {
-                Err(SignatureMismatch)
-            }
-        }
+        best_overload(candidates)
     }
 }

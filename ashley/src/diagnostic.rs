@@ -6,10 +6,9 @@ use codespan_reporting::{
 };
 use rowan::TextRange;
 use std::{
-    cell::RefCell,
     collections::HashMap,
     ops::Range,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 /// Uniquely identifies a file registered to a `SourceFileProvider`

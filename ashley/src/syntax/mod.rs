@@ -3,8 +3,6 @@ mod operators;
 mod parse;
 mod syntax_kind;
 
-pub use self::operators::{ArithOp, BinaryOp, CmpOp, LogicOp, UnaryOp};
-
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{

@@ -5,12 +5,10 @@ use crate::{
     tast::{
         consteval::ConstantValue,
         def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef, StructField},
-        scope::Scope,
-        Def, DefId, FunctionType, IdentExt, TypeCheckCtxt, TypeKind,
+        scope::{Res, Scope},
+        Def, DefId, FunctionType, IdentExt, Type, TypeCheckCtxt, TypeKind, Visibility,
     },
 };
-use ashley::tast::{scope::Res, ScalarType, Type, Visibility};
-use std::{hash::Hash, mem, sync::Arc};
 
 enum Item {
     GlobalVariable(GlobalDef),

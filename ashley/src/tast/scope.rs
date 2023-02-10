@@ -3,6 +3,7 @@ use crate::{
     tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCheckItemCtxt, TypeCtxt},
 };
 use std::{collections::HashMap, sync::Arc};
+use tracing::trace;
 
 /// Result of scope resolution.
 #[derive(Clone, Debug)]
@@ -96,7 +97,9 @@ impl TypeCheckItemCtxt<'_, '_> {
 impl TypeCheckBodyCtxt<'_, '_> {
     /// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
-        self.tyctxt.resolve_name(name, &self.scopes)
+        let r = self.tyctxt.resolve_name(name, &self.scopes);
+        eprintln!("resolve_name({}) => {:?}", name, r);
+        r
     }
 }
 

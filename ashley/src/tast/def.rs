@@ -1,3 +1,5 @@
+use std::fmt;
+use std::fmt::Formatter;
 use crate::{
     builtins::BuiltinSignature,
     diagnostic::SourceLocation,
@@ -27,6 +29,18 @@ impl Qualifier {
     }
 }
 
+/// display impl for qualifier
+impl fmt::Display for Qualifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Qualifier::Uniform => write!(f, "uniform"),
+            Qualifier::Const => write!(f, "const"),
+            Qualifier::In => write!(f, "in"),
+            Qualifier::Out => write!(f, "out"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct StructDef {
     pub ast: Option<ast::StructDef>,
@@ -37,6 +51,7 @@ pub struct StructDef {
 pub struct FunctionParam {
     pub ast: Option<ast::FnParam>,
     pub ty: Type,
+    /// Can be empty.
     pub name: String,
 }
 
@@ -101,5 +116,45 @@ impl Def {
             DefKind::Function(f) => Some(f),
             _ => None,
         }
+    }
+
+    /// Returns a wrapper object implementing `Display` that can be used to print the declaration of
+    /// the definition.
+    ///
+    /// * Functions: printed as `int foo(int, float)`
+    /// * Globals: printed as `uniform int foo`
+    /// * Structs: printed as `struct Foo`
+    pub fn display_declaration(&self) -> impl fmt::Display + '_ {
+        pub struct DefDisplay<'a>(&'a Def);
+
+        impl<'a> fmt::Display for DefDisplay<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                match self.0.kind {
+                    DefKind::Function(ref func) => {
+                        let func_ty = func.function_type.as_function().unwrap();
+                        write!(f, "{} {}(", func_ty.return_type, self.0.name)?;
+                        for (i,arg) in func_ty.arg_types.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{}", arg)?;
+                        }
+                        write!(f, ")")?;
+                        Ok(())
+                    }
+                    DefKind::Global(ref global) => {
+                        if let Some(qual) = global.qualifier {
+                            write!(f, "{} ", qual)?;
+                        }
+                        write!(f, "{} {}", global.ty, self.0.name)
+                    }
+                    DefKind::Struct(_) => {
+                        write!(f, "struct {}", self.0.name)
+                    }
+                }
+            }
+        }
+
+        DefDisplay(self)
     }
 }

@@ -2,6 +2,7 @@ use crate::{
     syntax::ast,
     tast::{scope::Scope, Block, BlockId, Expr, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt},
 };
+use crate::tast::scope::Res;
 
 #[derive(Debug)]
 pub struct Stmt {
@@ -134,7 +135,8 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         };
 
         let name = local.name().to_string_opt();
-        let local_var_id = self.typed_body.local_vars.push(LocalVar { name, ty });
+        let local_var_id = self.typed_body.local_vars.push(LocalVar { name: name.clone(), ty });
+        self.scopes.last_mut().unwrap().add(name, Res::Local(local_var_id));
 
         StmtKind::Local {
             var: local_var_id,
@@ -142,13 +144,23 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         }
     }
 
+    fn typecheck_return_stmt(&mut self, return_stmt: &ast::ReturnStmt) -> StmtKind {
+        if let Some(expr) = return_stmt.expr() {
+            let return_value = self.typecheck_expr(&expr);
+            let return_value = self.add_expr(return_value);
+            StmtKind::Return {
+                value: Some(return_value),
+            }
+        } else {
+            StmtKind::Return { value: None }
+        }
+    }
+
     /// Typechecks a statement and return the statement kind.
     pub fn typecheck_stmt(&mut self, stmt: &ast::Stmt) -> StmtId {
         let kind = match stmt {
-            ast::Stmt::ExprStmt(expr_stmt) => self.typecheck_expr_stmt(&expr_stmt),
-            ast::Stmt::ReturnStmt(_) => {
-                todo!("return stmt")
-            }
+            ast::Stmt::ExprStmt(expr_stmt) => self.typecheck_expr_stmt(expr_stmt),
+            ast::Stmt::ReturnStmt(return_stmt) => self.typecheck_return_stmt(return_stmt),
             ast::Stmt::BlockStmt(block) => self.typecheck_block_stmt(block),
             ast::Stmt::WhileStmt(_) => {
                 todo!("while stmt")

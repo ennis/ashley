@@ -1,5 +1,5 @@
 use id_arena::ArenaBehavior;
-use std::{marker::PhantomData, ops::Index};
+use std::{fmt, marker::PhantomData, ops::Index};
 
 pub mod interner;
 mod typed_vec;
@@ -95,5 +95,21 @@ impl<Id: ArenaBehavior, T> Index<Id::Id> for IdMap<Id, T> {
 
     fn index(&self, index: Id::Id) -> &Self::Output {
         self.map[Id::index(index)].as_ref().unwrap()
+    }
+}
+
+
+pub struct DisplayCommaSeparated<'a, T>(pub &'a [T]);
+
+// fmt::Display for DisplayCommaSeparated<'a, T>
+impl<'a, T: fmt::Display> fmt::Display for DisplayCommaSeparated<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for (i, item) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", item)?;
+        }
+        Ok(())
     }
 }

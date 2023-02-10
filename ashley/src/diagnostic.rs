@@ -308,7 +308,7 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
 
     /// Sets the primary label of the diagnostic, only if `loc` is not `None`.
     pub fn primary_label_opt(
-        mut self,
+        self,
         loc: Option<SourceLocation>,
         message: impl Into<String>,
     ) -> DiagnosticBuilder<'a, 'b> {

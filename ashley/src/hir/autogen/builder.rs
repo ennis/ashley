@@ -1,4 +1,5 @@
 // --- Core instructions ---
+#[allow(unused_mut)]
 impl<'a> FunctionBuilder<'a> {
     pub fn emit_nop(&mut self) {
         let mut inst_builder = InstBuilder::new(spirv::Op::Nop);
@@ -3864,6 +3865,7 @@ impl<'a> FunctionBuilder<'a> {
 }
 
 // --- GLSL.std.450 ---
+#[allow(unused_mut)]
 impl<'a> FunctionBuilder<'a> {
     pub fn emit_glsl_round(&mut self, result_type: Type, x: IdRef) -> Value {
         let ext_id = self.import_extended_instruction_set("GLSL.std.450");

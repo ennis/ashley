@@ -197,6 +197,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         // define the type before the struct (there's a circular reference)
         let next_def_id = self.module.defs.next_id();
         let ty = self.tyctxt.ty(TypeKind::Struct {
+            name: name.clone(),
             def: Some(DefId::from(next_def_id)),
             fields,
         });

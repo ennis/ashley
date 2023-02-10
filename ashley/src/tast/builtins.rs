@@ -6,6 +6,7 @@ use crate::{
         Def, FunctionType, TypeCheckItemCtxt, Visibility,
     },
 };
+use crate::tast::def::FunctionParam;
 
 impl TypeCheckItemCtxt<'_, '_> {
     pub(crate) fn define_builtin_functions(&mut self) {
@@ -31,19 +32,25 @@ impl TypeCheckItemCtxt<'_, '_> {
                             .collect();
                         let return_type =
                             pseudo_type_to_concrete_type(sig.result_type, &self.tyctxt.prim_tys, vec_len, *ic);
+                        let parameters: Vec<FunctionParam> = arg_types.iter().map(|arg| FunctionParam {
+                            ast: None,
+                            ty: arg.clone(),
+                            name: "".to_string(),
+                        }).collect();
                         let function_type = self.tyctxt.ty(FunctionType { arg_types, return_type });
+
                         self.module.defs.push(Def {
                             package: None,
                             location: None,
                             builtin: true,
-                            name: builtin.name.to_string(),
+                            name: builtin.name.trim_start_matches("r#").to_string(),
                             visibility: Visibility::Public,
                             kind: DefKind::Function(FunctionDef {
                                 ast: None,
                                 linkage: None,
                                 function_control: spirv::FunctionControl::NONE,
                                 function_type,
-                                parameters: vec![],
+                                parameters,
                                 builtin: Some(sig),
                             }),
                         });

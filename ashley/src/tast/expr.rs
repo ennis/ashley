@@ -12,6 +12,7 @@ use crate::{
         ty::Type,
         DefId, ExprId, LocalVarId, ScalarType, TypeCheckBodyCtxt, TypeKind,
     },
+    utils::DisplayCommaSeparated,
 };
 use ordered_float::OrderedFloat;
 use std::ops::Deref;
@@ -192,11 +193,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             } else {
                 num_components += arg.ty.num_components().unwrap() as usize;
                 let conv_ty = self.tyctxt.ty(arg.ty.with_scalar_type(target_scalar_type));
-                let converted = self.apply_implicit_conversion(
-                    arg,
-                    Some(arg_expr.source_location()),
-                    conv_ty,
-                );
+                let converted = self.apply_implicit_conversion(arg, Some(arg_expr.source_location()), conv_ty);
                 args.push(converted);
             }
         }
@@ -368,10 +365,12 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
         //let callee = self.typecheck_expr(&ast_callee);
 
+        let func_name;
         let overloads = match ast_callee {
             ast::Expr::PathExpr(ref func_path) => {
                 // resolve function
                 let Some(ident) = func_path.ident() else { return self.error_expr() };
+                func_name = ident.text().to_string();
                 match self.resolve_name(ident.text()) {
                     Some(Res::OverloadSet(overloads)) => overloads.clone(),
                     _ => {
@@ -416,11 +415,19 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 }
             }
             Err(OverloadResolutionError::NoMatch) => {
-                // TODO better error message (print function name and overloads)
-                self.diag
-                    .error("no matching function overload")
+                let mut diag = self
+                    .diag
+                    .error(format!("no matching function overload for call to `{func_name}`"))
                     .location(&call_expr)
-                    .emit();
+                    .note(format!("argument types are: ({})", DisplayCommaSeparated(&arg_types)));
+                for overload in overloads.iter() {
+                    let def = self.module.def(*overload);
+                    if def.as_function().unwrap().parameters.len() != args.len() {
+                        continue;
+                    }
+                    diag = diag.note(format!("candidate: `{}`", def.display_declaration()));
+                }
+                diag.emit();
                 return self.error_expr();
             }
             Err(OverloadResolutionError::Ambiguous) => {
@@ -534,7 +541,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
         let Some(field_name) = field_expr.field() else { return self.error_expr() };
         match base.ty.deref() {
-            TypeKind::Struct { fields, def } => {
+            TypeKind::Struct { name, fields, def } => {
                 //let def = self.module.def(*def);
                 //let struct_def = def.as_struct().unwrap();
                 if let Some(field_index) = fields.iter().position(|field| field.0 == field_name.text()) {
@@ -548,14 +555,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         ty,
                     }
                 } else {
-                    if let Some(def) = def {
-                        let def = self.module.def(*def);
+                    if !name.is_empty() {
                         self.diag
-                            .error(format!(
-                                "struct `{}` has no field named `{}`",
-                                def.name,
-                                field_name.text()
-                            ))
+                            .error(format!("struct `{name}` has no field named `{}`", field_name.text()))
                             .location(&field_name)
                             .emit();
                     } else {
@@ -573,7 +575,11 @@ impl TypeCheckBodyCtxt<'_, '_> {
             TypeKind::Vector(scalar_type, size) => {
                 match get_component_indices(field_name.text(), *size as usize) {
                     Ok(components) => {
-                        let ty = self.tyctxt.ty(TypeKind::Vector(*scalar_type, components.len() as u8));
+                        let ty = self.tyctxt.ty(if components.len() == 1 {
+                            TypeKind::Scalar(*scalar_type)
+                        } else {
+                            TypeKind::Vector(*scalar_type, components.len() as u8)
+                        });
                         // base expression is not a place
                         TypedExpr {
                             expr: ExprKind::ComponentAccess {

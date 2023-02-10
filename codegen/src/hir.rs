@@ -667,6 +667,7 @@ fn generate_instruction_methods(insts: &[Instruction], ext: Option<(&str, &str)>
     }
 
     quote! {
+        #[allow(unused_mut)]
         impl<'a> FunctionBuilder<'a> {
             #(#methods)*
         }

@@ -187,20 +187,20 @@ define_primitive_types! {
     // unnameable types
     [private]
 
-    modf_result_float TypeKind::Struct { def: None, fields: vec![("fract".to_string(), float.clone()), ("whole".to_string(), float.clone())] };
-    modf_result_vec2  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec2.clone()), ("whole".to_string(), vec2.clone())] };
-    modf_result_vec3  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec3.clone()), ("whole".to_string(), vec3.clone())] };
-    modf_result_vec4  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec4.clone()), ("whole".to_string(), vec4.clone())] };
+    modf_result_float TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), float.clone()), ("whole".to_string(), float.clone())] };
+    modf_result_vec2  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec2.clone()), ("whole".to_string(), vec2.clone())] };
+    modf_result_vec3  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec3.clone()), ("whole".to_string(), vec3.clone())] };
+    modf_result_vec4  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec4.clone()), ("whole".to_string(), vec4.clone())] };
 
-    modf_result_double TypeKind::Struct { def: None, fields: vec![("fract".to_string(), double.clone()), ("whole".to_string(), double.clone())] };
-    modf_result_dvec2  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), dvec2.clone()), ("whole".to_string(), dvec2.clone())] };
-    modf_result_dvec3  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), dvec3.clone()), ("whole".to_string(), dvec3.clone())] };
-    modf_result_dvec4  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), dvec4.clone()), ("whole".to_string(), dvec4.clone())] };
+    modf_result_double TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), double.clone()), ("whole".to_string(), double.clone())] };
+    modf_result_dvec2  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), dvec2.clone()), ("whole".to_string(), dvec2.clone())] };
+    modf_result_dvec3  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), dvec3.clone()), ("whole".to_string(), dvec3.clone())] };
+    modf_result_dvec4  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), dvec4.clone()), ("whole".to_string(), dvec4.clone())] };
 
-    frexp_result_float TypeKind::Struct { def: None, fields: vec![("fract".to_string(), float.clone()), ("exp".to_string(), float.clone())] };
-    frexp_result_vec2  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec2.clone()), ("exp".to_string(), vec2.clone())] };
-    frexp_result_vec3  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec3.clone()), ("exp".to_string(), vec3.clone())] };
-    frexp_result_vec4  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec4.clone()), ("exp".to_string(), vec4.clone())] };
+    frexp_result_float TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), float.clone()), ("exp".to_string(), float.clone())] };
+    frexp_result_vec2  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec2.clone()), ("exp".to_string(), vec2.clone())] };
+    frexp_result_vec3  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec3.clone()), ("exp".to_string(), vec3.clone())] };
+    frexp_result_vec4  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec4.clone()), ("exp".to_string(), vec4.clone())] };
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -798,6 +798,7 @@ macro_rules! builtin_operations {
     ) =>
     {
         #[allow(non_upper_case_globals)]
+        #[allow(unused_variables)]
         pub mod $mod_name {
             use super::{BuiltinOperation, BuiltinSignature, PseudoType};
             $(pub static $op_name: BuiltinOperation = BuiltinOperation {

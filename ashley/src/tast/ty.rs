@@ -1,6 +1,9 @@
 use crate::{hir, syntax::ast, tast::DefId};
 use ashley::tast::TypeCtxt;
+use spirv::Dim;
 use std::{
+    fmt,
+    fmt::{Display, Formatter},
     hash::{Hash, Hasher},
     ops::Deref,
     ptr,
@@ -20,10 +23,78 @@ pub use hir::types::{ImageSampling, ImageType};
 
 pub type ScalarType = hir::types::ScalarType;
 
+fn scalar_type_prefix(ty: ScalarType) -> &'static str {
+    match ty {
+        ScalarType::Bool => "b",
+        ScalarType::Int => "i",
+        ScalarType::UnsignedInt => "u",
+        ScalarType::Float => "",
+        ScalarType::Double => "d",
+    }
+}
+
+fn scalar_type_to_string(ty: ScalarType) -> &'static str {
+    match ty {
+        ScalarType::Bool => "bool",
+        ScalarType::Int => "int",
+        ScalarType::UnsignedInt => "uint",
+        ScalarType::Float => "float",
+        ScalarType::Double => "double",
+    }
+}
+
+struct ImageTypeDisplay<'a>(&'a ImageType);
+
+impl<'a> fmt::Display for ImageTypeDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let ImageType {
+            sampled_type,
+            dim,
+            arrayed,
+            depth,
+            ms,
+            sampled,
+            image_format,
+            access,
+        } = self.0;
+        let base_type = match sampled {
+            ImageSampling::Sampled => "texture",
+            ImageSampling::ReadWrite => "image",
+            ImageSampling::Unknown => "image",
+        };
+
+        write!(f, "{}{}", scalar_type_prefix(*sampled_type), base_type)?;
+        match dim {
+            Dim::Dim1D => write!(f, "1D")?,
+            Dim::Dim2D => write!(f, "2D")?,
+            Dim::Dim3D => write!(f, "3D")?,
+            Dim::DimCube => write!(f, "Cube")?,
+            Dim::DimRect => write!(f, "Rect")?,
+            Dim::DimBuffer => write!(f, "Buffer")?,
+            Dim::DimSubpassData => write!(f, "SubpassData")?,
+        }
+        if *ms {
+            write!(f, "MS")?;
+        }
+        if *arrayed {
+            write!(f, "Array")?;
+        }
+        // TODO this is incomplete
+        Ok(())
+    }
+}
+
 // TODO: arcs are probably not necessary here, we could replace them with a straight reference, but then
 // we'd need an arena for the types
 #[derive(Clone, Debug)]
 pub struct Type(pub(crate) Arc<TypeKind>);
+
+// impl display for Type forwards to TypeKind
+impl Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
 
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
@@ -74,6 +145,8 @@ pub enum TypeKind {
     RuntimeArray(Type),
     /// Structure type (array of (offset, type) tuples).
     Struct {
+        /// Name of the struct, only used for display purposes. Can be empty, or can be different from the name in the def.
+        name: String,
         fields: Vec<(String, Type)>,
         def: Option<DefId>,
     },
@@ -103,6 +176,60 @@ pub enum TypeKind {
     FrexpResultVecN(ScalarType, u8),*/
 }
 
+impl fmt::Display for TypeKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TypeKind::Unit => write!(f, "void"),
+            TypeKind::Scalar(s) => write!(f, "{}", scalar_type_to_string(*s)),
+            TypeKind::Vector(s, size) => write!(f, "{}vec{}", scalar_type_prefix(*s), size),
+            TypeKind::Matrix {
+                component_type,
+                columns,
+                rows,
+            } => write!(f, "{}mat{}x{}", scalar_type_prefix(*component_type), columns, rows),
+            TypeKind::Array(ty, size) => write!(f, "{}[{}]", &ty.0, size),
+            TypeKind::RuntimeArray(ty) => write!(f, "{}[]", ty),
+            TypeKind::Struct { fields, name, .. } => {
+                if !name.is_empty() {
+                    return write!(f, "{}", name);
+                } else {
+                    write!(f, "struct {{ ")?;
+                    for (i, (name, ty)) in fields.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}: {}", name, ty)?;
+                    }
+                    write!(f, " }}")
+                }
+            }
+            TypeKind::Image(ty) => write!(f, "{}", ImageTypeDisplay(ty)),
+            TypeKind::Pointer {
+                pointee_type,
+                storage_class,
+            } => {
+                // TODO: incomplete
+                write!(f, "ptr to {}", pointee_type)
+            }
+            TypeKind::Function(fty) => {
+                // TODO use C syntax
+                write!(f, "fn(")?;
+                for (i, arg) in fty.arg_types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ") -> {}", fty.return_type)
+            }
+            TypeKind::Sampler => write!(f, "sampler"),
+            TypeKind::SamplerShadow => write!(f, "samplerShadow"),
+            TypeKind::String => write!(f, "string"),
+            TypeKind::Unknown => write!(f, "unknown"),
+            TypeKind::Error => write!(f, "error"),
+        }
+    }
+}
 
 impl From<ScalarType> for TypeKind {
     fn from(s: ScalarType) -> Self {

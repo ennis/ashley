@@ -266,6 +266,7 @@ impl_ast_node!(LitExpr       <LIT_EXPR>    []);
 impl_ast_node!(PathExpr      <PATH_EXPR>   [token ident: Ident]);
 impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
 impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
+impl_ast_node!(ConstructorExpr <CONSTRUCTOR>  [node ty: Type, node args: ArgList]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Qualifier     <QUALIFIER>   []);
 impl_ast_node!(Visibility    <VISIBILTITY>   []);
@@ -297,7 +298,8 @@ impl_ast_variant_node!(Expr, [
     PATH_EXPR => PathExpr,
     TUPLE_EXPR => TupleExpr,
     ARRAY_EXPR => ArrayExpr,
-    FIELD_EXPR => FieldExpr
+    FIELD_EXPR => FieldExpr,
+    CONSTRUCTOR => ConstructorExpr
 ]);
 
 //--------------------------------------------------------------------------------------------------

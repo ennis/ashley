@@ -118,6 +118,9 @@ pub enum ExprKind {
         expr: ExprId,
         kind: ImplicitConversionKind,
     },
+    Constructor {
+        args: Vec<ExprId>,
+    },
     Literal {
         value: ConstantValue,
     },
@@ -173,6 +176,131 @@ impl TypeCheckBodyCtxt<'_, '_> {
         })
     }
 
+    fn typecheck_constructor_components(
+        &mut self,
+        arglist: &ast::ArgList,
+        target_scalar_type: ScalarType,
+    ) -> (Vec<TypedExpr>, usize) {
+        let mut has_invalid_components = false;
+        let mut args = vec![];
+        let mut num_components = 0;
+        for arg_expr in arglist.arguments() {
+            let arg = self.typecheck_expr(&arg_expr);
+            if !arg.ty.is_scalar_or_vector() {
+                self.diag.error("invalid component type in constructor");
+                has_invalid_components = true;
+            } else {
+                num_components += arg.ty.num_components().unwrap() as usize;
+                let conv_ty = self.tyctxt.ty(arg.ty.with_scalar_type(target_scalar_type));
+                let converted = self.apply_implicit_conversion(
+                    arg,
+                    Some(arg_expr.source_location()),
+                    conv_ty,
+                );
+                args.push(converted);
+            }
+        }
+        (args, num_components)
+    }
+
+    pub(crate) fn typecheck_constructor_expr(&mut self, expr: &ast::ConstructorExpr) -> TypedExpr {
+        let Some(ty) = expr.ty().map(|ty| self.convert_type(ty)) else { return self.error_expr(); };
+        let Some(args) = expr.args() else { return self.error_expr(); };
+
+        match ty.deref() {
+            TypeKind::Unit => {
+                todo!()
+            }
+            TypeKind::Scalar(scalar_type) => {
+                let (args, num_components) = self.typecheck_constructor_components(&args, *scalar_type);
+                if args.len() != 1 {
+                    self.diag
+                        .error("invalid number of arguments for scalar constructor")
+                        .emit();
+                    return self.error_expr();
+                }
+                if num_components < 1 {
+                    self.diag.error("not enough data provided in constructor").emit();
+                    return self.error_expr();
+                }
+
+                let expr = self.add_expr(args.into_iter().next().unwrap());
+                TypedExpr {
+                    expr: ExprKind::Constructor { args: vec![expr] },
+                    ty: ty.clone(),
+                }
+            }
+            TypeKind::Vector(scalar_type, vec_len) => {
+                let (args, num_components) = self.typecheck_constructor_components(&args, *scalar_type);
+                if num_components == 1 && args.len() == 1 && args[0].ty.is_scalar() {
+                    // scalar broadcast
+                    let expr = self.add_expr(args.into_iter().next().unwrap());
+                    TypedExpr {
+                        expr: ExprKind::Constructor { args: vec![expr] },
+                        ty,
+                    }
+                } else {
+                    if args.len() > (*vec_len as usize) {
+                        self.diag.error("too many arguments for vector constructor").emit();
+                        return self.error_expr();
+                    }
+                    if num_components < (*vec_len as usize) {
+                        self.diag
+                            .error("not enough data provided for vector construction")
+                            .emit();
+                        return self.error_expr();
+                    }
+                    TypedExpr {
+                        expr: ExprKind::Constructor {
+                            args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
+                        },
+                        ty,
+                    }
+                }
+            }
+            TypeKind::Matrix {
+                component_type,
+                columns,
+                rows,
+            } => {
+                let len = (*columns * *rows) as usize;
+                let (args, num_components) = self.typecheck_constructor_components(&args, *component_type);
+                if num_components == 1 && args.len() == 1 && args[0].ty.is_scalar() {
+                    // diagonal matrix constructor
+                    let expr = self.add_expr(args.into_iter().next().unwrap());
+                    TypedExpr {
+                        expr: ExprKind::Constructor { args: vec![expr] },
+                        ty,
+                    }
+                } else {
+                    if args.len() > len {
+                        self.diag.error("too many arguments for matrix constructor").emit();
+                        return self.error_expr();
+                    }
+                    if num_components < len {
+                        self.diag
+                            .error("not enough data provided for matrix construction")
+                            .emit();
+                        return self.error_expr();
+                    }
+                    TypedExpr {
+                        expr: ExprKind::Constructor {
+                            args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
+                        },
+                        ty,
+                    }
+                }
+            }
+            TypeKind::Array(_, _) => {
+                todo!("array constructors")
+            }
+            _ => {
+                self.diag.error("invalid type constructor").location(expr).emit();
+                self.error_expr()
+            }
+        }
+    }
+
     pub(crate) fn typecheck_expr(&mut self, expr: &ast::Expr) -> TypedExpr {
         match expr {
             ast::Expr::BinExpr(bin_expr) => self.typecheck_bin_expr(bin_expr),
@@ -192,6 +320,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 todo!("array expressions")
             }
             ast::Expr::PrefixExpr(prefix_expr) => self.typecheck_prefix_expr(prefix_expr),
+            ast::Expr::ConstructorExpr(constructor) => self.typecheck_constructor_expr(constructor),
         }
     }
 
@@ -380,7 +509,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             ty,
                         }
                     }
-                    Res::PrimTy(_) => {
+                    Res::PrimTy { .. } => {
                         // TODO better error message
                         self.diag
                             .error("name did not resolve to a value")

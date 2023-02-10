@@ -103,6 +103,7 @@ pub enum TypeKind {
     FrexpResultVecN(ScalarType, u8),*/
 }
 
+
 impl From<ScalarType> for TypeKind {
     fn from(s: ScalarType) -> Self {
         TypeKind::Scalar(s)
@@ -119,6 +120,48 @@ impl TypeKind {
     pub fn as_function(&self) -> Option<&FunctionType> {
         match self {
             TypeKind::Function(fty) => Some(fty),
+            _ => None,
+        }
+    }
+
+    /// Returns the typekind with the same shape but with a different scalar type.
+    pub fn with_scalar_type(&self, scalar_type: ScalarType) -> Self {
+        match self {
+            TypeKind::Scalar(_) => TypeKind::Scalar(scalar_type),
+            TypeKind::Vector(_, size) => TypeKind::Vector(scalar_type, *size),
+            TypeKind::Matrix {
+                component_type: _,
+                columns,
+                rows,
+            } => TypeKind::Matrix {
+                component_type: scalar_type,
+                columns: *columns,
+                rows: *rows,
+            },
+            _ => self.clone(),
+        }
+    }
+
+    /// Returns whether this type is a scalar or vector.
+    pub fn is_scalar_or_vector(&self) -> bool {
+        match self {
+            TypeKind::Scalar(_) | TypeKind::Vector(_, _) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_scalar(&self) -> bool {
+        match self {
+            TypeKind::Scalar(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn num_components(&self) -> Option<u8> {
+        match self {
+            TypeKind::Scalar(_) => Some(1),
+            TypeKind::Vector(_, size) => Some(*size),
+            TypeKind::Matrix { columns, rows, .. } => Some(columns * rows),
             _ => None,
         }
     }
@@ -142,7 +185,7 @@ impl TypeCtxt {
         match ty {
             ast::Type::TypeRef(tyref) => {
                 let Some(ident) = tyref.ident() else { return self.error.clone(); };
-                if let Some(res) = self.resolve_type_name(ident.text(), scopes) {
+                if let Some(res) = self.resolve_name(ident.text(), scopes) {
                     match res {
                         Res::Global(def_id) => {
                             let def = module.def(def_id);

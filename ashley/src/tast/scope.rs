@@ -13,11 +13,8 @@ pub(crate) enum Res {
     Global(DefId),
     /// The name resolves to a local variable in the current scope.
     Local(LocalVarId),
-    /// The name resolves to a built-in type.
-    PrimTy {
-        ty: Type,
-        constructors: &'static BuiltinOperation,
-    },
+    /// The name resolves to a primitive type.
+    PrimTy(Type),
 }
 
 // TODO replace Scope with an struct + enum kind

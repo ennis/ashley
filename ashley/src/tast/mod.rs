@@ -327,5 +327,14 @@ pub struct TypeCheckBodyCtxt<'a, 'diag> {
     error_type: Type,
 }
 
+impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
+    pub(crate) fn convert_type(
+        &mut self,
+        ty: ast::Type,
+    ) -> Type {
+        self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag)
+    }
+}
+
 #[cfg(test)]
 mod tests {}

@@ -272,10 +272,25 @@ import package4  ;
     fn function_decl() {
         insta::assert_debug_snapshot!(parse_source_text(
             r#"
-extern fn main ( ) ;
-       fn main ( ) ;
-extern fn main ( ) { }
+extern void main ( ) ;
+       void main ( ) ;
+extern void main ( ) { }
+public void main ( ) { }
 "#
         ));
+    }
+
+    #[test]
+    fn type_constructors() {
+        insta::assert_debug_snapshot!(parse_source_text(
+                r#"
+void main() {
+    float[3] v = float[3](1, 2, 3);
+    float[3][4] v2 = float[3][4](float[3](0.0,0.0,0.0), float[3](0.0,0.0,0.0), float[3](0.0,0.0,0.0), float[3](0.0,0.0,0.0));
+    float x = float(0);
+    int y = int(x);
+}
+    "#
+            ));
     }
 }

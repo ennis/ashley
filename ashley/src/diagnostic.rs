@@ -272,6 +272,7 @@ impl<'a> Diagnostics<'a> {
 }
 
 /// Used to build and emit diagnostic messages.
+#[must_use]
 pub struct DiagnosticBuilder<'a, 'b> {
     sink: &'a mut Diagnostics<'b>,
     diag: CsDiagnostic<SourceId>,

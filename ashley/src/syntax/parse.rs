@@ -838,23 +838,22 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.finish_node();
     }*/
 
-    // parse_type
-    // if ident:
-    //    start cp
-    //    parse non-array type
-    //    if next == '['
-    //
-
-    /// Parses an array type like `float[16][4]`.
+    /*/// Parses an array type like `float[16][4]`.
     fn parse_array_type(&mut self) {
         self.start_node(ARRAY_TYPE);
         self.parse_type();
         self.expect(T!['[']);
-        if self.next() == Some(T![;]) {
-            self.eat();
+        if self.next() == Some(T![']']) {
             self.parse_expr();
         }
         self.expect(T![']']);
+        self.finish_node();
+    }*/
+
+    fn parse_constructor(&mut self) {
+        self.start_node(CONSTRUCTOR);
+        self.parse_type();
+        self.parse_call_args();
         self.finish_node();
     }
 
@@ -872,9 +871,14 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 self.finish_node();
             }
             Some(IDENT) => {
-                self.start_node(PATH_EXPR);
-                self.eat();
-                self.finish_node();
+                if self.next_is_type() {
+                    // type constructor
+                    self.parse_constructor();
+                } else {
+                    self.start_node(PATH_EXPR);
+                    self.eat();
+                    self.finish_node();
+                }
             }
             Some(TRUE_KW) => {
                 self.start_node(LIT_EXPR);
@@ -908,7 +912,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     }
 
     fn parse_stmt_list(&mut self) {
-        eprintln!("parse_stmt_list");
+        //eprintln!("parse_stmt_list");
         let mut progress = Progress::default();
         loop {
             match self.next_ensure_progress(&mut progress) {
@@ -920,7 +924,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     }
 
     fn parse_stmt(&mut self) {
-        eprintln!("parse_stmt");
+        //eprintln!("parse_stmt");
         match self.next() {
             Some(T!['{']) => {
                 self.start_node(BLOCK_STMT);
@@ -1049,7 +1053,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     }
 
     fn parse_expr_stmt(&mut self) {
-        eprintln!("parse_expr_stmt");
+        //eprintln!("parse_expr_stmt");
         self.start_node(EXPR_STMT);
         self.parse_expr();
         self.expect(SEMICOLON);
@@ -1130,7 +1134,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
 
     // https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
     fn parse_expr_bp(&mut self, min_bp: u8) {
-        eprintln!("parse_expr_bp");
+        //eprintln!("parse_expr_bp");
         let cp = self.checkpoint();
         match self.next() {
             Some(op @ T![+] | op @ T![-] | op @ T![!] | op @ T![++] | op @ T![--]) => {

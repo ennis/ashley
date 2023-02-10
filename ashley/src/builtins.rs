@@ -58,6 +58,7 @@ macro_rules! define_primitive_types {
     };
 }
 
+// Primitive types and their constructor forms
 define_primitive_types! {
     PrimitiveTypes;
 
@@ -1299,4 +1300,6 @@ builtin_operations! {
 
         vec4(vec4)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
     }
+
+
 }

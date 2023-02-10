@@ -25,28 +25,31 @@ macro_rules! image_type {
     };
 }
 
-macro_rules! define_builtin_types {
-    ($struct_name:ident; $($name:ident $tykind:expr;)*) => {
+macro_rules! define_primitive_types {
+    ($struct_name:ident; $($name:ident $tykind:expr;)* [private] $($priv_name:ident $priv_tykind:expr;)*) => {
 
         #[allow(non_snake_case)]
         pub struct $struct_name {
             $(pub $name: Type,)*
+            $(pub $priv_name: Type,)*
         }
 
         impl $struct_name {
             #[allow(non_snake_case)]
             pub fn new(types: &mut Types) -> $struct_name {
                 $(let $name = types.intern($tykind);)*
+                $(let $priv_name = types.intern($priv_tykind);)*
 
                 $struct_name {
                     $($name,)*
+                    $($priv_name,)*
                 }
             }
 
             pub fn resolve(&self, name: &str) -> Option<Type> {
                 match name {
                     $(
-                        std::stringify!($name) => Some(self.$name.clone()),
+                        std::stringify!($name) => { Some(self.$name.clone()) },
                     )*
                     _ => None,
                 }
@@ -55,8 +58,8 @@ macro_rules! define_builtin_types {
     };
 }
 
-define_builtin_types! {
-    BuiltinTypes;
+define_primitive_types! {
+    PrimitiveTypes;
 
     void            TypeKind::Unit;
     float           TypeKind::Scalar(ScalarType::Float);
@@ -179,6 +182,24 @@ define_builtin_types! {
     uimageCube      image_type!(ReadWrite UnsignedInt DimCube   Arrayed false Multisampled false);
     uimageCubeArray image_type!(ReadWrite UnsignedInt DimCube   Arrayed true  Multisampled false);
     uimageBuffer    image_type!(ReadWrite UnsignedInt DimBuffer Arrayed false Multisampled false);
+
+    // unnameable types
+    [private]
+
+    modf_result_float TypeKind::Struct { def: None, fields: vec![("fract".to_string(), float.clone()), ("whole".to_string(), float.clone())] };
+    modf_result_vec2  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec2.clone()), ("whole".to_string(), vec2.clone())] };
+    modf_result_vec3  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec3.clone()), ("whole".to_string(), vec3.clone())] };
+    modf_result_vec4  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec4.clone()), ("whole".to_string(), vec4.clone())] };
+
+    modf_result_double TypeKind::Struct { def: None, fields: vec![("fract".to_string(), double.clone()), ("whole".to_string(), double.clone())] };
+    modf_result_dvec2  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), dvec2.clone()), ("whole".to_string(), dvec2.clone())] };
+    modf_result_dvec3  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), dvec3.clone()), ("whole".to_string(), dvec3.clone())] };
+    modf_result_dvec4  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), dvec4.clone()), ("whole".to_string(), dvec4.clone())] };
+
+    frexp_result_float TypeKind::Struct { def: None, fields: vec![("fract".to_string(), float.clone()), ("exp".to_string(), float.clone())] };
+    frexp_result_vec2  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec2.clone()), ("exp".to_string(), vec2.clone())] };
+    frexp_result_vec3  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec3.clone()), ("exp".to_string(), vec3.clone())] };
+    frexp_result_vec4  TypeKind::Struct { def: None, fields: vec![("fract".to_string(), vec4.clone()), ("exp".to_string(), vec4.clone())] };
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -424,7 +445,7 @@ pub(crate) enum ImageClass {
 
 pub(crate) fn pseudo_type_to_concrete_type(
     pseudo_type: PseudoType,
-    builtins: &BuiltinTypes,
+    builtins: &PrimitiveTypes,
     vec_len: u8,
     image_class: ImageClass,
 ) -> Type {
@@ -487,22 +508,47 @@ pub(crate) fn pseudo_type_to_concrete_type(
         PT::bvec2 => builtins.bvec2.clone(),
         PT::bvec3 => builtins.bvec3.clone(),
         PT::bvec4 => builtins.bvec4.clone(),
-        PT::highp_vecN => {
-            todo!()
-        }
-        PT::highp_ivecN => {
-            todo!()
-        }
+        PT::highp_vecN => match vec_len {
+            1 => builtins.float.clone(),
+            2 => builtins.vec2.clone(),
+            3 => builtins.vec3.clone(),
+            4 => builtins.vec4.clone(),
+            _ => panic!("invalid vector length"),
+        },
+        PT::highp_ivecN => match vec_len {
+            1 => builtins.int.clone(),
+            2 => builtins.ivec2.clone(),
+            3 => builtins.ivec3.clone(),
+            4 => builtins.ivec4.clone(),
+            _ => panic!("invalid vector length"),
+        },
         PT::modf_result_vecN => {
-            todo!()
+            match vec_len {
+                1 => builtins.modf_result_float.clone(),
+                2 => builtins.modf_result_vec2.clone(),
+                3 => builtins.modf_result_vec3.clone(),
+                4 => builtins.modf_result_vec4.clone(),
+                _ => panic!("invalid vector length"),
+            }
         }
         PT::modf_result_dvecN => {
-            todo!()
+            match vec_len {
+                1 => builtins.modf_result_double.clone(),
+                2 => builtins.modf_result_dvec2.clone(),
+                3 => builtins.modf_result_dvec3.clone(),
+                4 => builtins.modf_result_dvec4.clone(),
+                _ => panic!("invalid vector length"),
+            }
         }
         PT::frexp_result_highp_vecN => {
-            todo!()
+            match vec_len {
+                1 => builtins.frexp_result_float.clone(),
+                2 => builtins.frexp_result_vec2.clone(),
+                3 => builtins.frexp_result_vec3.clone(),
+                4 => builtins.frexp_result_vec4.clone(),
+                _ => panic!("invalid vector length"),
+            }
         }
-
         PT::mat2 => builtins.mat2.clone(),
         PT::mat3 => builtins.mat3.clone(),
         PT::mat4 => builtins.mat4.clone(),
@@ -740,6 +786,12 @@ macro_rules! builtin_operations {
         $(
             $op_name:ident {
                 $( $ret_ty:ident ($($arg:ident),*) => $builder_fn:expr; )*
+            }
+        )*
+        [constructors]
+        $(
+            $ctor_op_name:ident {
+                $( $ctor_ret_ty:ident ($($ctor_arg:ident),*) => $ctor_builder_fn:expr; )*
             }
         )*
     ) =>
@@ -1181,6 +1233,8 @@ builtin_operations! {
     //////////////////////////////////////////////////////
     // 5.4. Constructors
     //////////////////////////////////////////////////////
+
+    [constructors]
 
     int {
         int(uint)   => |_ctxt, fb, args, _types, ret| todo!();

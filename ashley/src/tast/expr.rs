@@ -33,6 +33,7 @@ pub enum Operation {
     FunctionCall(FunctionRef),
 }*/
 
+#[derive(Clone, Debug)]
 pub struct Expr {
     pub ast: Option<ast::Expr>,
     pub ty: Type,
@@ -404,15 +405,11 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
         let Some(field_name) = field_expr.field() else { return self.error_expr() };
         match base.ty.deref() {
-            TypeKind::Struct(def) => {
-                let def = self.module.def(*def);
-                let struct_def = def.as_struct().unwrap();
-                if let Some(field_index) = struct_def
-                    .fields
-                    .iter()
-                    .position(|field| field.name == field_name.text())
-                {
-                    let ty = struct_def.fields[field_index].ty.clone();
+            TypeKind::Struct { fields, def } => {
+                //let def = self.module.def(*def);
+                //let struct_def = def.as_struct().unwrap();
+                if let Some(field_index) = fields.iter().position(|field| field.0 == field_name.text()) {
+                    let ty = fields[field_index].1.clone();
                     // base expression is not a place
                     TypedExpr {
                         expr: ExprKind::Field {
@@ -422,14 +419,25 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         ty,
                     }
                 } else {
-                    self.diag
-                        .error(format!(
-                            "struct `{}` has no field named `{}`",
-                            def.name,
-                            field_name.text()
-                        ))
-                        .location(&field_name)
-                        .emit();
+                    if let Some(def) = def {
+                        let def = self.module.def(*def);
+                        self.diag
+                            .error(format!(
+                                "struct `{}` has no field named `{}`",
+                                def.name,
+                                field_name.text()
+                            ))
+                            .location(&field_name)
+                            .emit();
+                    } else {
+                        self.diag
+                            .error(format!(
+                                "anonymous struct type has no field named `{}`",
+                                field_name.text()
+                            ))
+                            .location(&field_name)
+                            .emit();
+                    }
                     self.error_expr()
                 }
             }
@@ -674,7 +682,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                                 lhs: self.add_expr(lhs_conv),
                                 rhs: self.add_expr(rhs_conv),
                             },
-                            ty: self.tyctxt.builtins.void.clone(),
+                            ty: self.tyctxt.prim_tys.void.clone(),
                         }
                     } else {
                         TypedExpr {
@@ -703,7 +711,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     lhs: self.add_expr(lhs),
                     rhs: self.add_expr(rhs_conv),
                 },
-                ty: self.tyctxt.builtins.void.clone(),
+                ty: self.tyctxt.prim_tys.void.clone(),
             }
         }
     }
@@ -720,7 +728,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         // TODO warn about overflow
                         // TODO unsigned suffixes
                         TypedExpr {
-                            ty: self.tyctxt.builtins.int.clone(),
+                            ty: self.tyctxt.prim_tys.int.clone(),
                             expr: ExprKind::Literal {
                                 value: ConstantValue::Int(v as i32),
                             },
@@ -732,7 +740,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .location(&v)
                             .emit();
                         TypedExpr {
-                            ty: self.tyctxt.builtins.int.clone(),
+                            ty: self.tyctxt.prim_tys.int.clone(),
                             expr: ExprKind::Undef,
                         }
                     }
@@ -743,7 +751,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     Ok(v) => {
                         // TODO warn about non-representable floats
                         TypedExpr {
-                            ty: self.tyctxt.builtins.float.clone(),
+                            ty: self.tyctxt.prim_tys.float.clone(),
                             expr: ExprKind::Literal {
                                 value: ConstantValue::Float(OrderedFloat::from(v as f32)),
                             },
@@ -755,14 +763,14 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .location(&v)
                             .emit();
                         TypedExpr {
-                            ty: self.tyctxt.builtins.float.clone(),
+                            ty: self.tyctxt.prim_tys.float.clone(),
                             expr: ExprKind::Undef,
                         }
                     }
                 }
             }
             ast::LiteralKind::Bool(v) => TypedExpr {
-                ty: self.tyctxt.builtins.bool.clone(),
+                ty: self.tyctxt.prim_tys.bool.clone(),
                 expr: ExprKind::Literal {
                     value: ConstantValue::Bool(v),
                 },

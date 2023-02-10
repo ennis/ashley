@@ -935,6 +935,15 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             Some(WHILE_KW) => self.parse_while_stmt(),
             Some(IDENT) => {
                 if self.next_is_type() {
+                    // FIXME: this doesn't work with constructors, lol
+                    // E.g.:
+                    //
+                    //       float[3](2.5, 7.0, 1.5);
+                    //
+                    // first token is a type name, so the rest of the statement will be parsed as a definition, but it's really just a no-op expression statement.
+                    // how the fuck are you supposed to parse this shit?
+                    //
+                    // Note that we could just ignore this particular case, since those expressions are no-ops anyway.
                     self.parse_local_variable_stmt()
                 } else {
                     self.parse_expr_stmt()

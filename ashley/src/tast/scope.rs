@@ -1,7 +1,8 @@
-use crate::tast::{Def, DefId, LocalVarId, Type, TypeCheckCtxt, TypeCtxt};
+use crate::{
+    builtins::BuiltinOperation,
+    tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCheckItemCtxt, TypeCtxt},
+};
 use std::{collections::HashMap, sync::Arc};
-use ashley::tast::TypeCheckBodyCtxt;
-use crate::tast::def::DefKind;
 
 /// Result of scope resolution.
 #[derive(Clone, Debug)]
@@ -13,7 +14,10 @@ pub(crate) enum Res {
     /// The name resolves to a local variable in the current scope.
     Local(LocalVarId),
     /// The name resolves to a built-in type.
-    PrimTy(Type),
+    PrimTy {
+        ty: Type,
+        constructors: &'static BuiltinOperation,
+    },
 }
 
 // TODO replace Scope with an struct + enum kind
@@ -68,12 +72,8 @@ impl Scope {
 
     pub(crate) fn add_def(&mut self, def_id: DefId, def: &Def) -> Option<Res> {
         match def.kind {
-            DefKind::Function(_) => {
-                self.add_function_overload(def.name.clone(), def_id)
-            }
-            DefKind::Global(_) | DefKind::Struct(_) => {
-                self.add(def.name.clone(), Res::Global(def_id))
-            }
+            DefKind::Function(_) => self.add_function_overload(def.name.clone(), def_id),
+            DefKind::Global(_) | DefKind::Struct(_) => self.add(def.name.clone(), Res::Global(def_id)),
         }
     }
 
@@ -89,30 +89,45 @@ impl Scope {
     }
 }
 
-impl TypeCheckCtxt<'_, '_> {
+impl TypeCheckItemCtxt<'_, '_> {
     /// Resolves a name in the current scope
-    pub(crate) fn resolve_name(&mut self, name: &str) -> Option<Res> {
-        resolve_name(self.tyctxt, name, &self.scopes)
+    pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
+        self.tyctxt.resolve_name(name, &self.scopes)
     }
 }
 
 impl TypeCheckBodyCtxt<'_, '_> {
     /// Resolves a name in the current scope
-    pub(crate) fn resolve_name(&mut self, name: &str) -> Option<Res> {
-        resolve_name(self.tyctxt, name, &self.scopes)
+    pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
+        self.tyctxt.resolve_name(name, &self.scopes)
     }
 }
 
-pub(crate) fn resolve_name(ctxt: &mut TypeCtxt, name: &str, scopes: &[Scope]) -> Option<Res> {
-    for scope in scopes.iter().rev() {
-        if let Some(var) = scope.items.get(name) {
-            return Some(var.clone());
+impl TypeCtxt {
+    /*pub(crate) fn resolve_type_name(&self, name: &str, scopes: &[Scope]) -> Option<Res> {
+        if let Some(ty) = self.prim_tys.resolve(name) {
+            // try to resolve the name as a primty first, because otherwise it may resolve as the primty constructor for the type
+            // TODO: maybe type constructors shouldn't be function definitions?
+            Some(Res::PrimTy(ty))
+        } else {
+            for scope in scopes.iter().rev() {
+                if let Some(var) = scope.items.get(name) {
+                    return Some(var.clone());
+                }
+            }
         }
-    }
+    }*/
 
-    if let Some(ty) = ctxt.builtins.resolve(name) {
-        Some(Res::PrimTy(ty))
-    } else {
-        None
+    pub(crate) fn resolve_name(&self, name: &str, scopes: &[Scope]) -> Option<Res> {
+        for scope in scopes.iter().rev() {
+            if let Some(var) = scope.items.get(name) {
+                return Some(var.clone());
+            }
+        }
+        if let Some(ty) = self.prim_tys.resolve(name) {
+            Some(Res::PrimTy(ty))
+        } else {
+            None
+        }
     }
 }

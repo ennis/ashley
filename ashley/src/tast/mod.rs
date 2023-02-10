@@ -15,15 +15,13 @@ pub use expr::Expr;
 pub use ty::{FunctionType, ScalarType, Type, TypeKind};
 
 use crate::{
-    builtins::BuiltinTypes,
+    builtins::PrimitiveTypes,
     diagnostic::Diagnostics,
     syntax::ast,
-    tast::{
-        scope::{Scope},
-        stmt::Stmt,
-    },
+    tast::{scope::Scope, stmt::Stmt},
     utils::{Id, TypedVec},
 };
+use ashley::tast::def::DefKind;
 use std::{
     collections::HashSet,
     hash::Hash,
@@ -57,11 +55,13 @@ impl From<LocalDefId> for DefId {
     }
 }
 
+#[derive(Debug)]
 pub struct LocalVar {
     pub name: String,
     pub ty: Type,
 }
 
+#[derive(Debug)]
 pub struct Block {
     pub stmts: Vec<StmtId>,
 }
@@ -72,11 +72,13 @@ impl Block {
     }
 }
 
+#[derive(Debug)]
 pub struct TypedBody {
     pub stmts: TypedVec<Stmt>,
     pub exprs: TypedVec<Expr>,
     pub local_vars: TypedVec<LocalVar>,
     pub blocks: TypedVec<Block>,
+    pub params: Vec<LocalVarId>,
 }
 
 impl TypedBody {
@@ -86,7 +88,16 @@ impl TypedBody {
             exprs: TypedVec::new(),
             local_vars: TypedVec::new(),
             blocks: TypedVec::new(),
+            params: vec![],
         }
+    }
+
+    pub fn entry_block(&self) -> BlockId {
+        BlockId::from_index(0)
+    }
+
+    pub fn root_expr(&self) -> ExprId {
+        ExprId::from_index(self.exprs.len() - 1)
     }
 }
 
@@ -161,6 +172,11 @@ impl Module {
             None => &self.defs[id.local_def],
         }
     }
+
+    /// Iterates over all the local definitions in this module.
+    pub fn definitions(&self) -> impl Iterator<Item = (LocalDefId, &Def)> {
+        self.defs.iter_full()
+    }
 }
 
 /// Types interner.
@@ -188,7 +204,7 @@ impl Types {
 }
 
 /// Context for type-checking a single source file.
-pub(crate) struct TypeCheckCtxt<'a, 'diag> {
+pub(crate) struct TypeCheckItemCtxt<'a, 'diag> {
     module: &'a mut Module,
     diag: &'a mut Diagnostics<'diag>,
     tyctxt: &'a mut TypeCtxt,
@@ -196,10 +212,10 @@ pub(crate) struct TypeCheckCtxt<'a, 'diag> {
     scopes: Vec<Scope>,
 }
 
+/// Type-checking context.
 pub struct TypeCtxt {
-    /// Interned set of types.
     types: Types,
-    builtins: BuiltinTypes,
+    prim_tys: PrimitiveTypes,
     error: Type,
 }
 
@@ -207,10 +223,10 @@ impl TypeCtxt {
     pub fn new() -> Self {
         let mut types = Types::new();
         let error_type = types.intern(TypeKind::Error);
-        let builtin_types = BuiltinTypes::new(&mut types);
+        let builtin_types = PrimitiveTypes::new(&mut types);
         TypeCtxt {
             types,
-            builtins: builtin_types,
+            prim_tys: builtin_types,
             error: error_type,
         }
     }
@@ -227,18 +243,19 @@ impl TypeCtxt {
     ) -> Module {
         let mut module = Module::new();
         diag.set_current_source(ast.source_id);
-        let mut ctxt = TypeCheckCtxt {
+        let mut ctxt = TypeCheckItemCtxt {
             module: &mut module,
             diag,
             tyctxt: self,
             package_resolver,
             scopes: Vec::new(),
         };
+        ctxt.define_builtin_functions();
         ctxt.typecheck_module(&ast.module);
         module
     }
 
-    pub fn typecheck_item_body(&mut self, module: &Module, def: LocalDefId, diag: &mut Diagnostics) -> TypedBody {
+    fn build_scope_for_def_body(&mut self, module: &Module, def: LocalDefId) -> Scope {
         let mut scope = Scope::new();
         // bring package contents in scope
         for package in module.packages.iter() {
@@ -250,6 +267,11 @@ impl TypeCtxt {
             let def = &module.defs[id];
             scope.add_def(DefId::from(id), def);
         }
+        scope
+    }
+
+    pub fn typecheck_body(&mut self, module: &Module, def: LocalDefId, diag: &mut Diagnostics) -> TypedBody {
+        let scope = self.build_scope_for_def_body(module, def);
 
         let mut typed_body = TypedBody::new();
         let error_type = self.ty(TypeKind::Error);
@@ -261,6 +283,35 @@ impl TypeCtxt {
             scopes: vec![scope],
             typed_body: &mut typed_body,
             error_type,
+        };
+
+        match ctxt.module.def(DefId::from(def)).kind {
+            DefKind::Function(ref func) => {
+                if let Some(ref ast) = func.ast {
+                    if let Some(ref body) = ast.block() {
+                        // create local vars for function parameters
+                        for param in func.parameters.iter() {
+                            let id = ctxt.typed_body.local_vars.push(LocalVar {
+                                name: param.name.clone(),
+                                ty: param.ty.clone(),
+                            });
+                            ctxt.typed_body.params.push(id);
+                        }
+                        ctxt.typecheck_block(body);
+                    }
+                }
+            }
+            DefKind::Global(ref global) => {
+                if let Some(ref ast) = global.ast {
+                    if let Some(ref initializer) = ast.initializer() {
+                        if let Some(ref expr) = initializer.expr() {
+                            let expr = ctxt.typecheck_expr(expr);
+                            ctxt.add_expr(expr);
+                        }
+                    }
+                }
+            }
+            DefKind::Struct(_) => {}
         };
 
         typed_body

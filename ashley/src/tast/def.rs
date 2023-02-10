@@ -28,16 +28,8 @@ impl Qualifier {
 }
 
 #[derive(Debug)]
-pub struct StructField {
-    pub ast: Option<ast::StructField>,
-    pub ty: Type,
-    pub name: String,
-}
-
-#[derive(Debug)]
 pub struct StructDef {
     pub ast: Option<ast::StructDef>,
-    pub fields: Vec<StructField>,
     pub ty: Type,
 }
 

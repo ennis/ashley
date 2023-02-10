@@ -1,21 +1,24 @@
 use crate::{
     syntax::ast,
-    tast::{
-        scope::Scope, Block, BlockId, Expr, ExprId, StmtId,
-        TypeCheckBodyCtxt,
-    },
+    tast::{scope::Scope, Block, BlockId, Expr, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt},
 };
 
+#[derive(Debug)]
 pub struct Stmt {
     pub ast: ast::Stmt,
     pub kind: StmtKind,
 }
 
+#[derive(Debug)]
 pub enum StmtKind {
     Select {
         condition: ExprId,
         true_branch: StmtId,
         false_branch: Option<StmtId>,
+    },
+    Local {
+        var: LocalVarId,
+        initializer: Option<ExprId>,
     },
     Return {
         value: Option<ExprId>,
@@ -62,7 +65,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             return StmtKind::Error
         };
 
-        if condition.ty != self.tyctxt.builtins.bool {
+        if condition.ty != self.tyctxt.prim_tys.bool {
             self.diag
                 .error("condition must be a boolean expression")
                 .location(&ast_condition)
@@ -113,6 +116,32 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         }
     }
 
+    fn typecheck_local_variable_stmt(&mut self, local: &ast::LocalVariable) -> StmtKind {
+        let ty = local
+            .ty()
+            .map(|t| self.tyctxt.convert_type(t, self.module, &self.scopes, self.diag))
+            .unwrap_or_else(|| self.error_type.clone());
+
+        let initializer = if let Some(initializer) = local.initializer() {
+            if let Some(initializer) = initializer.expr() {
+                let expr = self.typecheck_expr(&initializer);
+                Some(self.add_expr(expr))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let name = local.name().to_string_opt();
+        let local_var_id = self.typed_body.local_vars.push(LocalVar { name, ty });
+
+        StmtKind::Local {
+            var: local_var_id,
+            initializer,
+        }
+    }
+
     /// Typechecks a statement and return the statement kind.
     pub fn typecheck_stmt(&mut self, stmt: &ast::Stmt) -> StmtId {
         let kind = match stmt {
@@ -133,9 +162,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             ast::Stmt::DiscardStmt(_) => {
                 todo!("discard stmt")
             }
-            ast::Stmt::LocalVariable(_) => {
-                todo!("local variable stmt")
-            }
+            ast::Stmt::LocalVariable(local) => self.typecheck_local_variable_stmt(local),
             ast::Stmt::IfStmt(if_stmt) => self.typecheck_if_stmt(if_stmt),
             ast::Stmt::ForStmt(_) => {
                 todo!("for stmt")

@@ -1,15 +1,14 @@
 use ashley::{
-    builtins::BuiltinTypes,
+    builtins::PrimitiveTypes,
     diagnostic::{Diagnostics, SourceFileProvider},
     syntax,
     syntax::{ast, ast::AstNode},
-    tast::{DummyPackageResolver, Module},
+    tast::{DummyPackageResolver, Module, TypeCtxt},
 };
 use codespan_reporting::{
     term,
     term::termcolor::{ColorChoice, StandardStream},
 };
-use ashley::tast::TypeCtxt;
 
 #[test]
 fn type_ctxt() {
@@ -28,7 +27,12 @@ fn type_ctxt() {
 
         let mut package_resolver = DummyPackageResolver;
         let module = type_ctxt.typecheck_items(ast_root, &mut package_resolver, &mut diag);
+        let mut bodies = Vec::new();
+        for (def_id, _) in module.definitions() {
+            let body = type_ctxt.typecheck_body(&module, def_id, &mut diag);
+            bodies.push(body);
+        }
 
-        insta::assert_debug_snapshot!(module);
+        insta::assert_debug_snapshot!((module, bodies));
     });
 }

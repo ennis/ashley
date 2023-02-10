@@ -1,4 +1,8 @@
-use crate::{syntax::ast, tast::TypeCheckCtxt};
+use crate::{
+    diagnostic::Diagnostics,
+    syntax::ast,
+    tast::{Module, TypeCtxt},
+};
 use ordered_float::OrderedFloat;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -8,8 +12,13 @@ pub enum ConstantValue {
     Bool(bool),
 }
 
-impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
-    pub(crate) fn try_evaluate_constant_expression(&mut self, expr: &ast::Expr) -> Option<ConstantValue> {
+impl TypeCtxt {
+    pub(crate) fn try_evaluate_constant_expression(
+        &mut self,
+        expr: &ast::Expr,
+        _module: &Module,
+        diag: &mut Diagnostics,
+    ) -> Option<ConstantValue> {
         match expr {
             ast::Expr::LitExpr(lit) => match lit.kind() {
                 ast::LiteralKind::String(s) => {
@@ -23,8 +32,7 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
                             match i.try_into() {
                                 Ok(i) => Some(ConstantValue::Int(i)),
                                 Err(err) => {
-                                    self.diag
-                                        .error(format!("error parsing integer: {err}"))
+                                    diag.error(format!("error parsing integer: {err}"))
                                         .primary_label(&v, "")
                                         .emit();
                                     return None;
@@ -32,10 +40,7 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
                             }
                         }
                         Err(err) => {
-                            self.diag
-                                .error(format!("error parsing integer: {err}"))
-                                .location(&v)
-                                .emit();
+                            diag.error(format!("error parsing integer: {err}")).location(&v).emit();
                             return None;
                         }
                     }
@@ -43,8 +48,7 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
                 ast::LiteralKind::FloatNumber(v) => match v.value() {
                     Ok(f) => Some(ConstantValue::Float(OrderedFloat::from(f as f32))),
                     Err(err) => {
-                        self.diag
-                            .error(format!("error parsing floating-point number: {err}"))
+                        diag.error(format!("error parsing floating-point number: {err}"))
                             .location(v)
                             .emit();
                         return None;

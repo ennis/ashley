@@ -3,10 +3,9 @@ use crate::{
     syntax::ast,
     tast,
     tast::{
-        consteval::ConstantValue,
-        def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef, StructField},
+        def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef},
         scope::{Res, Scope},
-        Def, DefId, FunctionType, IdentExt, Type, TypeCheckCtxt, TypeKind, Visibility,
+        Def, DefId, FunctionType, IdentExt, TypeCheckItemCtxt, TypeKind, Visibility,
     },
 };
 
@@ -16,7 +15,7 @@ enum Item {
     StructDef(StructDef),
 }
 
-impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
+impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
     pub(super) fn typecheck_module(&mut self, module: &ast::Module) {
         let mut scope = Scope::new();
         self.scopes.push(scope);
@@ -53,7 +52,7 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
         let extern_ = global.extern_().map(|linkage| linkage.is_extern()).unwrap_or(false);
         let ty = global
             .ty()
-            .map(|ty| self.convert_type(ty))
+            .map(|ty| self.tyctxt.convert_type(ty, &self.module, &self.scopes, &mut self.diag))
             .unwrap_or_else(|| self.tyctxt.error.clone());
 
         //
@@ -107,7 +106,7 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
             for param in param_list.parameters() {
                 let ty = param
                     .ty()
-                    .map(|ty| self.convert_type(ty))
+                    .map(|ty| self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag))
                     .unwrap_or_else(|| self.tyctxt.error.clone());
                 arg_types.push(ty.clone());
                 params.push(FunctionParam {
@@ -122,10 +121,10 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
         let return_type = if let Some(ret_type) = ret_type {
             ret_type
                 .ty()
-                .map(|ty| self.convert_type(ty))
+                .map(|ty| self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag))
                 .unwrap_or_else(|| self.tyctxt.error.clone())
         } else {
-            self.tyctxt.builtins.void.clone()
+            self.tyctxt.prim_tys.void.clone()
         };
 
         // create function type
@@ -177,94 +176,6 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
         Some(def_id)
     }
 
-    /// Converts an AST type to a TAST type.
-    fn convert_type(&mut self, ty: ast::Type) -> Type {
-        match ty {
-            ast::Type::TypeRef(tyref) => {
-                let Some(ident) = tyref.ident() else { return self.tyctxt.error.clone(); };
-                if let Some(res) = self.resolve_name(ident.text()) {
-                    match res {
-                        Res::Global(def_id) => {
-                            let def = self.module.def(def_id);
-                            match def.kind {
-                                DefKind::Struct(ref struct_def) => struct_def.ty.clone(),
-                                _ => {
-                                    self.diag.error("expected a type").location(ident).emit();
-                                    self.tyctxt.error.clone()
-                                }
-                            }
-                        }
-                        Res::PrimTy(ty) => ty,
-                        _ => {
-                            self.diag.error("expected a type").location(ident).emit();
-                            self.tyctxt.error.clone()
-                        }
-                    }
-                } else {
-                    // TODO better error message
-                    self.diag.error("expected a type").location(ident).emit();
-                    self.tyctxt.error.clone()
-                }
-            }
-            ast::Type::TupleType(_tuple_ty) => {
-                todo!("tuple types");
-                /*let fields: Vec<_> = tuple_ty
-                    .fields()
-                    .enumerate()
-                    .map(|(i,f)| StructField {
-                        ast: None,
-                        name: format!("field{}", i),
-                        ty: self.convert_type(f),
-                    })
-                    .collect();
-                self.module.ty(TypeKind::Struct(Arc::new(StructDef {
-                    ast: None,
-                    name: "".to_string(), // TODO generate a name for tuples (or remove tuples entirely)
-                    fields,
-                    ty: (),
-                })))*/
-            }
-            ast::Type::ArrayType(array_type) => {
-                let element_type = array_type
-                    .element_type()
-                    .map(|ty| self.convert_type(ty))
-                    .unwrap_or_else(|| self.tyctxt.error.clone());
-
-                if let Some(expr) = array_type.length() {
-                    if let Some(len) = self.try_evaluate_constant_expression(&expr) {
-                        match len {
-                            ConstantValue::Int(len) => {
-                                let len = len as u32;
-                                self.tyctxt.ty(TypeKind::Array(element_type, len))
-                            }
-                            ConstantValue::Float(_) => {
-                                self.diag.error("array length must be an integer").location(expr).emit();
-                                self.tyctxt.error.clone()
-                            }
-                            ConstantValue::Bool(_) => {
-                                self.diag.error("array length must be an integer").location(expr).emit();
-                                self.tyctxt.error.clone()
-                            }
-                        }
-                    } else {
-                        // TODO better error message
-                        self.diag
-                            .error("array length must be a constant expression")
-                            .location(expr)
-                            .emit();
-                        self.tyctxt.error.clone()
-                    }
-                } else {
-                    // no length
-                    self.tyctxt.ty(TypeKind::RuntimeArray(element_type))
-                }
-            }
-            ast::Type::ClosureType(_closure_type) => {
-                todo!("closure types")
-            }
-        }
-    }
-
     fn define_struct(&mut self, struct_def: &ast::StructDef) -> DefId {
         let name = struct_def.ident().to_string_opt();
         let visibility = struct_def
@@ -275,18 +186,20 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
         for field in struct_def.fields() {
             let ty = field
                 .ty()
-                .map(|ty| self.convert_type(ty.clone()))
+                .map(|ty| {
+                    self.tyctxt
+                        .convert_type(ty.clone(), self.module, &self.scopes, self.diag)
+                })
                 .unwrap_or_else(|| self.tyctxt.error.clone());
-            fields.push(StructField {
-                ast: Some(field.clone()),
-                name: field.ident().to_string_opt(),
-                ty,
-            });
+            fields.push((field.ident().to_string_opt(), ty));
         }
 
         // define the type before the struct (there's a circular reference)
         let next_def_id = self.module.defs.next_id();
-        let ty = self.tyctxt.ty(TypeKind::Struct(DefId::from(next_def_id)));
+        let ty = self.tyctxt.ty(TypeKind::Struct {
+            def: Some(DefId::from(next_def_id)),
+            fields,
+        });
 
         let def_id = self.module.defs.push(Def {
             package: None,
@@ -296,7 +209,6 @@ impl<'a, 'diag> TypeCheckCtxt<'a, 'diag> {
             visibility,
             kind: DefKind::Struct(StructDef {
                 ast: Some(struct_def.clone()),
-                fields,
                 ty,
             }),
         });

@@ -1,13 +1,13 @@
 //! Registration of builtin functions and variables during type checking.
 use crate::{
-    builtins::{pseudo_type_to_concrete_type,  ImageClass, PseudoType},
+    builtins::{pseudo_type_to_concrete_type, ImageClass, PseudoType},
     tast::{
         def::{DefKind, FunctionDef},
-        Def, FunctionType,  TypeCheckCtxt, Visibility,
+        Def, FunctionType, TypeCheckItemCtxt, Visibility,
     },
 };
 
-impl TypeCheckCtxt<'_, '_> {
+impl TypeCheckItemCtxt<'_, '_> {
     pub(crate) fn define_builtin_functions(&mut self) {
         for builtin in crate::builtins::OPERATION_SIGNATURES {
             for sig in builtin.signatures {
@@ -27,10 +27,10 @@ impl TypeCheckCtxt<'_, '_> {
                         let arg_types: Vec<_> = sig
                             .parameter_types
                             .iter()
-                            .map(|ty| pseudo_type_to_concrete_type(*ty, &self.tyctxt.builtins, vec_len, *ic))
+                            .map(|ty| pseudo_type_to_concrete_type(*ty, &self.tyctxt.prim_tys, vec_len, *ic))
                             .collect();
                         let return_type =
-                            pseudo_type_to_concrete_type(sig.result_type, &self.tyctxt.builtins, vec_len, *ic);
+                            pseudo_type_to_concrete_type(sig.result_type, &self.tyctxt.prim_tys, vec_len, *ic);
                         let function_type = self.tyctxt.ty(FunctionType { arg_types, return_type });
                         self.module.defs.push(Def {
                             package: None,

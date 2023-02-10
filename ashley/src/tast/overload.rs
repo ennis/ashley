@@ -1,6 +1,6 @@
 //! Overload resolution.
 use crate::{
-    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, BuiltinTypes, ImageClass, PseudoType},
+    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, PrimitiveTypes, ImageClass, PseudoType},
     tast::{DefId, ScalarType, Type, TypeCheckBodyCtxt, TypeKind},
 };
 use smallvec::SmallVec;
@@ -142,7 +142,7 @@ pub(crate) struct OverloadCandidate {
 ///
 /// Returns true if `check_signature` returned an exact match was found, false otherwise.
 fn typecheck_builtin_helper(
-    builtin_types: &BuiltinTypes,
+    builtin_types: &PrimitiveTypes,
     overload_index: usize,
     parameter_types: &[PseudoType],
     result_type: PseudoType,
@@ -252,7 +252,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             for ic in image_classes {
                 for vec_len in 1..=max_vec_len {
                     if typecheck_builtin_helper(
-                        &self.tyctxt.builtins,
+                        &self.tyctxt.prim_tys,
                         index,
                         sig.parameter_types,
                         sig.result_type,

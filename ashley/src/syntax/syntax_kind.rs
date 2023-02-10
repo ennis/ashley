@@ -200,6 +200,7 @@ pub enum SyntaxKind {
     PATH_EXPR,
     FIELD_EXPR,
     CALL_EXPR,
+    CONSTRUCTOR,
     TYPE_REF,
     TUPLE_TYPE,
     ARRAY_TYPE,

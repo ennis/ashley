@@ -179,7 +179,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         for arg_expr in arglist.arguments() {
             let arg = self.typecheck_expr(&arg_expr);
             if !arg.ty.is_scalar_or_vector() {
-                self.diag.error("invalid component type in constructor");
+                self.diag.error("invalid component type in constructor").emit();
                 has_invalid_components = true;
             } else {
                 num_components += arg.ty.num_components().unwrap() as usize;
@@ -365,14 +365,12 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 match self.resolve_name(ident.text()) {
                     Some(Res::OverloadSet(overloads)) => overloads.clone(),
                     _ => {
-                        // TODO better error message
-                        self.diag.error("unresolved function").location(&ast_callee).emit();
+                        self.diag.error(format!("unresolved function: {func_name}")).location(&ast_callee).emit();
                         return self.error_expr();
                     }
                 }
             }
             _ => {
-                // TODO better error message
                 self.diag.error("expected function name").location(&ast_callee).emit();
                 return self.error_expr();
             }
@@ -421,12 +419,16 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 diag.emit();
                 return self.error_expr();
             }
-            Err(OverloadResolutionError::Ambiguous) => {
+            Err(OverloadResolutionError::Ambiguous(candidates)) => {
                 // TODO better error message
-                self.diag
-                    .error("ambiguous call to overloaded function")
-                    .location(&call_expr)
-                    .emit();
+                let mut diag = self.diag
+                    .error(format!("ambiguous call to overloaded function `{func_name}`"))
+                    .location(&call_expr);
+                for candidate in candidates.iter() {
+                    let def = self.module.def(overloads[candidate.index]);
+                    diag = diag.note(format!("candidate: `{}`", def.display_declaration()));
+                }
+                diag.emit();
                 return self.error_expr();
             }
         }

@@ -173,7 +173,7 @@ fn typecheck_builtin_helper(
 
 pub(crate) enum OverloadResolutionError {
     NoMatch,
-    Ambiguous,
+    Ambiguous(Vec<OverloadCandidate>),
 }
 
 fn best_overload(mut candidates: Vec<OverloadCandidate>) -> Result<OverloadCandidate, OverloadResolutionError> {
@@ -190,7 +190,7 @@ fn best_overload(mut candidates: Vec<OverloadCandidate>) -> Result<OverloadCandi
             {
                 Ok(candidates.into_iter().next().unwrap())
             } else {
-                Err(OverloadResolutionError::Ambiguous)
+                Err(OverloadResolutionError::Ambiguous(candidates))
             }
         }
     }

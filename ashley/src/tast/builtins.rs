@@ -13,7 +13,6 @@ impl TypeCheckItemCtxt<'_, '_> {
         for builtin in crate::builtins::OPERATION_SIGNATURES {
             for sig in builtin.signatures {
                 // convert generic builtin signatures to actual function signatures
-                // TODO factor this out
                 let is_vector_generic = sig.parameter_types.iter().any(PseudoType::is_vector_generic);
                 let is_image_type_generic = sig.parameter_types.iter().any(PseudoType::is_image_type_generic);
                 let max_vec_len = if is_vector_generic { 4 } else { 1 };
@@ -43,6 +42,7 @@ impl TypeCheckItemCtxt<'_, '_> {
                             package: None,
                             location: None,
                             builtin: true,
+                            // there's an entry named `r#mod` in the builtin signatures because it clashes with the rust keyword, so we need to trim the `r#` prefix
                             name: builtin.name.trim_start_matches("r#").to_string(),
                             visibility: Visibility::Public,
                             kind: DefKind::Function(FunctionDef {

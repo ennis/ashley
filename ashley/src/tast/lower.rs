@@ -1,11 +1,16 @@
+//! Lowering to HIR
 use crate::{
     builtins::BuiltinSignature,
     diagnostic::Diagnostics,
     hir,
-    hir::{GlobalVariableData, IdRef},
-    tast::{def::GlobalDef, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, TypeCtxt, TypedBody},
+    hir::{FunctionData, GlobalVariableData, IdRef},
+    tast::{
+        def::{FunctionDef, GlobalDef},
+        stmt::Stmt,
+        Block, BlockId, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, StmtId, TypeCtxt, TypedBody,
+    },
 };
-use ashley::tast::{def::DefKind, expr::ExprKind, DefId, Qualifier, TypeKind};
+use ashley::tast::{def::DefKind, expr::ExprKind, stmt::StmtKind, DefId, Qualifier, TypeKind};
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
 
 enum HirDef {
@@ -40,11 +45,24 @@ struct Place {
 
 impl<'a, 'diag> LowerCtxt<'a, 'diag> {
     fn lower_module(&mut self, hir: &mut hir::Module) {
+        // lower package imports first since they may be referred to by other definitions
+        for (import_id, package) in self.module.packages.iter_full() {
+            for (local_def, def) in package.defs.iter_full() {
+                let def_id = DefId {
+                    package: Some(import_id),
+                    local_def,
+                };
+                if def.builtin {
+                    continue;
+                }
+                self.lower_def(hir, def, def_id);
+            }
+        }
         for (def_id, def) in self.module.definitions() {
             if def.builtin {
                 continue;
             }
-            self.lower_def(hir, def, def_id);
+            self.lower_def(hir, def, DefId::from(def_id));
         }
     }
 
@@ -266,9 +284,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 rhs,
                 op,
                 signature,
-            } => {
-                self.lower_bin_expr(fb, body, &signature, lhs, rhs, ty)
-            },
+            } => self.lower_bin_expr(fb, body, &signature, lhs, rhs, ty),
             ExprKind::BinaryAssign {
                 lhs,
                 rhs,
@@ -277,25 +293,45 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             } => {
                 self.lower_bin_assign_expr(fb, body, &signature, lhs, rhs, ty);
                 return None;
-            },
+            }
             ExprKind::Unary { expr, signature, op } => self.lower_unary_expr(fb, body, &signature, expr, ty),
             ExprKind::Assign { lhs, rhs } => {
                 self.lower_assign_expr(fb, body, lhs, rhs, ty);
                 return None;
-            },
+            }
             ExprKind::Ternary { .. } => {
                 todo!("ternary expression")
             }
-            ExprKind::Call { .. } => {todo!("call expression")}
-            ExprKind::LocalVar { .. } => {todo!("local var expression")}
-            ExprKind::GlobalVar { .. } => {todo!("global var expression")}
-            ExprKind::FunctionRef { .. } => {todo!("function ref expression")}
-            ExprKind::Index { .. } => {todo!("index expression")}
-            ExprKind::Field { .. } => {todo!("field expression")}
-            ExprKind::ComponentAccess { .. } => {todo!("component access expression")}
-            ExprKind::ImplicitConversion { .. } => {todo!("implicit conversion expression")}
-            ExprKind::Constructor { .. } => {todo!("constructor expression")}
-            ExprKind::Literal { .. } => {todo!("literal expression")}
+            ExprKind::Call { .. } => {
+                todo!("call expression")
+            }
+            ExprKind::LocalVar { .. } => {
+                todo!("local var expression")
+            }
+            ExprKind::GlobalVar { .. } => {
+                todo!("global var expression")
+            }
+            ExprKind::FunctionRef { .. } => {
+                todo!("function ref expression")
+            }
+            ExprKind::Index { .. } => {
+                todo!("index expression")
+            }
+            ExprKind::Field { .. } => {
+                todo!("field expression")
+            }
+            ExprKind::ComponentAccess { .. } => {
+                todo!("component access expression")
+            }
+            ExprKind::ImplicitConversion { .. } => {
+                todo!("implicit conversion expression")
+            }
+            ExprKind::Constructor { .. } => {
+                todo!("constructor expression")
+            }
+            ExprKind::Literal { .. } => {
+                todo!("literal expression")
+            }
             ExprKind::Undef => {
                 panic!("invalid expression encountered during lowering")
             }
@@ -303,18 +339,127 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         Some(TypedIdRef { ty, id })
     }
 
-    fn lower_def(&mut self, hir: &mut hir::Module, def: &Def, def_id: LocalDefId) {
+    fn lower_stmt(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, stmt: StmtId) {
+        let stmt = &body.stmts[stmt];
+        match stmt.kind {
+            StmtKind::Select { .. } => {
+                todo!("select statement")
+            }
+            StmtKind::Local { .. } => {
+                todo!("local statement")
+            }
+            StmtKind::Return { .. } => {
+                todo!("return statement")
+            }
+            StmtKind::ExprStmt { expr } => {
+                self.lower_expr(fb, body, expr);
+            }
+            StmtKind::Block { .. } => {}
+            StmtKind::Error => {}
+        }
+    }
+
+    fn lower_block(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, block: BlockId) {
+        let block = &body.blocks[block];
+        for stmt in block.stmts.iter() {
+            self.lower_stmt(fb, body, *stmt);
+        }
+    }
+
+    fn lower_function(&mut self, hir: &mut hir::Module, def_id: DefId, def: &Def, function_def: &FunctionDef) {
+        // build parameter list
+        let params: Vec<_> = function_def
+            .parameters
+            .iter()
+            .map(|param| hir::FunctionParameter {
+                name: param.name.clone(),
+                ty: self.convert_type(hir, &param.ty),
+            })
+            .collect();
+        let arg_types: Vec<_> = params.iter().map(|param| param.ty).collect();
+
+        let return_type = self.convert_type(
+            hir,
+            &function_def
+                .function_type
+                .as_function()
+                .expect("expected function type")
+                .return_type,
+        );
+
+        // create function type
+        let func_type = hir.define_type(hir::TypeData::Function(hir::types::FunctionType {
+            arg_types: Cow::Owned(arg_types),
+            return_type,
+        }));
+
+        let ast = function_def.ast.clone().expect("expected function ast");
+
+        // if there's a block, then it's a function definition, otherwise it's just a declaration
+        let func_data = if let Some(block) = ast.block() {
+            // typecheck the function body
+            {
+                let typed_body = self.tyctxt.typecheck_body(self.module, def_id.local_def, self.diag);
+                if typed_body.has_errors() {
+                    // emit a dummy body so that lowering can continue
+                    FunctionData::new_declaration(
+                        def.name.clone(),
+                        func_type,
+                        params,
+                        function_def.linkage,
+                        spirv::FunctionControl::NONE,
+                    )
+                } else {
+                    let (mut func_data, entry_block_id) = hir::FunctionData::new(
+                        def.name.clone(),
+                        func_type,
+                        params,
+                        function_def.linkage,
+                        spirv::FunctionControl::NONE,
+                    );
+                    let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
+                    let entry_block = typed_body.entry_block();
+                    self.lower_block(&mut builder, &typed_body, entry_block);
+
+                    if !builder.is_block_terminated() {
+                        // TODO check for return type
+                        builder.ret()
+                    }
+                    func_data
+                }
+            }
+        } else {
+            // only a declaration
+            FunctionData::new_declaration(
+                def.name.clone(),
+                func_type,
+                params,
+                function_def.linkage,
+                spirv::FunctionControl::NONE,
+            )
+        };
+
+        self.def_map
+            .insert(def_id, HirDef::Function(hir.add_function(func_data.clone())));
+    }
+
+    fn lower_def(&mut self, hir: &mut hir::Module, def: &Def, def_id: DefId) {
         match def.kind {
-            DefKind::Function(ref function) => {}
+            DefKind::Function(ref function) => {
+                self.lower_function(hir, def_id, def, function);
+            }
             DefKind::Global(ref global) => {
                 self.lower_global(hir, def, global);
             }
-            DefKind::Struct(ref struct_def) => {}
+            DefKind::Struct(ref struct_def) => {
+                todo!("struct lowering")
+            }
         }
     }
 }
 
-fn lower_tast(tyctxt: &mut TypeCtxt, module: Module, diag: &mut Diagnostics) -> hir::Module {
+pub fn lower_to_hir(tyctxt: &mut TypeCtxt, module: Module, diag: &mut Diagnostics) -> hir::Module {
+    // TODO reuse typechecked bodies?
     let mut ctxt = LowerCtxt {
         tyctxt,
         module: &module,

@@ -4,15 +4,16 @@ mod consteval;
 mod def;
 mod expr;
 mod item;
+mod lower;
 mod overload;
 mod scope;
 mod stmt;
 mod swizzle;
 pub mod ty;
-mod lower;
 
 pub use def::{Def, Qualifier, Visibility};
 pub use expr::Expr;
+pub use lower::lower_to_hir;
 pub use ty::{FunctionType, ScalarType, Type, TypeKind};
 
 use crate::{
@@ -80,6 +81,7 @@ pub struct TypedBody {
     pub local_vars: TypedVec<LocalVar>,
     pub blocks: TypedVec<Block>,
     pub params: Vec<LocalVarId>,
+    pub errors: usize,
 }
 
 impl TypedBody {
@@ -90,6 +92,7 @@ impl TypedBody {
             local_vars: TypedVec::new(),
             blocks: TypedVec::new(),
             params: vec![],
+            errors: 0,
         }
     }
 
@@ -99,6 +102,10 @@ impl TypedBody {
 
     pub fn root_expr(&self) -> ExprId {
         ExprId::from_index(self.exprs.len() - 1)
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.errors > 0
     }
 }
 
@@ -274,6 +281,9 @@ impl TypeCtxt {
     pub fn typecheck_body(&mut self, module: &Module, def: LocalDefId, diag: &mut Diagnostics) -> TypedBody {
         let scope = self.build_scope_for_def_body(module, def);
 
+        // HACK: to count the number of errors during type-checking, count the difference in number of errors
+        let initial_err_count = diag.error_count();
+
         let mut typed_body = TypedBody::new();
         let error_type = self.ty(TypeKind::Error);
 
@@ -315,6 +325,8 @@ impl TypeCtxt {
             DefKind::Struct(_) => {}
         };
 
+        let final_err_count = diag.error_count();
+        typed_body.errors = final_err_count - initial_err_count;
         typed_body
     }
 }
@@ -329,10 +341,7 @@ pub struct TypeCheckBodyCtxt<'a, 'diag> {
 }
 
 impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
-    pub(crate) fn convert_type(
-        &mut self,
-        ty: ast::Type,
-    ) -> Type {
+    pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
         self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag)
     }
 }

@@ -11,6 +11,8 @@ use crate::{
 /// Describes the kind of a global program variable.
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Qualifier {
+    Buffer,
+    Shared,
     Uniform,
     Const,
     In,
@@ -21,6 +23,8 @@ impl Qualifier {
     fn from_token(token: &syntax::SyntaxToken) -> Option<Qualifier> {
         match token.kind() {
             SyntaxKind::UNIFORM_KW => Some(Qualifier::Uniform),
+            SyntaxKind::BUFFER_KW => Some(Qualifier::Buffer),
+            SyntaxKind::SHARED_KW => Some(Qualifier::Shared),
             SyntaxKind::IN_KW => Some(Qualifier::In),
             SyntaxKind::OUT_KW => Some(Qualifier::Out),
             SyntaxKind::CONST_KW => Some(Qualifier::Const),
@@ -33,7 +37,9 @@ impl Qualifier {
 impl fmt::Display for Qualifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Qualifier::Buffer => write!(f, "buffer"),
             Qualifier::Uniform => write!(f, "uniform"),
+            Qualifier::Shared => write!(f, "shared"),
             Qualifier::Const => write!(f, "const"),
             Qualifier::In => write!(f, "in"),
             Qualifier::Out => write!(f, "out"),

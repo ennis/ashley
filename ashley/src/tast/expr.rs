@@ -63,7 +63,6 @@ pub enum ExprKind {
     BinaryAssign {
         op: ast::BinaryOp,
         /// Signature of the operation that is used to compute the value to assign.
-        // TODO replace this with a DefId to the operator function
         signature: BuiltinSignature,
         lhs: ExprId,
         rhs: ExprId,
@@ -71,16 +70,12 @@ pub enum ExprKind {
     Unary {
         op: ast::UnaryOp,
         /// Signature of the unary operation.
-        // TODO replace this with a DefId to the operator function
         signature: BuiltinSignature,
         expr: ExprId,
     },
     Assign {
         lhs: ExprId,
         rhs: ExprId,
-    },
-    Prefix {
-        expr: ExprId,
     },
     Ternary {
         condition: ExprId,
@@ -89,10 +84,6 @@ pub enum ExprKind {
     },
     Call {
         function: DefId,
-        args: Vec<ExprId>,
-    },
-    Builtin {
-        builtin: BuiltinOperation,
         args: Vec<ExprId>,
     },
     LocalVar {

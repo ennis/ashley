@@ -138,6 +138,10 @@ pub enum SyntaxKind {
     OUT_KW,
     #[token("uniform")]
     UNIFORM_KW,
+    #[token("buffer")]
+    BUFFER_KW,
+    #[token("shared")]
+    SHARED_KW,
     #[token("struct")]
     STRUCT_KW,
     #[token("as")]

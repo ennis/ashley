@@ -450,7 +450,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
 
         // qualifiers
         match self.next() {
-            Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW) => {
+            Some(IN_KW | OUT_KW | CONST_KW | UNIFORM_KW | BUFFER_KW | SHARED_KW) => {
                 self.start_node(QUALIFIER);
                 self.eat();
                 self.finish_node(); // QUALIFIER
@@ -1105,7 +1105,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.finish_node();
     }
 
-    fn parse_global_variable(&mut self, start: Checkpoint) {
+    /*fn parse_global_variable(&mut self, start: Checkpoint) {
         self.b.start_node_at(start, GLOBAL.into());
         if self.next() == Some(EXTERN_KW) {
             self.start_node(LINKAGE);
@@ -1113,7 +1113,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             self.finish_node(); // EXTERN
         }
         self.start_node(QUALIFIER);
-        self.expect_any(&[IN_KW, OUT_KW, CONST_KW, UNIFORM_KW]);
+        self.expect_any(&[IN_KW, OUT_KW, CONST_KW, UNIFORM_KW, BUFFER_KW]);
         self.finish_node(); // QUALIFIER
         self.expect_ident("variable name");
         self.expect(COLON);
@@ -1126,7 +1126,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         }
         self.expect(SEMICOLON);
         self.finish_node(); // GLOBAL
-    }
+    }*/
 
     fn parse_expr(&mut self) {
         self.parse_expr_bp(0)

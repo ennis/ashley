@@ -208,7 +208,7 @@ void main() {
 in vec3 v_position;
 out vec3 f_position = vec3(0.0);
 uniform mat4 u_model_matrix;
-
+buffer float[] data;
 
 void main() {
     float x = 0;

@@ -9,6 +9,7 @@ mod scope;
 mod stmt;
 mod swizzle;
 pub mod ty;
+mod lower;
 
 pub use def::{Def, Qualifier, Visibility};
 pub use expr::Expr;

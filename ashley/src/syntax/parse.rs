@@ -277,7 +277,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
 
     fn next_is_type(&mut self) -> bool {
         let text = self.text();
-        eprintln!("next_is_type {text}");
+        //eprintln!("next_is_type {text}");
         self.types.contains(text)
     }
 
@@ -431,7 +431,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     //
 
     fn parse_function_or_variable(&mut self) {
-        eprintln!("parse_function_or_variable");
+        //eprintln!("parse_function_or_variable");
         let cp = self.checkpoint();
 
         // parse visibility
@@ -567,7 +567,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     }
 
     fn parse_struct_def(&mut self) {
-        eprintln!("parse_struct_def");
+        //eprintln!("parse_struct_def");
 
         // parse visibility
         if self.next() == Some(PUBLIC_KW) {
@@ -963,7 +963,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
 
     // TODO: declaration lists
     fn parse_local_variable_stmt(&mut self) {
-        eprintln!("parse_local_variable_stmt");
+        //eprintln!("parse_local_variable_stmt");
         self.start_node(LOCAL_VARIABLE);
         self.parse_type();
         self.expect_ident("variable name");

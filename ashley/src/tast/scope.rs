@@ -98,7 +98,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
     /// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
         let r = self.tyctxt.resolve_name(name, &self.scopes);
-        eprintln!("resolve_name({}) => {:?}", name, r);
+        //eprintln!("resolve_name({}) => {:?}", name, r);
         r
     }
 }

@@ -210,7 +210,6 @@ pub enum SyntaxKind {
     ARRAY_TYPE,
     CLOSURE_TYPE,
     CLOSURE_PARAM_LIST,
-    RET_TYPE,
     STMT_LIST,
     EXPR_STMT,
     DISCARD_STMT,

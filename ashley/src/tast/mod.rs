@@ -82,6 +82,7 @@ pub struct TypedBody {
     pub blocks: TypedVec<Block>,
     pub params: Vec<LocalVarId>,
     pub errors: usize,
+    pub entry_block: Option<BlockId>
 }
 
 impl TypedBody {
@@ -92,12 +93,9 @@ impl TypedBody {
             local_vars: TypedVec::new(),
             blocks: TypedVec::new(),
             params: vec![],
+            entry_block: None,
             errors: 0,
         }
-    }
-
-    pub fn entry_block(&self) -> BlockId {
-        BlockId::from_index(0)
     }
 
     pub fn root_expr(&self) -> ExprId {
@@ -278,6 +276,7 @@ impl TypeCtxt {
         scope
     }
 
+    // TODO: some defs do not have bodies, return None for them
     pub fn typecheck_body(&mut self, module: &Module, def: LocalDefId, diag: &mut Diagnostics) -> TypedBody {
         let scope = self.build_scope_for_def_body(module, def);
 
@@ -308,7 +307,8 @@ impl TypeCtxt {
                             });
                             ctxt.typed_body.params.push(id);
                         }
-                        ctxt.typecheck_block(body);
+                        let entry_block = ctxt.typecheck_block(body);
+                        ctxt.typed_body.entry_block = Some(entry_block);
                     }
                 }
             }

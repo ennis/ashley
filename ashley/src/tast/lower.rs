@@ -1,13 +1,16 @@
 //! Lowering to HIR
 use crate::{
-    builtins::BuiltinSignature,
+    builtins::{BuiltinSignature, Constructor},
     diagnostic::Diagnostics,
     hir,
     hir::{FunctionData, GlobalVariableData, IdRef},
     tast::{
+        consteval::ConstantValue,
         def::{FunctionDef, GlobalDef},
+        expr::ConversionKind,
         stmt::Stmt,
-        Block, BlockId, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, StmtId, TypeCtxt, TypedBody,
+        swizzle::ComponentIndices,
+        Block, BlockId, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, StmtId, Type, TypeCtxt, TypedBody,
     },
 };
 use ashley::tast::{def::DefKind, expr::ExprKind, stmt::StmtKind, DefId, Qualifier, TypeKind};
@@ -129,7 +132,13 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         hir.define_type(tydata)
     }
 
-    fn lower_global(&mut self, hir: &mut hir::Module, def: &Def, global_def: &GlobalDef) -> hir::GlobalVariable {
+    fn lower_global(
+        &mut self,
+        hir: &mut hir::Module,
+        def_id: DefId,
+        def: &Def,
+        global_def: &GlobalDef,
+    ) -> hir::GlobalVariable {
         let storage_class = match global_def.qualifier {
             Some(q) => match q {
                 Qualifier::Const => {
@@ -145,12 +154,14 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             None => spirv::StorageClass::Private,
         };
         let ty = self.convert_type(hir, &global_def.ty);
-        hir.define_global_variable(hir::GlobalVariableData {
+        let id = hir.define_global_variable(hir::GlobalVariableData {
             name: def.name.clone(),
             ty,
             storage_class,
             linkage: global_def.linkage,
-        })
+        });
+        self.def_map.insert(def_id, HirDef::Variable(id));
+        id
     }
 
     fn lower_unary_expr(
@@ -181,6 +192,15 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         val.into()
     }
 
+    fn lower_place(&mut self, fb: &mut hir::FunctionBuilder, place: Place) -> IdRef {
+        let ptr_ty = fb.pointer_type(place.ty, place.storage_class);
+        if place.indices.is_empty() {
+            place.base
+        } else {
+            fb.access_chain(ptr_ty, place.base, &place.indices).into()
+        }
+    }
+
     fn lower_assign_expr(
         &mut self,
         fb: &mut hir::FunctionBuilder,
@@ -190,9 +210,8 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         result_type: hir::Type,
     ) {
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
-        let lhs = self.lower_place(fb, body, lhs);
-        let lhs_ptr_ty = fb.pointer_type(lhs.ty, lhs.storage_class);
-        let lhs_ptr = IdRef::from(fb.access_chain(lhs_ptr_ty, lhs.base, &lhs.indices));
+        let lhs = self.lower_place_expr(fb, body, lhs);
+        let lhs_ptr = self.lower_place(fb, lhs);
         fb.emit_store(lhs_ptr, rhs.id, None)
     }
 
@@ -204,40 +223,41 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         lhs: ExprId,
         rhs: ExprId,
         result_type: hir::Type,
-    ) -> IdRef {
+    ) {
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
-        let lhs = self.lower_place(fb, body, lhs);
-        let lhs_ptr_ty = fb.pointer_type(lhs.ty, lhs.storage_class);
-        let lhs_ptr = IdRef::from(fb.access_chain(lhs_ptr_ty, lhs.base, &lhs.indices));
-        let lhs_val = fb.emit_load(lhs.ty, lhs_ptr, None);
-        let val = IdRef::from((sig.lower)(
-            &mut (),
-            fb,
-            &[IdRef::from(lhs_val), rhs.id],
-            &[lhs.ty, rhs.ty],
-            result_type,
-        ));
-        fb.emit_store(lhs_ptr, val, None);
-        val
+        let lhs = self.lower_place_expr(fb, body, lhs);
+        let lhs_ty = lhs.ty;
+        let lhs_ptr = self.lower_place(fb, lhs);
+        let lhs_val = fb.emit_load(lhs_ty, lhs_ptr, None);
+        let val = (sig.lower)(&mut (), fb, &[IdRef::from(lhs_val), rhs.id], &[lhs_ty, rhs.ty], lhs_ty);
+        fb.emit_store(lhs_ptr, val.into(), None);
     }
 
-    fn lower_place(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, place_expr: ExprId) -> Place {
+    fn lower_place_expr(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, place_expr: ExprId) -> Place {
         let expr = &body.exprs[place_expr];
         let ty = self.convert_type(fb.module, &expr.ty);
         match expr.kind {
             ExprKind::Field { expr, index } => {
-                let mut place = self.lower_place(fb, body, expr);
+                let mut place = self.lower_place_expr(fb, body, expr);
                 let index = fb.const_i32(index as i32);
                 place.indices.push(index.into());
                 place.ty = ty;
                 place
             }
-            ExprKind::LocalVar { var } => Place {
-                base: self.local_map.get(&var).expect("invalid local var").clone().into(),
-                indices: vec![],
-                ty,
-                storage_class: spirv::StorageClass::Function,
-            },
+            ExprKind::LocalVar { var } => {
+                eprintln!("local map: {:?}", self.local_map);
+                Place {
+                    base: self
+                        .local_map
+                        .get(&var)
+                        .expect(&format!("invalid local var: {:?}", body.local_vars[var]))
+                        .clone()
+                        .into(),
+                    indices: vec![],
+                    ty,
+                    storage_class: spirv::StorageClass::Function,
+                }
+            }
             ExprKind::GlobalVar { var } => {
                 let global = self.def_map.get(&var).expect("invalid global var");
                 let HirDef::Variable(id) = global else  { panic!("invalid global var") };
@@ -250,7 +270,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 }
             }
             ExprKind::Index { array, index } => {
-                let mut place = self.lower_place(fb, body, array);
+                let mut place = self.lower_place_expr(fb, body, array);
                 let index = self.lower_expr(fb, body, index).expect("expected non-void expression");
                 place.indices.push(index.id);
                 place.ty = ty;
@@ -270,13 +290,98 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         }
     }
 
-    fn access_chain(&mut self, fb: &mut hir::FunctionBuilder, place: Place) -> hir::IdRef {
-        let ptr_ty = fb.pointer_type(place.ty, place.storage_class);
-        fb.access_chain(ptr_ty, place.base, &place.indices).into()
+    fn lower_call_expr(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        function_id: DefId,
+        args: &[ExprId],
+        result_type: hir::Type,
+    ) -> Option<hir::IdRef> {
+        let func = self.module.def(function_id).as_function().expect("expected function");
+        let mut arg_ids = Vec::with_capacity(args.len());
+        let mut arg_types = Vec::with_capacity(args.len());
+        for &arg in args {
+            let expr = self.lower_expr(fb, body, arg).expect("expected non-void expression");
+            arg_ids.push(expr.id);
+            arg_types.push(expr.ty);
+        }
+
+        if let Some(builtin) = func.builtin {
+            Some((builtin.lower)(&mut (), fb, &arg_ids, &arg_types, result_type).into())
+        } else {
+            // FIXME: the function may not be defined yet: we rely on the fact that, in GLSL, item definitions must appear before their use in the source code,
+            // and thus the definitions are correctly ordered in the resulting TAST, but this might no longer be the case if we decide to use the TAST for other frontends.
+            let Some(HirDef::Function(hir_func)) = self.def_map.get(&function_id) else { panic!("function not lowered yet") };
+            Some(
+                fb.emit_function_call(result_type, IdRef::from(*hir_func), &arg_ids)
+                    .into(),
+            )
+        }
+    }
+
+    fn lower_implicit_conversion_expr(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        expr: ExprId,
+        conversion_kind: ConversionKind,
+        result_type: hir::Type,
+    ) -> hir::IdRef {
+        let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
+
+        let val = match conversion_kind {
+            ConversionKind::IntBitcast => fb.emit_bitcast(result_type, expr.id),
+            ConversionKind::SignedIntToFloat => fb.emit_convert_s_to_f(result_type, expr.id),
+            ConversionKind::UnsignedIntToFloat => fb.emit_convert_u_to_f(result_type, expr.id),
+            ConversionKind::FloatConvert => fb.emit_f_convert(result_type, expr.id),
+            ConversionKind::FloatToSignedInt => fb.emit_convert_f_to_s(result_type, expr.id),
+            ConversionKind::FloatToUnsignedInt => fb.emit_convert_f_to_u(result_type, expr.id),
+        };
+
+        val.into()
+    }
+
+    fn lower_constructor_expr(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        ctor: &Constructor,
+        args: &[ExprId],
+        result_type: hir::Type,
+    ) -> hir::IdRef {
+        // TODO smallvec(16) should be enough
+        let mut arg_ids = Vec::with_capacity(args.len());
+        for &arg in args {
+            let expr = self.lower_expr(fb, body, arg).expect("expected non-void expression");
+            arg_ids.push(expr.id);
+        }
+        (ctor.lower)(fb, &arg_ids, result_type).into()
+    }
+
+    fn lower_literal(&mut self, fb: &mut hir::FunctionBuilder, value: &ConstantValue) -> hir::IdRef {
+        match *value {
+            ConstantValue::Int(v) => fb.const_i32(v).into(),
+            ConstantValue::Float(v) => fb.const_f32(v.0).into(),
+            ConstantValue::Bool(v) => fb.const_bool(v).into(),
+        }
+    }
+
+    fn lower_component_access_expr(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        expr: ExprId,
+        components: &ComponentIndices,
+        result_type: hir::Type,
+    ) -> hir::IdRef {
+        let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
+        fb.emit_composite_extract(result_type, expr.id, components).into()
     }
 
     fn lower_expr(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, expr_id: ExprId) -> Option<TypedIdRef> {
         let expr = &body.exprs[expr_id];
+        //eprintln!("lowering expr {:?}", expr);
         let ty = self.convert_type(fb.module, &expr.ty);
         let id = match expr.kind {
             ExprKind::Binary {
@@ -302,36 +407,37 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             ExprKind::Ternary { .. } => {
                 todo!("ternary expression")
             }
-            ExprKind::Call { .. } => {
-                todo!("call expression")
+            ExprKind::Call { function, ref args } => {
+                if let Some(id) = self.lower_call_expr(fb, body, function, args, ty) {
+                    id
+                } else {
+                    return None;
+                }
             }
-            ExprKind::LocalVar { .. } => {
-                todo!("local var expression")
+            ExprKind::LocalVar { var } => {
+                let local = *self.local_map.get(&var).expect("invalid local var");
+                fb.emit_load(ty, local.into(), None).into()
             }
-            ExprKind::GlobalVar { .. } => {
-                todo!("global var expression")
-            }
-            ExprKind::FunctionRef { .. } => {
-                todo!("function ref expression")
+            ExprKind::GlobalVar { var } => {
+                let Some(HirDef::Variable(global)) = self.def_map.get(&var) else { panic!("invalid global var") };
+                fb.emit_load(ty, (*global).into(), None).into()
             }
             ExprKind::Index { .. } => {
                 todo!("index expression")
             }
             ExprKind::Field { .. } => {
+                // FIXME: we load the whole base expr, but if the expr is a place we could use OpAccessChain instead
+                // problem: we don't know if the expr is a place or not
                 todo!("field expression")
             }
-            ExprKind::ComponentAccess { .. } => {
-                todo!("component access expression")
+            ExprKind::ComponentAccess { expr, ref components } => {
+                self.lower_component_access_expr(fb, body, expr, components, ty)
             }
-            ExprKind::ImplicitConversion { .. } => {
-                todo!("implicit conversion expression")
+            ExprKind::ImplicitConversion { expr, kind } => {
+                self.lower_implicit_conversion_expr(fb, body, expr, kind, ty)
             }
-            ExprKind::Constructor { .. } => {
-                todo!("constructor expression")
-            }
-            ExprKind::Literal { .. } => {
-                todo!("literal expression")
-            }
+            ExprKind::BuiltinConstructor { ctor, ref args } => self.lower_constructor_expr(fb, body, ctor, args, ty),
+            ExprKind::Literal { ref value } => self.lower_literal(fb, value),
             ExprKind::Undef => {
                 panic!("invalid expression encountered during lowering")
             }
@@ -339,23 +445,87 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         Some(TypedIdRef { ty, id })
     }
 
+    fn lower_local_var(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        var_id: LocalVarId,
+        initializer_id: Option<ExprId>,
+    ) {
+        let var = &body.local_vars[var_id];
+        let ty = self.convert_type(fb.module, &var.ty);
+        let ptr = fb.add_local(ty, var.name.clone());
+        self.local_map.insert(var_id, ptr);
+        if let Some(init) = initializer_id {
+            let initializer = self.lower_expr(fb, body, init).expect("expected non-void expression");
+            fb.emit_store(ptr.into(), initializer.id, None);
+        }
+    }
+
+    fn lower_return_stmt(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, ret: Option<ExprId>) {
+        if let Some(ret) = ret {
+            let ret = self.lower_expr(fb, body, ret).expect("expected non-void expression");
+            fb.ret_value(ret.id);
+        } else {
+            fb.ret();
+        }
+    }
+
+    fn lower_select_stmt(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        condition: ExprId,
+        true_branch: StmtId,
+        false_branch: Option<StmtId>,
+    ) {
+        let condition = self
+            .lower_expr(fb, body, condition)
+            .expect("expected non-void expression");
+        let true_block = fb.create_block();
+        let false_block = fb.create_block();
+        let merge_block = fb.create_block();
+
+        fb.emit_selection_merge(merge_block, spirv::SelectionControl::NONE);
+        fb.branch_conditional(condition.id, true_block, false_block);
+        fb.select_block(true_block);
+        self.lower_stmt(fb, body, true_branch);
+        fb.branch(merge_block);
+        fb.select_block(false_block);
+        if let Some(false_branch) = false_branch {
+            self.lower_stmt(fb, body, false_branch);
+        }
+        fb.branch(merge_block);
+        fb.select_block(merge_block);
+    }
+
     fn lower_stmt(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, stmt: StmtId) {
         let stmt = &body.stmts[stmt];
+        //eprintln!("lowering stmt {:?}", stmt);
         match stmt.kind {
-            StmtKind::Select { .. } => {
-                todo!("select statement")
+            StmtKind::Select {
+                condition,
+                false_branch,
+                true_branch,
+            } => {
+                self.lower_select_stmt(fb, body, condition, true_branch, false_branch);
             }
-            StmtKind::Local { .. } => {
-                todo!("local statement")
+            StmtKind::Local { initializer, var } => {
+                //eprintln!("lowering local var {:?}", body.local_vars[var]);
+                self.lower_local_var(fb, body, var, initializer);
             }
-            StmtKind::Return { .. } => {
-                todo!("return statement")
+            StmtKind::Return { value } => {
+                self.lower_return_stmt(fb, body, value);
             }
             StmtKind::ExprStmt { expr } => {
                 self.lower_expr(fb, body, expr);
             }
-            StmtKind::Block { .. } => {}
-            StmtKind::Error => {}
+            StmtKind::Block { block } => {
+                self.lower_block(fb, body, block);
+            }
+            StmtKind::Error => {
+                panic!("invalid statement encountered during lowering")
+            }
         }
     }
 
@@ -396,7 +566,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         let ast = function_def.ast.clone().expect("expected function ast");
 
         // if there's a block, then it's a function definition, otherwise it's just a declaration
-        let func_data = if let Some(block) = ast.block() {
+        let func_data = if let Some(_) = ast.block() {
             // typecheck the function body
             {
                 let typed_body = self.tyctxt.typecheck_body(self.module, def_id.local_def, self.diag);
@@ -418,7 +588,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                         spirv::FunctionControl::NONE,
                     );
                     let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
-                    let entry_block = typed_body.entry_block();
+                    let entry_block = typed_body.entry_block.expect("function has no entry block");
                     self.lower_block(&mut builder, &typed_body, entry_block);
 
                     if !builder.is_block_terminated() {
@@ -439,6 +609,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             )
         };
 
+        self.local_map.clear();
         self.def_map
             .insert(def_id, HirDef::Function(hir.add_function(func_data.clone())));
     }
@@ -449,7 +620,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 self.lower_function(hir, def_id, def, function);
             }
             DefKind::Global(ref global) => {
-                self.lower_global(hir, def, global);
+                self.lower_global(hir, def_id, def, global);
             }
             DefKind::Struct(ref struct_def) => {
                 todo!("struct lowering")

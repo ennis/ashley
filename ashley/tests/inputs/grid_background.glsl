@@ -5,7 +5,7 @@ public uniform float u_zoom;
 in vec2 i_position;
 out vec4 out_color;
 
-void main() {
+public void main() {
     vec2 position = i_position * vec2(1.0, -1.0) * u_resolution * 0.5;
     float vignette = clamp(0.7 * length(i_position), 0.0, 1.0);
     out_color = mix(

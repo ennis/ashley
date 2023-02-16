@@ -7,6 +7,11 @@
 // declaration provided elsewhere, possibly in another module
 public vec4 stroke_main();
 
+// forward declaration, internal linkage
+// currently not allowed
+vec4 stuff2();
+
+
 // public: visible to other modules, implies external linkage
 public vec4 stroke()
 {
@@ -25,10 +30,6 @@ extern vec4 stuff1() {
     // ...
 }
 
-// forward declaration, internal linkage
-// currently not allowed
-vec4 stuff2();
-
 //-------------------------------------
 // module impl;
 
@@ -38,5 +39,5 @@ vec4 stuff2();
 // solution: `import stroke;` makes the `public vec4 stroke_main()` decl visible, the compiler knows that this has external linkage and that we're providing the definition for it
 // another solution: `extern vec4 stroke_main()` tells the compiler that this has external linkage
 extern vec4 stroke_main() {
-    return vec4(1,0,0,1);
+    return vec4(1.0,0.0,0.0,1.0);
 }

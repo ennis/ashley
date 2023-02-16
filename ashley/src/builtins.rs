@@ -781,46 +781,54 @@ pub struct BuiltinOperation {
     pub signatures: &'static [BuiltinSignature],
 }
 
+trait FunctionBuilderExt {
+    fn emit_splat(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::IdRef;
+}
+
+impl FunctionBuilderExt for hir::FunctionBuilder<'_> {
+    // helper function to convert from `T` to `TvecN`
+    fn emit_splat(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::IdRef {
+        match self.vector_length(result_type) {
+            2 => self.emit_composite_construct(result_type, &[scalar, scalar]).into(),
+            3 => self.emit_composite_construct(result_type, &[scalar, scalar, scalar]).into(),
+            4 => self.emit_composite_construct(result_type, &[scalar, scalar, scalar, scalar]).into(),
+            _ => panic!("invalid vector length")
+        }
+    }
+}
+
 macro_rules! builtin_operations {
     (
-        $mod_name:ident, $array_name:ident;
+        $array_name:ident;
         $(
             $op_name:ident {
                 $( $ret_ty:ident ($($arg:ident),*) => $builder_fn:expr; )*
             }
         )*
-        [constructors]
-        $(
-            $ctor_op_name:ident {
-                $( $ctor_ret_ty:ident ($($ctor_arg:ident),*) => $ctor_builder_fn:expr; )*
-            }
-        )*
     ) =>
     {
+        $(
         #[allow(non_upper_case_globals)]
         #[allow(unused_variables)]
-        pub mod $mod_name {
-            use super::{BuiltinOperation, BuiltinSignature, PseudoType};
-            $(pub static $op_name: BuiltinOperation = BuiltinOperation {
-                name: std::stringify!($op_name),
-                signatures: &[
-                    $(
-                        BuiltinSignature {
-                            parameter_types: &[$(PseudoType::$arg),*],
-                            result_type: PseudoType::$ret_ty,
-                            lower: $builder_fn
-                        }
-                    ),*
-                ]
-            };)*
-        }
+        pub(crate) static $op_name: BuiltinOperation = BuiltinOperation {
+            name: std::stringify!($op_name),
+            signatures: &[
+                $(
+                    BuiltinSignature {
+                        parameter_types: &[$(PseudoType::$arg),*],
+                        result_type: PseudoType::$ret_ty,
+                        lower: $builder_fn
+                    }
+                ),*
+            ]
+        };)*
 
-        pub(super) static $array_name: &[&BuiltinOperation] = &[$(&$mod_name::$op_name),*];
+        pub(crate) static $array_name: &[&BuiltinOperation] = &[$(&$op_name),*];
     };
 }
 
 builtin_operations! {
-    operations, OPERATION_SIGNATURES;
+    OPERATION_SIGNATURES;
 
     //////////////////////////////////////////////////////
     // Operators
@@ -908,16 +916,16 @@ builtin_operations! {
         uvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);
     }
     Sub {
-        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_sub(ret, args[0], args[1]);
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_sub(ret, args[0], args[1]);
+        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_sub(ret, args[0], args[1]);
+        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_sub(ret, args[0], args[1]);    // FIXME ?
     }
     Div {
-        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_div(ret, args[0], args[1]);
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_div(ret, args[0], args[1]);
+        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_s_div(ret, args[0], args[1]);
+        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_u_div(ret, args[0], args[1]);
     }
     Rem {  }
     Shl {  }
@@ -1048,10 +1056,16 @@ builtin_operations! {
     }
 
     r#mod {
-        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| todo!();
-        vecN(vecN,float)   => |_ctxt, fb, args, _types, ret| todo!();
-        dvecN(dvecN,double)   => |_ctxt, fb, args, _types, ret| todo!();
+        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| {fb.emit_f_mod(ret, args[0], args[1]) };
+        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| {fb.emit_f_mod(ret, args[0], args[1])};
+        vecN(vecN,float)   => |_ctxt, fb, args, types, ret| {
+            let splat = fb.emit_splat(ret, args[1]);
+            fb.emit_f_mod(ret, args[0], splat)
+        };
+        dvecN(dvecN,double)   => |_ctxt, fb, args, _types, ret| {
+            let splat = fb.emit_splat(ret, args[1]);
+            fb.emit_f_mod(ret, args[0], splat)
+        };
     }
 
     modf {
@@ -1231,76 +1245,170 @@ builtin_operations! {
          ivec3(gimage2DMSArray)    => |_ctxt, fb, args, _types, ret| todo!();
          int(gimageBuffer)         => |_ctxt, fb, args, _types, ret| todo!();
     }
+}
+
+#[derive(Clone)]
+pub struct Constructor {
+    pub ty: TypeKind,
+    pub args: &'static [TypeKind],
+    pub lower: fn(&mut hir::FunctionBuilder, &[hir::IdRef], hir::Type) -> hir::Value,
+}
+
+impl fmt::Debug for Constructor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Constructor {{ ty: {:?}, args: {:?} }}", self.ty, self.args)
+    }
+}
+
+macro_rules! constructors {
+
+    (@type_kind float) => { TK::Scalar(ST::Float) };
+    (@type_kind double) => { TK::Scalar(ST::Double) };
+    (@type_kind int) => { TK::Scalar(ST::Int) };
+    (@type_kind uint) => { TK::Scalar(ST::UnsignedInt) };
+    (@type_kind bool) => { TK::Scalar(ST::Bool) };
+    (@type_kind vec2) => { TK::Vector(ST::Float, 2) };
+    (@type_kind vec3) => { TK::Vector(ST::Float, 3) };
+    (@type_kind vec4) => { TK::Vector(ST::Float, 4) };
+    (@type_kind ivec2) => { TK::Vector(ST::Int, 2) };
+    (@type_kind ivec3) => { TK::Vector(ST::Int, 3) };
+    (@type_kind ivec4) => { TK::Vector(ST::Int, 4) };
+    (@type_kind uvec2) => { TK::Vector(ST::UnsignedInt, 2) };
+    (@type_kind uvec3) => { TK::Vector(ST::UnsignedInt, 3) };
+    (@type_kind uvec4) => { TK::Vector(ST::UnsignedInt, 4) };
+    (@type_kind bvec2) => { TK::Vector(ST::Bool, 2) };
+    (@type_kind bvec3) => { TK::Vector(ST::Bool, 3) };
+    (@type_kind bvec4) => { TK::Vector(ST::Bool, 4) };
+    (@type_kind dvec2) => { TK::Vector(ST::Double, 2) };
+    (@type_kind dvec3) => { TK::Vector(ST::Double, 3) };
+    (@type_kind dvec4) => { TK::Vector(ST::Double, 4) };
+    (@type_kind mat2x2) => { TK::Matrix { component_type: ST::Float, columns: 2, rows: 2 } };
+    (@type_kind mat2x3) => { TK::Matrix { component_type: ST::Float, columns: 2, rows: 3 } };
+    (@type_kind mat2x4) => { TK::Matrix { component_type: ST::Float, columns: 2, rows: 4 } };
+    (@type_kind mat3x2) => { TK::Matrix { component_type: ST::Float, columns: 3, rows: 2 } };
+    (@type_kind mat3x3) => { TK::Matrix { component_type: ST::Float, columns: 3, rows: 3 } };
+    (@type_kind mat3x4) => { TK::Matrix { component_type: ST::Float, columns: 3, rows: 4 } };
+    (@type_kind mat4x2) => { TK::Matrix { component_type: ST::Float, columns: 4, rows: 2 } };
+    (@type_kind mat4x3) => { TK::Matrix { component_type: ST::Float, columns: 4, rows: 3 } };
+    (@type_kind mat4x4) => { TK::Matrix { component_type: ST::Float, columns: 4, rows: 4 } };
+    (@type_kind dmat2x2) => { TK::Matrix { component_type: ST::Double, columns: 2, rows: 2 } };
+    (@type_kind dmat2x3) => { TK::Matrix { component_type: ST::Double, columns: 2, rows: 3 } };
+    (@type_kind dmat2x4) => { TK::Matrix { component_type: ST::Double, columns: 2, rows: 4 } };
+    (@type_kind dmat3x2) => { TK::Matrix { component_type: ST::Double, columns: 3, rows: 2 } };
+    (@type_kind dmat3x3) => { TK::Matrix { component_type: ST::Double, columns: 3, rows: 3 } };
+    (@type_kind dmat3x4) => { TK::Matrix { component_type: ST::Double, columns: 3, rows: 4 } };
+    (@type_kind dmat4x2) => { TK::Matrix { component_type: ST::Double, columns: 4, rows: 2 } };
+    (@type_kind dmat4x3) => { TK::Matrix { component_type: ST::Double, columns: 4, rows: 3 } };
+    (@type_kind dmat4x4) => { TK::Matrix { component_type: ST::Double, columns: 4, rows: 4 } };
+
+
+    (
+        //$mod_name:ident, $array_name:ident;
+        $(
+            $type_name:ident($($arg:ident),*) => $builder_fn:expr;
+        )*
+    ) =>
+    {
+        #[allow(non_upper_case_globals)]
+        #[allow(unused_variables)]
+        pub(super) static CONSTRUCTORS: &[&Constructor] = {
+            use TypeKind as TK;
+            use ScalarType as ST;
+
+            &[$(&Constructor {
+                ty: constructors!(@type_kind $type_name),
+                args: &[
+                    $(
+                        constructors!(@type_kind $arg)
+                    ),*
+                ],
+                lower: $builder_fn,
+            }),*]
+        };
+    };
+}
+
+constructors! {
 
     //////////////////////////////////////////////////////
     // 5.4. Constructors
     //////////////////////////////////////////////////////
 
-    [constructors]
+    int(uint)   => |fb, a, ty| todo!();
+    int(int)   => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    int(bool)   => |fb, a, ty| todo!();
+    int(float)   => |fb, a, ty| todo!();
+    int(double)   => |fb, a, ty| todo!();
 
-    int {
-        int(uint)   => |_ctxt, fb, args, _types, ret| todo!();
-        int(bool)   => |_ctxt, fb, args, _types, ret| todo!();
-        int(float)   => |_ctxt, fb, args, _types, ret| todo!();
-        int(double)   => |_ctxt, fb, args, _types, ret| todo!();
-    }
+    uint(uint)   => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    uint(int)   => |fb, a, ty| fb.emit_bitcast(ty, a[0]);
+    uint(bool)   => |fb, a, ty| todo!();
+    uint(float)   => |fb, a, ty| todo!();
+    uint(double)   => |fb, a, ty| todo!();
 
-    uint {
-        // /* implicit */ uint(int)   => |_ctxt, fb, args, _types, ret| fb.emit_bitcast(ret, args[0]);
-        uint(bool)   => |_ctxt, fb, args, _types, ret| todo!();
-        uint(float)   => |_ctxt, fb, args, _types, ret| todo!();
-        uint(double)   => |_ctxt, fb, args, _types, ret| todo!();
-    }
+    bool(bool)   => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    bool(int)   => |fb, a, ty| todo!();
+    bool(uint)   => |fb, a, ty| todo!();
+    bool(float)   => |fb, a, ty| todo!();
+    bool(double)   => |fb, a, ty| todo!();
 
-    bool {
-        bool(int)   => |_ctxt, fb, args, _types, ret| todo!();
-        bool(uint)   => |_ctxt, fb, args, _types, ret| todo!();
-        bool(float)   => |_ctxt, fb, args, _types, ret| todo!();
-        bool(double)   => |_ctxt, fb, args, _types, ret| todo!();
-    }
+    float(float)   => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    float(int)   => |fb, a, ty| fb.emit_convert_s_to_f(ty, a[0]);
+    float(uint)   => |fb, a, ty| fb.emit_convert_u_to_f(ty, a[0]);
+    float(bool)   => |fb, a, ty| todo!();
+    float(double)   => |fb, a, ty| todo!();
 
-    float {
-        // /* implicit */ float(int)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_s_to_f(ret, args[0]);
-        // /* implicit */ float(uint)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_u_to_f(ret, args[0]);
-        float(bool)   => |_ctxt, fb, args, _types, ret| todo!();
-        float(double)   => |_ctxt, fb, args, _types, ret| todo!();
-    }
+    double(double)   => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    double(int)   => |fb, a, ty| fb.emit_convert_s_to_f(ty, a[0]);
+    double(uint)   => |fb, a, ty| fb.emit_convert_u_to_f(ty, a[0]);
+    double(float)   => |fb, a, ty| fb.emit_f_convert(ty, a[0]);
+    double(bool)   => |fb, a, ty| todo!();
 
-    double {
-        // /* implicit */ double(int)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_s_to_f(ret, args[0]);
-        // /* implicit */ double(uint)   => |_ctxt, fb, args, _types, ret| fb.emit_convert_u_to_f(ret, args[0]);
-        // /* implicit */ double(float)   => |_ctxt, fb, args, _types, ret| fb.emit_f_convert(ret, args[0]);
-        double(bool)   => |_ctxt, fb, args, _types, ret| todo!();
-    }
+    // vecN
 
-    vec2 {
-        vec2(float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, &[args[0], args[0]]);
-        vec2(float,float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec2(vec2)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
-    }
+    vec2(float)                     => |fb, a, ty| fb.emit_composite_construct(ty, &[a[0], a[0]]);
+    vec2(float,float)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec2(vec2)                      => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    vec2(ivec2)                      => |fb, a, ty| fb.emit_convert_s_to_f(ty, a[0]);
+    vec2(uvec2)                      => |fb, a, ty| fb.emit_convert_u_to_f(ty, a[0]);
 
-    vec3 {
-        vec3(float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, &[args[0], args[0], args[0]]);
-        vec3(float,float,float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec3(vec2, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec3(float, vec2)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec3(vec3)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
-        vec3(vec4)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_extract(ret, args[0], &[0,1,2]);
-    }
+    vec3(float)                     => |fb, a, ty| fb.emit_composite_construct(ty, &[a[0], a[0], a[0]]);
+    vec3(float,float,float)         => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec3(vec2,float)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec3(float,vec2)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec3(vec3)                      => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    vec3(ivec3)                      => |fb, a, ty| fb.emit_convert_s_to_f(ty, a[0]);
+    vec3(uvec3)                      => |fb, a, ty| fb.emit_convert_u_to_f(ty, a[0]);
 
-    vec4 {
-        vec4(float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, &[args[0], args[0], args[0], args[0]]);
-        vec4(float,float,float,float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+    vec4(float)                     => |fb, a, ty| fb.emit_composite_construct(ty, &[a[0], a[0], a[0], a[0]]);
+    vec4(float,float,float,float)   => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec4(vec2,float,float)        => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec4(float,vec2,float)        => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec4(float,float,vec2)        => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec4(vec3,float)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec4(float,vec3)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    vec4(vec4)                      => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
+    vec4(ivec4)                      => |fb, a, ty| fb.emit_convert_s_to_f(ty, a[0]);
+    vec4(uvec4)                      => |fb, a, ty| fb.emit_convert_u_to_f(ty, a[0]);
 
-        vec4(vec2, float, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec4(float, vec2, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec4(float, float, vec2)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+    // ivecN
 
-        vec4(vec3, float)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
-        vec4(float, vec3)   => |_ctxt, fb, args, _types, ret| fb.emit_composite_construct(ret, args);
+    ivec2(int)                      => |fb, a, ty| fb.emit_composite_construct(ty, &[a[0], a[0]]);
+    ivec2(int,int)                  => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec2(ivec2)                    => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
 
-        vec4(vec4)   => |_ctxt, fb, args, _types, ret| fb.emit_copy_object(ret, args[0]);
-    }
+    ivec3(int)                      => |fb, a, ty| fb.emit_composite_construct(ty, &[a[0], a[0], a[0]]);
+    ivec3(int,int,int)              => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec3(ivec2,int)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec3(int,ivec2)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec3(ivec3)                    => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
 
-
+    ivec4(int)                      => |fb, a, ty| fb.emit_composite_construct(ty, &[a[0], a[0], a[0], a[0]]);
+    ivec4(int,int,int,int)          => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec4(ivec2,int,int)          => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec4(int,ivec2,int)          => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec4(int,int,ivec2)          => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec4(ivec3,int)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec4(int,ivec3)               => |fb, a, ty| fb.emit_composite_construct(ty, a);
+    ivec4(ivec4)                    => |fb, a, ty| fb.emit_copy_object(ty, a[0]);
 }

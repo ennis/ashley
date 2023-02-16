@@ -219,7 +219,7 @@ impl_ast_node!(ImportAlias <IMPORT_ALIAS> [token alias: Ident]);
 impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident]);
 impl_ast_node!(TupleType   <TUPLE_TYPE>   [nodes fields: Type]);
 impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node element_type: Type, node length: Expr]);
-impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node ret_type: RetType]);
+impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node return_type: Type]);
 impl_ast_node!(StructDef   <STRUCT_DEF>   [node visibility: Visibility, token ident: Ident, nodes fields: StructField]);
 impl_ast_node!(StructField <STRUCT_FIELD> [token ident: Ident, node ty: Type]);
 impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
@@ -230,7 +230,7 @@ impl_ast_node!(ClosureParamList   <CLOSURE_PARAM_LIST>   [nodes parameters: Type
 impl_ast_node!(FnDef<FN_DEF>
                [node visibility: Visibility,
                 node extern_: Linkage,
-                node ret_type: RetType,
+                node return_type: Type,
                 node param_list: ParamList,
                 node block: Block,
                 token name: Ident]);
@@ -245,7 +245,6 @@ impl_ast_node!(FnDef<FN_DEF>
 impl_ast_node!(Condition     <CONDITION>   [node expr: Expr]);
 impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: ExprStmt]);
 impl_ast_node!(ArgList       <ARG_LIST>    [nodes arguments: Expr]);
-impl_ast_node!(RetType       <RET_TYPE>    [node ty: Type]);
 impl_ast_node!(ExprStmt      <EXPR_STMT>   [node expr: Expr]);
 impl_ast_node!(ReturnStmt    <RETURN_STMT> [node expr: Expr]);
 impl_ast_node!(BlockStmt     <BLOCK_STMT>  [node block: Block]);

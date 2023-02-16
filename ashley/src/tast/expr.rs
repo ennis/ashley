@@ -1,6 +1,6 @@
 use crate::{
     builtins,
-    builtins::{BuiltinOperation, BuiltinSignature},
+    builtins::{BuiltinOperation, BuiltinSignature, Constructor},
     diagnostic::{AsSourceLocation, SourceLocation},
     syntax::ast,
     tast::{
@@ -15,6 +15,7 @@ use crate::{
     utils::DisplayCommaSeparated,
 };
 use ordered_float::OrderedFloat;
+use smallvec::SmallVec;
 use std::ops::Deref;
 
 /*pub enum FunctionRef {
@@ -42,12 +43,35 @@ pub struct Expr {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImplicitConversionKind {
+pub enum ConversionKind {
     IntBitcast,
     SignedIntToFloat,
     UnsignedIntToFloat,
     /// Float to double
     FloatConvert,
+    FloatToSignedInt,
+    FloatToUnsignedInt,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstructorKind {
+    /// Identity constructor (scalar or vector)
+    /// Conversion constructors are handled by "ImplicitConversion" subexpressions.
+    Identity,
+    /// Vector component constructor
+    Vector,
+    /// Vector splat.
+    VectorSplat,
+    /// Matrix diagonal.
+    MatrixDiagonal,
+    /// matCxR(C0, C1, C2, ...)
+    MatrixFromColumns,
+    /// matCxR(m00, .., m0R-1, m10, ...)
+    MatrixFromComponents,
+    /// Array constructor
+    Array,
+    /// Struct constructor
+    Struct,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +116,7 @@ pub enum ExprKind {
     GlobalVar {
         var: DefId,
     },
-    FunctionRef {},
+    //FunctionRef {},
     Index {
         array: ExprId,
         index: ExprId,
@@ -108,9 +132,10 @@ pub enum ExprKind {
     },
     ImplicitConversion {
         expr: ExprId,
-        kind: ImplicitConversionKind,
+        kind: ConversionKind,
     },
-    Constructor {
+    BuiltinConstructor {
+        ctor: &'static Constructor,
         args: Vec<ExprId>,
     },
     Literal {
@@ -191,93 +216,41 @@ impl TypeCheckBodyCtxt<'_, '_> {
         (args, num_components)
     }
 
+
     pub(crate) fn typecheck_constructor_expr(&mut self, expr: &ast::ConstructorExpr) -> TypedExpr {
         let Some(ty) = expr.ty().map(|ty| self.convert_type(ty)) else { return self.error_expr(); };
-        let Some(args) = expr.args() else { return self.error_expr(); };
+        let Some(ast_args) = expr.args() else { return self.error_expr(); };
 
-        match ty.deref() {
-            TypeKind::Unit => {
-                todo!()
-            }
-            TypeKind::Scalar(scalar_type) => {
-                let (args, num_components) = self.typecheck_constructor_components(&args, *scalar_type);
-                if args.len() != 1 {
-                    self.diag
-                        .error("invalid number of arguments for scalar constructor")
-                        .emit();
-                    return self.error_expr();
-                }
-                if num_components < 1 {
-                    self.diag.error("not enough data provided in constructor").emit();
-                    return self.error_expr();
-                }
+        let mut arg_loc = vec![];
+        let mut args = vec![];
+        for arg in ast_args.arguments() {
+            arg_loc.push(arg.source_location());
+            args.push(self.typecheck_expr(&arg));
+        }
 
-                let expr = self.add_expr(args.into_iter().next().unwrap());
-                TypedExpr {
-                    expr: ExprKind::Constructor { args: vec![expr] },
-                    ty: ty.clone(),
-                }
-            }
-            TypeKind::Vector(scalar_type, vec_len) => {
-                let (args, num_components) = self.typecheck_constructor_components(&args, *scalar_type);
-                if num_components == 1 && args.len() == 1 && args[0].ty.is_scalar() {
-                    // scalar broadcast
-                    let expr = self.add_expr(args.into_iter().next().unwrap());
-                    TypedExpr {
-                        expr: ExprKind::Constructor { args: vec![expr] },
-                        ty,
-                    }
-                } else {
-                    if args.len() > (*vec_len as usize) {
-                        self.diag.error("too many arguments for vector constructor").emit();
-                        return self.error_expr();
-                    }
-                    if num_components < (*vec_len as usize) {
-                        self.diag
-                            .error("not enough data provided for vector construction")
-                            .emit();
-                        return self.error_expr();
-                    }
-                    TypedExpr {
-                        expr: ExprKind::Constructor {
-                            args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
-                        },
-                        ty,
+        let arg_tys = args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>();
+
+        use TypeKind as TK;
+
+        match *ty.deref() {
+            TK::Scalar(_) | TK::Vector(_, _) | TK::Matrix { .. } => {
+                for &ctor in builtins::CONSTRUCTORS {
+                    if ctor.ty == *ty && ctor.args.iter().zip(arg_tys.iter()).all(|(a, b)| *a == **b) {
+                        return TypedExpr::new(
+                            ExprKind::BuiltinConstructor {
+                                ctor,
+                                args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
+                            },
+                            ty,
+                        );
                     }
                 }
-            }
-            TypeKind::Matrix {
-                component_type,
-                columns,
-                rows,
-            } => {
-                let len = (*columns * *rows) as usize;
-                let (args, num_components) = self.typecheck_constructor_components(&args, *component_type);
-                if num_components == 1 && args.len() == 1 && args[0].ty.is_scalar() {
-                    // diagonal matrix constructor
-                    let expr = self.add_expr(args.into_iter().next().unwrap());
-                    TypedExpr {
-                        expr: ExprKind::Constructor { args: vec![expr] },
-                        ty,
-                    }
-                } else {
-                    if args.len() > len {
-                        self.diag.error("too many arguments for matrix constructor").emit();
-                        return self.error_expr();
-                    }
-                    if num_components < len {
-                        self.diag
-                            .error("not enough data provided for matrix construction")
-                            .emit();
-                        return self.error_expr();
-                    }
-                    TypedExpr {
-                        expr: ExprKind::Constructor {
-                            args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
-                        },
-                        ty,
-                    }
-                }
+                self.diag
+                    .error(format!("no matching constructor for `{ty}`"))
+                    .location(expr)
+                    .note(format!("argument types are: ({})", DisplayCommaSeparated(&arg_tys)))
+                    .emit();
+                self.error_expr()
             }
             TypeKind::Array(_, _) => {
                 todo!("array constructors")
@@ -365,7 +338,10 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 match self.resolve_name(ident.text()) {
                     Some(Res::OverloadSet(overloads)) => overloads.clone(),
                     _ => {
-                        self.diag.error(format!("unresolved function: {func_name}")).location(&ast_callee).emit();
+                        self.diag
+                            .error(format!("unresolved function: {func_name}"))
+                            .location(&ast_callee)
+                            .emit();
                         return self.error_expr();
                     }
                 }
@@ -421,7 +397,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             Err(OverloadResolutionError::Ambiguous(candidates)) => {
                 // TODO better error message
-                let mut diag = self.diag
+                let mut diag = self
+                    .diag
                     .error(format!("ambiguous call to overloaded function `{func_name}`"))
                     .location(&call_expr);
                 for candidate in candidates.iter() {
@@ -440,8 +417,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let value = self.typecheck_expr(&expr);
         // TODO replace with resolve_overload (typecheck operators as if they were a special kind of function)
         let operation = match op.1 {
-            ast::UnaryOp::Neg => &builtins::operations::UnaryMinus,
-            ast::UnaryOp::Not => &builtins::operations::Not,
+            ast::UnaryOp::Neg => &builtins::UnaryMinus,
+            ast::UnaryOp::Not => &builtins::Not,
         };
         match self.typecheck_builtin_operation(operation, &[value.ty.clone()]) {
             Ok(overload) => {
@@ -611,8 +588,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
     }
 
     fn apply_implicit_conversion(&mut self, value: TypedExpr, loc: Option<SourceLocation>, ty: Type) -> TypedExpr {
+        use ConversionKind as ICK;
         use ExprKind as EK;
-        use ImplicitConversionKind as ICK;
         use ScalarType as ST;
         use TypeKind as TK;
 
@@ -740,16 +717,16 @@ impl TypeCheckBodyCtxt<'_, '_> {
         };
 
         let conv_arith_op = |arith_op| match arith_op {
-            ast::ArithOp::Add => &builtins::operations::Add,
-            ast::ArithOp::Mul => &builtins::operations::Mul,
-            ast::ArithOp::Sub => &builtins::operations::Sub,
-            ast::ArithOp::Div => &builtins::operations::Div,
-            ast::ArithOp::Rem => &builtins::operations::Rem,
-            ast::ArithOp::Shl => &builtins::operations::Shl,
-            ast::ArithOp::Shr => &builtins::operations::Shr,
-            ast::ArithOp::BitXor => &builtins::operations::BitXor,
-            ast::ArithOp::BitOr => &builtins::operations::BitOr,
-            ast::ArithOp::BitAnd => &builtins::operations::BitAnd,
+            ast::ArithOp::Add => &builtins::Add,
+            ast::ArithOp::Mul => &builtins::Mul,
+            ast::ArithOp::Sub => &builtins::Sub,
+            ast::ArithOp::Div => &builtins::Div,
+            ast::ArithOp::Rem => &builtins::Rem,
+            ast::ArithOp::Shl => &builtins::Shl,
+            ast::ArithOp::Shr => &builtins::Shr,
+            ast::ArithOp::BitXor => &builtins::BitXor,
+            ast::ArithOp::BitOr => &builtins::BitOr,
+            ast::ArithOp::BitAnd => &builtins::BitAnd,
         };
 
         // TODO typecheck operators as if they were a special kind of function
@@ -761,8 +738,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
             ast::BinaryOp::LogicOp(logic_op) => {
                 is_assignment = false;
                 operation = match logic_op {
-                    ast::LogicOp::And => Some(&builtins::operations::And),
-                    ast::LogicOp::Or => Some(&builtins::operations::Or),
+                    ast::LogicOp::And => Some(&builtins::And),
+                    ast::LogicOp::Or => Some(&builtins::Or),
                 };
             }
             ast::BinaryOp::ArithOp(arith_op) => {
@@ -772,12 +749,12 @@ impl TypeCheckBodyCtxt<'_, '_> {
             ast::BinaryOp::CmpOp(cmp_op) => {
                 is_assignment = false;
                 operation = match cmp_op {
-                    ast::CmpOp::Eq => Some(&builtins::operations::Eq),
-                    ast::CmpOp::Ne => Some(&builtins::operations::Ne),
-                    ast::CmpOp::Gt => Some(&builtins::operations::Gt),
-                    ast::CmpOp::Ge => Some(&builtins::operations::Ge),
-                    ast::CmpOp::Lt => Some(&builtins::operations::Lt),
-                    ast::CmpOp::Le => Some(&builtins::operations::Le),
+                    ast::CmpOp::Eq => Some(&builtins::Eq),
+                    ast::CmpOp::Ne => Some(&builtins::Ne),
+                    ast::CmpOp::Gt => Some(&builtins::Gt),
+                    ast::CmpOp::Ge => Some(&builtins::Ge),
+                    ast::CmpOp::Lt => Some(&builtins::Lt),
+                    ast::CmpOp::Le => Some(&builtins::Le),
                 };
             }
             ast::BinaryOp::Assignment(assign_op) => {

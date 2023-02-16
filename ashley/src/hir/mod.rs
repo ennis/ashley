@@ -674,6 +674,14 @@ impl Module {
         })
     }
 
+    pub fn vector_length(&self, ty: Type) -> usize {
+        match self.types[ty] {
+            TypeData::Scalar(_) => 1,
+            TypeData::Vector(_, length) => length as usize,
+            _ => panic!("not a vector type"),
+        }
+    }
+
     /// Adds a function to the module.
     pub fn add_function(&mut self, function: FunctionData) -> Function {
         self.functions.alloc(function)

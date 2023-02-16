@@ -396,7 +396,7 @@ impl<'a> FunctionBuilder<'a> {
         self.terminate_block(TerminatingInstruction::Return);
     }
 
-    pub fn ret_value(&mut self, value: impl Into<IdRef>) {
+    pub fn ret_value(&mut self, value: IdRef) {
         self.terminate_block(TerminatingInstruction::ReturnValue(value.into()))
     }
 }

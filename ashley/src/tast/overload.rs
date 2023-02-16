@@ -57,7 +57,7 @@ pub(crate) fn check_signature(
 ) -> Result<ImplicitConversionRanks, OverloadResolutionError> {
     use TypeKind as TK;
 
-    eprintln!("chksig: {:?} against arguments {:?}", signature, arguments);
+    //eprintln!("chksig: {:?} against arguments {:?}", signature, arguments);
 
     if arguments.len() != signature.len() {
         // return early on arg count mismatch
@@ -120,7 +120,7 @@ pub(crate) fn check_signature(
         return Err(OverloadResolutionError::NoMatch);
     }
 
-    eprintln!("chksig OK: {:?} against arguments {:?}", signature, arguments);
+    //eprintln!("chksig OK: {:?} against arguments {:?}", signature, arguments);
     Ok(conversion_ranks)
 }
 

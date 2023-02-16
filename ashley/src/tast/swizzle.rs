@@ -6,7 +6,7 @@ pub(crate) enum ComponentSyntaxError {
     TooManyComponents,
 }
 
-pub(crate) type ComponentIndices = SmallVec<[u32;4]>;
+pub(crate) type ComponentIndices = SmallVec<[i32;4]>;
 
 /// Converts a component selection syntax into corresponding component indices.
 ///
@@ -27,7 +27,7 @@ pub(crate) type ComponentIndices = SmallVec<[u32;4]>;
 /// * "yyxx" => `vec![1,1,2,2]`
 pub(crate) fn get_component_indices(selection: &str, num_components: usize) -> Result<ComponentIndices, ComponentSyntaxError> {
     let check_component_name_set =
-        |names: &str| -> Option<ComponentIndices> { selection.chars().map(|c| names.find(c).map(|i| i as u32)).collect() };
+        |names: &str| -> Option<ComponentIndices> { selection.chars().map(|c| names.find(c).map(|i| i as i32)).collect() };
 
     let v = check_component_name_set("rgba")
         .or_else(|| check_component_name_set("xyzw"))

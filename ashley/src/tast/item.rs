@@ -96,7 +96,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             .unwrap_or(Visibility::Private);
         let extern_ = fn_def.extern_().map(|linkage| linkage.is_extern()).unwrap_or(false);
         let param_list = fn_def.param_list();
-        let ret_type = fn_def.ret_type();
+        let return_type = fn_def.return_type();
         let block = fn_def.block();
 
         // build parameter list
@@ -118,11 +118,8 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         }
 
         // return type
-        let return_type = if let Some(ret_type) = ret_type {
-            ret_type
-                .ty()
-                .map(|ty| self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag))
-                .unwrap_or_else(|| self.tyctxt.error.clone())
+        let return_type = if let Some(return_type) = return_type {
+            self.tyctxt.convert_type(return_type, self.module, &self.scopes, self.diag)
         } else {
             self.tyctxt.prim_tys.void.clone()
         };

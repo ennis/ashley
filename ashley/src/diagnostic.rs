@@ -14,7 +14,7 @@ use std::{
 /// Uniquely identifies a file registered to a `SourceFileProvider`
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[repr(transparent)]
-pub struct SourceId(usize);
+pub struct SourceId(pub(crate) usize);
 
 /// A source file with a line map.
 #[derive(Debug)]
@@ -178,7 +178,7 @@ where
 }*/
 
 struct DiagnosticsInner<'a> {
-    writer: &'a mut dyn WriteColor,
+    writer: Box<dyn WriteColor + 'a>,
     //current_source:
     bug_count: usize,
     error_count: usize,
@@ -195,16 +195,15 @@ pub struct Diagnostics<'a> {
 impl<'a> Diagnostics<'a> {
     pub fn new(
         files: SourceFileProvider,
-        default_source: SourceId,
-        writer: &'a mut dyn WriteColor,
+        writer: impl WriteColor + 'a,
         config: term::Config,
-    ) -> Diagnostics {
+    ) -> Diagnostics<'a> {
         Diagnostics {
             files,
             config,
-            default_source,
+            default_source: SourceId(0),
             inner: DiagnosticsInner {
-                writer,
+                writer: Box::new(writer),
                 bug_count: 0,
                 error_count: 0,
                 warning_count: 0,
@@ -212,6 +211,7 @@ impl<'a> Diagnostics<'a> {
         }
     }
 
+    /// Sets the source file for all subsequent diagnostics.
     pub(crate) fn set_current_source(&mut self, source: SourceId) {
         self.default_source = source;
     }

@@ -1,0 +1,127 @@
+= Packages and modules
+
+Each GLSL source file defines a module, but modules are not limited to source files: they can also be created in-memory, or on-the-fly, by a host application.
+
+
+Module imports can have parameters, that can influence the set of declarations published by the imported module, and the name. Think of them as similar to specialization constants. A module and its parameters form a _module instantiation_. If the module doesn't have any parameters, the module is equivalent to its unique instantiation.
+
+== Packages
+
+From the point of view of the compiler, a _package_ is an application-defined entity that exposes a set of definitions to an importing module.
+
+A module can import the defintions of the package with the `import` statement. For example, the following code imports the definitions contained in the package `foo`:
+
+[source]
+----
+import foo;
+----
+
+In this statement, `foo` is the _package name_. Package names in import statements can have parameters, which are passed to the resolved and can influence the set of definitions exposed by the package. For example, the following code imports the definitions contained in the generic package `foo` with the parameter `0`, and then the definitions contained in `foo` with the parameter `1`:
+
+[source]
+----
+import foo(0);
+import foo(1);
+----
+
+In the snippet above, `foo(0)` and `foo(1)` are package names (specifically, _parameterized package names_).
+
+
+== Resolvers
+
+Package names are completely opaque to the compiler. It is the host application that is in charge of resolving a package name to a set of definitions. To do so, the compiler communicates with the host application through the `PackageResolver` trait:
+
+[source]
+----
+pub trait PackageResolver {
+    fn resolve(&self, base_name: &str, arguments: &[PackageArg]) -> Option<Package>;
+}
+----
+
+The host application provides an instance of `PackageResolver` to the compiler. The compiler calls the `resolve` method to resolve a package name to a set of definitions. The `base_name` parameter is the name of the package, without any parameters. The `arguments` parameter contains the arguments passed to the package name. The `resolve` method returns an instance of `Package` if the package name was resolved, or `None` otherwise.
+
+
+[qanda]
+Packages contain definitions, which contain types, which are interned. How does the PackageResolver gets a reference to the `TypeCtxt` for type interning?::
+Maybe an extra parameter to the `resolve` method?
+
+If `resolve` has an extra `&mut TypeCtxt` parameter, does this mean that the package resolver can be invoked with different `TypeCtxt` instances? This would make caching impossible (different versions of interned types).::
+In this case, a reference to the types interner would have to be passed to the package resolver on construction, or be made global, or somehow the package resolver should be tied to (owned by) the compiler instance. Or, we could pass a reference to the compilation cache to `resolve`, which would allow it to access the type interner. The latter is probably the best option.
+
+====
+.Alternatives for the `resolve` method signature
+
+[source]
+----
+fn resolve(&self, package_name: &PackageName) -> Option<Package>;   // 1
+fn resolve(&self, cache: &mut CompilationCache, name: &str) -> Option<Package>;  // 2
+----
+Problem with signature <1>: the package resolver needs to know the type interner to intern types
+
+Problem with signature <2>: first, let's see how the package resolver is used:
+
+* first, we check the compilation cache to see if there's already an entry for the package
+* otherwise, we call the package resolver, _which may recursively launch a compilation_ (and call the package resolver again).
+** the result of the compilation is stored in the compilation cache
+* the returned `Package` is stored in the compilation cache, but there's already an entry created by the compilation done inside the resolver!
+
+=> in this case, don't store the `Package` in the compilation cache, just query the resolver every time the package is imported, and let the resolver handle caching.
+
+Overall, there are two approaches: either the package resolver is in charge of caching, or the compiler is in charge of caching.
+
+Rules:
+
+1. The compilation session can't own the package resolvers because then they wouldn't be able to launch recursive compilations.
+
+FIXME: to start a recursive compilation, we need the package resolvers! So the package resolvers need to be owned by the compilation session.
+
+====
+
+
+
+== Internals: compilation cache
+
+The compilation cache holds:
+* the results (potentially partial results) of the compilation of each module: parsed AST, type-checked item definitions, type-checked bodies, HIR module.
+* cache entries for each package that contains its published definitions.
+
+The cache is indexed by package names.
+
+Issues:
+- the parser needs the names from the imported packages so that it can parse type names properly
+- resolving a package sometimes means compiling the source file (or parse it, at least)
+- should be able to do that in parallel, should it be necessary
+- _compilation cache_: holds compilation results (possibly partial results) for each imported package
+- an imported package may in turn need to import other packages, forming a dependency DAG
+- e.g. A imports B and C, C imports D, B imports D as well -> don't import D twice
+
+
+Q: How to reference a package?
+A: in the source: identifier (`import identifier`). Mapped to filesystem paths by the resolver.
+In code:
+* string?
+* PackageId? -> there is already a package ID assigned to DefIds, but they identify _imports_ in a single module, not a specific package globally
+
+== Internals
+
+`CompilationCache`: holds compilation results
+Create a compilation cache at the beginning of the session.
+
+
+Case study: resolving packages from the file system:
+- parser calls
+
+== Step-by-step
+1. A `CompilationCache` is created
+2. Compilation of a source file is requested. An entry representing this source file is added to the compilation cache.
+3. The source file is parsed. During parsing, if there are any imports: the package resolver is asked for the definitions provided by the package.
+* If the import is resolved by the `FileSystemPackageResolver`:
+* it parses and checks the definitions the source file as done in step (2), (3) and (4), creating an entry in the CompilationCache
+* if the package was already parsed, return the definitions from the `CompilationCache`
+* if the package is being parsed, issue a circular import error
+* Otherwise:
+4. The `tast::Module` for the source file is created and inserted in the `CompilationCache`
+* XXX The PackageResolver is queried again here to insert the definitions in the module
+6. For each module in the Compilation
+
+

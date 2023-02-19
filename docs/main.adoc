@@ -8,5 +8,6 @@ include::introduction.adoc[]
 include::hir.adoc[]
 include::hlgpu.adoc[]
 include::use_cases.adoc[]
+include::packages.adoc[]
 
 :leveloffset: 0

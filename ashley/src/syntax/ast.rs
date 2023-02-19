@@ -55,11 +55,8 @@ pub enum ArithOp {
     BitAnd,
 }
 
-
 //--------------------------------------------------------------------------------------------------
 // AST nodes
-
-
 
 pub trait AstNode {
     fn cast(syntax: SyntaxNode) -> Option<Self>
@@ -200,6 +197,7 @@ macro_rules! impl_ast_variant_node {
     };
 }
 
+#[derive(Debug, Clone)]
 pub struct Root {
     pub source_id: SourceId,
     pub module: Module,
@@ -563,8 +561,7 @@ impl Visibility {
 #[cfg(test)]
 mod tests {
     use crate::{
-        diagnostic::{Diagnostics, SourceFileProvider},
-        syntax,
+        session::{PackageName, Session},
         syntax::ast::{Item, Module},
     };
     use codespan_reporting::{
@@ -573,11 +570,9 @@ mod tests {
     };
 
     fn parse_module(text: &str) -> Module {
-        let mut sources = SourceFileProvider::new();
-        let src_id = sources.register_source("<input>", text);
-        let mut writer = StandardStream::stderr(ColorChoice::Always);
-        let mut diagnostics = Diagnostics::new(sources, src_id, &mut writer, term::Config::default());
-        syntax::parse(text, src_id, &mut diagnostics).module
+        let mut session = Session::new();
+        let (package, _) = session.get_or_create_package(PackageName::new("<input>"));
+        session.parse(package, "<input>", text).module
     }
 
     #[test]

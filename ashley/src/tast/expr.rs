@@ -172,7 +172,7 @@ struct Access {
 
 impl TypeCheckBodyCtxt<'_, '_> {
     /*pub(crate) fn error_expr(&mut self) -> TypedExpr {
-        let err_ty = self.tyctxt.ty(TypeKind::Error);
+        let err_ty = self.sess.tyctxt.ty(TypeKind::Error);
         let id = self.typed_body.exprs.push(Expr {
             ast: None,
             ty: err_ty.clone(),
@@ -182,7 +182,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
     }*/
 
     fn error_expr(&mut self) -> TypedExpr {
-        TypedExpr::new(ExprKind::Undef, self.tyctxt.ty(TypeKind::Error))
+        TypedExpr::new(ExprKind::Undef, self.sess.tyctxt.ty(TypeKind::Error))
     }
 
     pub(crate) fn add_expr(&mut self, expr: TypedExpr) -> ExprId {
@@ -204,18 +204,17 @@ impl TypeCheckBodyCtxt<'_, '_> {
         for arg_expr in arglist.arguments() {
             let arg = self.typecheck_expr(&arg_expr);
             if !arg.ty.is_scalar_or_vector() {
-                self.diag.error("invalid component type in constructor").emit();
+                self.sess.diag.error("invalid component type in constructor").emit();
                 has_invalid_components = true;
             } else {
                 num_components += arg.ty.num_components().unwrap() as usize;
-                let conv_ty = self.tyctxt.ty(arg.ty.with_scalar_type(target_scalar_type));
+                let conv_ty = self.sess.tyctxt.ty(arg.ty.with_scalar_type(target_scalar_type));
                 let converted = self.apply_implicit_conversion(arg, Some(arg_expr.source_location()), conv_ty);
                 args.push(converted);
             }
         }
         (args, num_components)
     }
-
 
     pub(crate) fn typecheck_constructor_expr(&mut self, expr: &ast::ConstructorExpr) -> TypedExpr {
         let Some(ty) = expr.ty().map(|ty| self.convert_type(ty)) else { return self.error_expr(); };
@@ -245,7 +244,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         );
                     }
                 }
-                self.diag
+                self.sess
+                    .diag
                     .error(format!("no matching constructor for `{ty}`"))
                     .location(expr)
                     .note(format!("argument types are: ({})", DisplayCommaSeparated(&arg_tys)))
@@ -256,7 +256,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 todo!("array constructors")
             }
             _ => {
-                self.diag.error("invalid type constructor").location(expr).emit();
+                self.sess.diag.error("invalid type constructor").location(expr).emit();
                 self.error_expr()
             }
         }
@@ -295,7 +295,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let ty = match array.ty.deref() {
             TypeKind::Array(elem_ty, _) | TypeKind::RuntimeArray(elem_ty) => elem_ty.clone(),
             _ => {
-                self.diag
+                self.sess
+                    .diag
                     .error("indexing into non-array type")
                     .location(&array_expr)
                     .emit();
@@ -306,7 +307,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
         match index.ty.deref() {
             TypeKind::Scalar(ScalarType::Int) => {}
             _ => {
-                self.diag
+                self.sess
+                    .diag
                     .error("index must be of type int")
                     .location(&index_expr)
                     .emit();
@@ -338,7 +340,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 match self.resolve_name(ident.text()) {
                     Some(Res::OverloadSet(overloads)) => overloads.clone(),
                     _ => {
-                        self.diag
+                        self.sess
+                            .diag
                             .error(format!("unresolved function: {func_name}"))
                             .location(&ast_callee)
                             .emit();
@@ -347,7 +350,11 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 }
             }
             _ => {
-                self.diag.error("expected function name").location(&ast_callee).emit();
+                self.sess
+                    .diag
+                    .error("expected function name")
+                    .location(&ast_callee)
+                    .emit();
                 return self.error_expr();
             }
         };
@@ -381,6 +388,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             Err(OverloadResolutionError::NoMatch) => {
                 let mut diag = self
+                    .sess
                     .diag
                     .error(format!("no matching function overload for call to `{func_name}`"))
                     .location(&call_expr)
@@ -398,6 +406,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             Err(OverloadResolutionError::Ambiguous(candidates)) => {
                 // TODO better error message
                 let mut diag = self
+                    .sess
                     .diag
                     .error(format!("ambiguous call to overloaded function `{func_name}`"))
                     .location(&call_expr);
@@ -434,7 +443,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             Err(_) => {
                 // TODO display operand types
-                self.diag
+                self.sess
+                    .diag
                     .error(format!("no overload for unary operation `{}`", op.0))
                     .location(&prefix_expr)
                     .emit();
@@ -455,7 +465,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
             Some(res) => {
                 match res {
                     Res::OverloadSet(func) => {
-                        self.diag
+                        self.sess
+                            .diag
                             .error("cannot use a function as a place")
                             .location(path_expr)
                             .emit();
@@ -467,7 +478,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             DefKind::Global(global) => global.ty.clone(),
                             DefKind::Struct(_) => {
                                 // TODO better error message
-                                self.diag
+                                self.sess
+                                    .diag
                                     .error("name did not resolve to a value")
                                     .location(path_expr)
                                     .emit();
@@ -488,7 +500,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     }
                     Res::PrimTy { .. } => {
                         // TODO better error message
-                        self.diag
+                        self.sess
+                            .diag
                             .error("name did not resolve to a value")
                             .location(path_expr)
                             .emit();
@@ -498,7 +511,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             None => {
                 // TODO better error message
-                self.diag.error("unresolved name").location(path_expr).emit();
+                self.sess.diag.error("unresolved name").location(path_expr).emit();
                 self.error_expr()
             }
         }
@@ -526,12 +539,14 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     }
                 } else {
                     if !name.is_empty() {
-                        self.diag
+                        self.sess
+                            .diag
                             .error(format!("struct `{name}` has no field named `{}`", field_name.text()))
                             .location(&field_name)
                             .emit();
                     } else {
-                        self.diag
+                        self.sess
+                            .diag
                             .error(format!(
                                 "anonymous struct type has no field named `{}`",
                                 field_name.text()
@@ -545,7 +560,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             TypeKind::Vector(scalar_type, size) => {
                 match get_component_indices(field_name.text(), *size as usize) {
                     Ok(components) => {
-                        let ty = self.tyctxt.ty(if components.len() == 1 {
+                        let ty = self.sess.tyctxt.ty(if components.len() == 1 {
                             TypeKind::Scalar(*scalar_type)
                         } else {
                             TypeKind::Vector(*scalar_type, components.len() as u8)
@@ -560,7 +575,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         }
                     }
                     Err(_) => {
-                        self.diag
+                        self.sess
+                            .diag
                             .error(format!("invalid component selection: `{}`", field_name.text()))
                             .location(&field_name)
                             .emit();
@@ -570,7 +586,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             _ => {
                 // TODO better error message
-                self.diag
+                self.sess
+                    .diag
                     .error("invalid field or component selection")
                     .location(field_expr)
                     .emit();
@@ -631,7 +648,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 _ => {
                     // TODO better error message
                     if let Some(loc) = loc {
-                        self.diag.error("mismatched types").location(loc).emit();
+                        self.sess.diag.error("mismatched types").location(loc).emit();
                     }
                     self.error_expr()
                 }
@@ -668,7 +685,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 _ => {
                     // TODO better error message
                     if let Some(loc) = loc {
-                        self.diag.error("mismatched types").location(loc).emit();
+                        self.sess.diag.error("mismatched types").location(loc).emit();
                     }
                     self.error_expr()
                 }
@@ -695,7 +712,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 _ => {
                     // TODO better error message
                     if let Some(loc) = loc {
-                        self.diag.error("mismatched types").location(loc).emit();
+                        self.sess.diag.error("mismatched types").location(loc).emit();
                     }
                     self.error_expr()
                 }
@@ -703,7 +720,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             _ => {
                 // TODO better error message
                 if let Some(loc) = loc {
-                    self.diag.error("mismatched types").location(loc).emit();
+                    self.sess.diag.error("mismatched types").location(loc).emit();
                 }
                 self.error_expr()
             }
@@ -787,7 +804,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                                 lhs: self.add_expr(lhs_conv),
                                 rhs: self.add_expr(rhs_conv),
                             },
-                            ty: self.tyctxt.prim_tys.void.clone(),
+                            ty: self.sess.tyctxt.prim_tys.void.clone(),
                         }
                     } else {
                         TypedExpr {
@@ -802,7 +819,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     }
                 }
                 Err(_) => {
-                    self.diag
+                    self.sess
+                        .diag
                         .error(format!("no overload for binary operation `{op_token}`"))
                         .location(op_token.source_location())
                         .emit();
@@ -816,7 +834,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     lhs: self.add_expr(lhs),
                     rhs: self.add_expr(rhs_conv),
                 },
-                ty: self.tyctxt.prim_tys.void.clone(),
+                ty: self.sess.tyctxt.prim_tys.void.clone(),
             }
         }
     }
@@ -833,19 +851,20 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         // TODO warn about overflow
                         // TODO unsigned suffixes
                         TypedExpr {
-                            ty: self.tyctxt.prim_tys.int.clone(),
+                            ty: self.sess.tyctxt.prim_tys.int.clone(),
                             expr: ExprKind::Literal {
                                 value: ConstantValue::Int(v as i32),
                             },
                         }
                     }
                     Err(err) => {
-                        self.diag
+                        self.sess
+                            .diag
                             .error(format!("error parsing integer value: {err}"))
                             .location(&v)
                             .emit();
                         TypedExpr {
-                            ty: self.tyctxt.prim_tys.int.clone(),
+                            ty: self.sess.tyctxt.prim_tys.int.clone(),
                             expr: ExprKind::Undef,
                         }
                     }
@@ -856,26 +875,27 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     Ok(v) => {
                         // TODO warn about non-representable floats
                         TypedExpr {
-                            ty: self.tyctxt.prim_tys.float.clone(),
+                            ty: self.sess.tyctxt.prim_tys.float.clone(),
                             expr: ExprKind::Literal {
                                 value: ConstantValue::Float(OrderedFloat::from(v as f32)),
                             },
                         }
                     }
                     Err(err) => {
-                        self.diag
+                        self.sess
+                            .diag
                             .error(format!("error parsing floating-point value: {err}"))
                             .location(&v)
                             .emit();
                         TypedExpr {
-                            ty: self.tyctxt.prim_tys.float.clone(),
+                            ty: self.sess.tyctxt.prim_tys.float.clone(),
                             expr: ExprKind::Undef,
                         }
                     }
                 }
             }
             ast::LiteralKind::Bool(v) => TypedExpr {
-                ty: self.tyctxt.prim_tys.bool.clone(),
+                ty: self.sess.tyctxt.prim_tys.bool.clone(),
                 expr: ExprKind::Literal {
                     value: ConstantValue::Bool(v),
                 },

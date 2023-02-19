@@ -1,20 +1,15 @@
 //! Lowering to HIR
-use crate::{
-    builtins::{BuiltinSignature, Constructor},
-    diagnostic::Diagnostics,
-    hir,
-    hir::{FunctionData, GlobalVariableData, IdRef},
-    tast::{
-        consteval::ConstantValue,
-        def::{FunctionDef, GlobalDef},
-        expr::ConversionKind,
-        stmt::Stmt,
-        swizzle::ComponentIndices,
-        Block, BlockId, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, StmtId, Type, TypeCtxt, TypedBody,
-    },
-};
+use crate::{builtins::{BuiltinSignature, Constructor}, diagnostic::Diagnostics, hir, hir::{FunctionData, GlobalVariableData, IdRef}, Session, tast::{
+    consteval::ConstantValue,
+    def::{FunctionDef, GlobalDef},
+    expr::ConversionKind,
+    stmt::Stmt,
+    swizzle::ComponentIndices,
+    Block, BlockId, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, StmtId, Type, TypeCtxt, TypedBody,
+}};
 use ashley::tast::{def::DefKind, expr::ExprKind, stmt::StmtKind, DefId, Qualifier, TypeKind};
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
+use crate::tast::typecheck_body;
 
 enum HirDef {
     Variable(hir::GlobalVariable),
@@ -23,9 +18,8 @@ enum HirDef {
 }
 
 struct LowerCtxt<'a, 'diag> {
-    tyctxt: &'a mut TypeCtxt,
+    sess: &'a mut Session<'diag>,
     module: &'a Module,
-    diag: &'a mut Diagnostics<'diag>,
     def_map: HashMap<DefId, HirDef>,
     local_map: HashMap<LocalVarId, hir::Local>,
 }
@@ -569,7 +563,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         let func_data = if let Some(_) = ast.block() {
             // typecheck the function body
             {
-                let typed_body = self.tyctxt.typecheck_body(self.module, def_id.local_def, self.diag);
+                let typed_body = typecheck_body(self.sess, self.module, def_id.local_def);
                 if typed_body.has_errors() {
                     // emit a dummy body so that lowering can continue
                     FunctionData::new_declaration(
@@ -629,12 +623,11 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
     }
 }
 
-pub fn lower_to_hir(tyctxt: &mut TypeCtxt, module: Module, diag: &mut Diagnostics) -> hir::Module {
+pub fn lower_to_hir(sess: &mut Session, module: Module) -> hir::Module {
     // TODO reuse typechecked bodies?
     let mut ctxt = LowerCtxt {
-        tyctxt,
+        sess,
         module: &module,
-        diag,
         def_map: Default::default(),
         local_map: Default::default(),
     };

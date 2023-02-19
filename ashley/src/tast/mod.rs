@@ -11,19 +11,20 @@ mod stmt;
 mod swizzle;
 pub mod ty;
 
-pub use def::{Def, Qualifier, Visibility};
+pub use def::{Def, FunctionDef, Qualifier, Visibility};
 pub use expr::Expr;
 pub use lower::lower_to_hir;
+pub(crate) use scope::Scope;
 pub use ty::{FunctionType, ScalarType, Type, TypeKind};
 
 use crate::{
     builtins::PrimitiveTypes,
-    diagnostic::Diagnostics,
+    package::Package,
     syntax::ast,
-    tast::{scope::Scope, stmt::Stmt},
+    tast::{def::DefKind, stmt::Stmt, ty::convert_type},
     utils::{Id, TypedVec},
+    Session,
 };
-use ashley::tast::def::DefKind;
 use std::{
     collections::HashSet,
     hash::Hash,
@@ -32,8 +33,6 @@ use std::{
         Arc,
     },
 };
-
-// TODO: separate the items / types from the bodies of functions and initializers
 
 pub type ExprId = Id<Expr>;
 pub type StmtId = Id<Stmt>;
@@ -82,7 +81,7 @@ pub struct TypedBody {
     pub blocks: TypedVec<Block>,
     pub params: Vec<LocalVarId>,
     pub errors: usize,
-    pub entry_block: Option<BlockId>
+    pub entry_block: Option<BlockId>,
 }
 
 impl TypedBody {
@@ -104,36 +103,6 @@ impl TypedBody {
 
     pub fn has_errors(&self) -> bool {
         self.errors > 0
-    }
-}
-
-#[derive(Debug)]
-pub struct Package {
-    pub defs: TypedVec<Def, LocalDefId>,
-}
-
-impl Package {
-    /// Imports all the definitions of this package into the given scope.
-    pub(crate) fn import(&self, scope: &mut Scope) {
-        for (id, def) in self.defs.iter_full() {
-            scope.add_def(DefId::from(id), def);
-        }
-    }
-}
-
-/// The API is simply name (+arguments) -> Package (set of definitions).
-///
-/// The resolver is responsible for looking up the package name in the filesystem, or other sources
-/// (it could be a procedurally generated package).
-pub trait PackageResolver {
-    fn resolve(&self, name: &str) -> Option<Package>;
-}
-
-pub struct DummyPackageResolver;
-
-impl PackageResolver for DummyPackageResolver {
-    fn resolve(&self, _name: &str) -> Option<Package> {
-        None
     }
 }
 
@@ -209,19 +178,15 @@ impl Types {
     }
 }
 
-/// Context for type-checking a single source file.
-pub(crate) struct TypeCheckItemCtxt<'a, 'diag> {
-    module: &'a mut Module,
-    diag: &'a mut Diagnostics<'diag>,
-    tyctxt: &'a mut TypeCtxt,
-    package_resolver: &'a mut dyn PackageResolver,
-    scopes: Vec<Scope>,
-}
-
 /// Type-checking context.
+///
+/// Holds the interner for types, and pre-interned versions of commonly-used types.
 pub struct TypeCtxt {
+    /// Types interner.
     types: Types,
+    /// Pre-interned primitive types.
     prim_tys: PrimitiveTypes,
+    /// Error type (used for error recovery).
     error: Type,
 }
 
@@ -240,111 +205,114 @@ impl TypeCtxt {
     pub fn ty(&mut self, kind: impl Into<TypeKind>) -> Type {
         self.types.intern(kind)
     }
+}
 
-    pub fn typecheck_items(
-        &mut self,
-        ast: ast::Root,
-        package_resolver: &mut dyn PackageResolver,
-        diag: &mut Diagnostics,
-    ) -> Module {
-        let mut module = Module::new();
-        diag.set_current_source(ast.source_id);
-        let mut ctxt = TypeCheckItemCtxt {
-            module: &mut module,
-            diag,
-            tyctxt: self,
-            package_resolver,
-            scopes: Vec::new(),
-        };
-        ctxt.define_builtin_functions();
-        ctxt.typecheck_module(&ast.module);
-        module
-    }
+/// Context for type-checking a single source file.
+pub(crate) struct TypeCheckItemCtxt<'a, 'diag> {
+    sess: &'a mut Session<'diag>,
+    module: &'a mut Module,
+    scopes: Vec<Scope>,
+}
 
-    fn build_scope_for_def_body(&mut self, module: &Module, def: LocalDefId) -> Scope {
-        let mut scope = Scope::new();
-        // bring package contents in scope
-        for package in module.packages.iter() {
-            package.import(&mut scope);
-        }
-        // reconstruct the set of visible declarations before the item body (there are no forward references in GLSL)
-        for def_index in 0..def.index() {
-            let id = LocalDefId::from_index(def_index);
-            let def = &module.defs[id];
-            scope.add_def(DefId::from(id), def);
-        }
-        scope
-    }
-
-    // TODO: some defs do not have bodies, return None for them
-    pub fn typecheck_body(&mut self, module: &Module, def: LocalDefId, diag: &mut Diagnostics) -> TypedBody {
-        let scope = self.build_scope_for_def_body(module, def);
-
-        // HACK: to count the number of errors during type-checking, count the difference in number of errors
-        let initial_err_count = diag.error_count();
-
-        let mut typed_body = TypedBody::new();
-        let error_type = self.ty(TypeKind::Error);
-
-        let mut ctxt = TypeCheckBodyCtxt {
-            module,
-            diag,
-            tyctxt: self,
-            scopes: vec![scope],
-            typed_body: &mut typed_body,
-            error_type,
-        };
-
-        match ctxt.module.def(DefId::from(def)).kind {
-            DefKind::Function(ref func) => {
-                if let Some(ref ast) = func.ast {
-                    if let Some(ref body) = ast.block() {
-                        // create local vars for function parameters
-                        for param in func.parameters.iter() {
-                            let id = ctxt.typed_body.local_vars.push(LocalVar {
-                                name: param.name.clone(),
-                                ty: param.ty.clone(),
-                            });
-                            ctxt.typed_body.params.push(id);
-                        }
-                        let entry_block = ctxt.typecheck_block(body);
-                        ctxt.typed_body.entry_block = Some(entry_block);
-                    }
-                }
-            }
-            DefKind::Global(ref global) => {
-                if let Some(ref ast) = global.ast {
-                    if let Some(ref initializer) = ast.initializer() {
-                        if let Some(ref expr) = initializer.expr() {
-                            let expr = ctxt.typecheck_expr(expr);
-                            ctxt.add_expr(expr);
-                        }
-                    }
-                }
-            }
-            DefKind::Struct(_) => {}
-        };
-
-        let final_err_count = diag.error_count();
-        typed_body.errors = final_err_count - initial_err_count;
-        typed_body
+impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
+    pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
+        convert_type(&mut self.sess.tyctxt, ty, self.module, &self.scopes, &mut self.sess.diag)
     }
 }
 
-pub struct TypeCheckBodyCtxt<'a, 'diag> {
+fn build_scope_for_def_body(module: &Module, def: LocalDefId) -> Scope {
+    let mut scope = Scope::new();
+    // bring package contents in scope
+    for package in module.packages.iter() {
+        package.import(&mut scope);
+    }
+    // reconstruct the set of visible declarations before the item body (there are no forward references in GLSL)
+    for def_index in 0..def.index() {
+        let id = LocalDefId::from_index(def_index);
+        let def = &module.defs[id];
+        scope.add_def(DefId::from(id), def);
+    }
+    scope
+}
+
+pub(crate) fn typecheck_items(sess: &mut Session, ast: ast::Root) -> Module {
+    let mut module = Module::new();
+    sess.diag.set_current_source(ast.source_id);
+    let mut ctxt = TypeCheckItemCtxt {
+        sess,
+        module: &mut module,
+        scopes: Vec::new(),
+    };
+    ctxt.define_builtin_functions();
+    ctxt.typecheck_module(&ast.module);
+    module
+}
+
+pub(crate) struct TypeCheckBodyCtxt<'a, 'diag> {
+    sess: &'a mut Session<'diag>,
     module: &'a Module,
-    tyctxt: &'a mut TypeCtxt,
-    diag: &'a mut Diagnostics<'diag>,
     scopes: Vec<Scope>,
     typed_body: &'a mut TypedBody,
-    error_type: Type,
+    //error_type: Type,
 }
 
 impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
-        self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag)
+        convert_type(&mut self.sess.tyctxt, ty, self.module, &self.scopes, &mut self.sess.diag)
     }
 }
+
+
+// TODO: some defs do not have bodies, return None for them
+pub(crate) fn typecheck_body(sess: &mut Session, module: &Module, def: LocalDefId) -> TypedBody {
+    let scope = build_scope_for_def_body(module, def);
+
+    // HACK: to count the number of errors during type-checking, count the difference in number of errors
+    let initial_err_count = sess.diag.error_count();
+
+    let mut typed_body = TypedBody::new();
+    let mut ctxt = TypeCheckBodyCtxt {
+        module,
+        sess,
+        scopes: vec![scope],
+        typed_body: &mut typed_body,
+    };
+
+    match ctxt.module.def(DefId::from(def)).kind {
+        DefKind::Function(ref func) => {
+            if let Some(ref ast) = func.ast {
+                if let Some(ref body) = ast.block() {
+                    // create local vars for function parameters
+                    for param in func.parameters.iter() {
+                        let id = ctxt.typed_body.local_vars.push(LocalVar {
+                            name: param.name.clone(),
+                            ty: param.ty.clone(),
+                        });
+                        ctxt.typed_body.params.push(id);
+                    }
+                    let entry_block = ctxt.typecheck_block(body);
+                    ctxt.typed_body.entry_block = Some(entry_block);
+                }
+            }
+        }
+        DefKind::Global(ref global) => {
+            if let Some(ref ast) = global.ast {
+                if let Some(ref initializer) = ast.initializer() {
+                    if let Some(ref expr) = initializer.expr() {
+                        let expr = ctxt.typecheck_expr(expr);
+                        ctxt.add_expr(expr);
+                    }
+                }
+            }
+        }
+        DefKind::Struct(_) => {}
+    };
+
+    let final_err_count = sess.diag.error_count();
+    typed_body.errors = final_err_count - initial_err_count;
+    typed_body
+}
+
 
 #[cfg(test)]
 mod tests {}

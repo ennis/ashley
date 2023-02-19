@@ -206,6 +206,42 @@ where
     }
 }
 
+impl<K, V> TypedIndexMap<K, V> {
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        Q: Eq + Hash + ?Sized,
+        K: Borrow<Q> + Eq + Hash,
+    {
+        self.map.get(key)
+    }
+
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        Q: Eq + Hash + ?Sized,
+        K: Borrow<Q> + Eq + Hash,
+    {
+        self.map.get_mut(key)
+    }
+
+    pub fn get_full<Q>(&self, key: &Q) -> Option<(Id<V>, &K, &V)>
+    where
+        K: Borrow<Q> + Eq + Hash,
+        Q: Eq + Hash + ?Sized,
+    {
+        let (i, k, v) = self.map.get_full(key)?;
+        Some((Id::from_index(i), k, v))
+    }
+
+    pub fn get_full_mut<Q>(&mut self, key: &Q) -> Option<(Id<V>, &K, &mut V)>
+    where
+        K: Borrow<Q> + Eq + Hash,
+        Q: Eq + Hash + ?Sized,
+    {
+        let (i, k, v) = self.map.get_full_mut(key)?;
+        Some((Id::from_index(i), k, v))
+    }
+}
+
 /// Indexing with the key
 impl<K, V, Q> Index<&Q> for TypedIndexMap<K, V>
 where
@@ -231,7 +267,8 @@ where
 }
 
 /// Indexing with the index
-impl<K, V> Index<Id<V>> for TypedIndexMap<K, V> {
+impl<K, V> Index<Id<V>> for TypedIndexMap<K, V>
+{
     type Output = V;
 
     fn index(&self, id: Id<V>) -> &V {
@@ -240,7 +277,8 @@ impl<K, V> Index<Id<V>> for TypedIndexMap<K, V> {
 }
 
 /// Indexing with the index
-impl<K, V> IndexMut<Id<V>> for TypedIndexMap<K, V> {
+impl<K, V> IndexMut<Id<V>> for TypedIndexMap<K, V>
+{
     fn index_mut(&mut self, id: Id<V>) -> &mut V {
         self.map.get_index_mut(id.index()).unwrap().1
     }

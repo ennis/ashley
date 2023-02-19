@@ -1,6 +1,7 @@
 use crate::{
     builtins::BuiltinOperation,
     tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCheckItemCtxt, TypeCtxt},
+    Session,
 };
 use std::{collections::HashMap, sync::Arc};
 use tracing::trace;
@@ -90,44 +91,26 @@ impl Scope {
 impl TypeCheckItemCtxt<'_, '_> {
     /// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
-        self.tyctxt.resolve_name(name, &self.scopes)
+        resolve_name(&self.sess.tyctxt, name, &self.scopes)
     }
 }
 
 impl TypeCheckBodyCtxt<'_, '_> {
     /// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
-        let r = self.tyctxt.resolve_name(name, &self.scopes);
-        //eprintln!("resolve_name({}) => {:?}", name, r);
-        r
+        resolve_name(&self.sess.tyctxt, name, &self.scopes)
     }
 }
 
-impl TypeCtxt {
-    /*pub(crate) fn resolve_type_name(&self, name: &str, scopes: &[Scope]) -> Option<Res> {
-        if let Some(ty) = self.prim_tys.resolve(name) {
-            // try to resolve the name as a primty first, because otherwise it may resolve as the primty constructor for the type
-            // TODO: maybe type constructors shouldn't be function definitions?
-            Some(Res::PrimTy(ty))
-        } else {
-            for scope in scopes.iter().rev() {
-                if let Some(var) = scope.items.get(name) {
-                    return Some(var.clone());
-                }
-            }
+pub(crate) fn resolve_name(tyctxt: &TypeCtxt, name: &str, scopes: &[Scope]) -> Option<Res> {
+    for scope in scopes.iter().rev() {
+        if let Some(var) = scope.items.get(name) {
+            return Some(var.clone());
         }
-    }*/
-
-    pub(crate) fn resolve_name(&self, name: &str, scopes: &[Scope]) -> Option<Res> {
-        for scope in scopes.iter().rev() {
-            if let Some(var) = scope.items.get(name) {
-                return Some(var.clone());
-            }
-        }
-        if let Some(ty) = self.prim_tys.resolve(name) {
-            Some(Res::PrimTy(ty))
-        } else {
-            None
-        }
+    }
+    if let Some(ty) = tyctxt.prim_tys.resolve(name) {
+        Some(Res::PrimTy(ty))
+    } else {
+        None
     }
 }

@@ -3,7 +3,7 @@ use ashley::{
     diagnostic::{Diagnostics, SourceFileProvider},
     hir, syntax,
     syntax::{ast, ast::AstNode},
-    tast::{lower_to_hir, DummyPackageResolver, Module, TypeCtxt},
+    tast::{lower_to_hir, Module, TypeCtxt},
 };
 use codespan_reporting::{
     term,
@@ -14,6 +14,7 @@ use spirv_tools::{
     val::{Validator, ValidatorOptions},
 };
 use std::{fs, path::Path, sync::Arc};
+use ashley::package::DummyPackageResolver;
 
 fn validate_spirv(code: &[u32]) {
     let validator = spirv_tools::val::create(None);

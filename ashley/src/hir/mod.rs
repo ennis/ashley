@@ -710,17 +710,3 @@ impl Module {
     const_vec_builder!(const_i32x2, const_i32x3, const_i32x4, i32, Int, const_i32);
     const_vec_builder!(const_u32x2, const_u32x3, const_u32x4, u32, UnsignedInt, const_u32);
 }
-
-//--------------------------------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    //use crate::hir::{print_hir_region_html, HirArena, HirCtxt};
-    use std::{fs::File, io::Write, path::PathBuf};
-
-    fn html_output_file_path(title: &str) -> PathBuf {
-        const OUT_DIR: &str = "tests/out";
-        let root = env!("CARGO_MANIFEST_DIR");
-        PathBuf::from(root).join(OUT_DIR).join(format!("{title}.html"))
-    }
-}

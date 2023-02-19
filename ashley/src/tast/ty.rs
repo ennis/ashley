@@ -1,4 +1,4 @@
-use crate::{hir, syntax::ast, tast::DefId};
+use crate::{hir, syntax::ast, tast::DefId, Session};
 use ashley::tast::TypeCtxt;
 use spirv::Dim;
 use std::{
@@ -13,9 +13,9 @@ use std::{
 use crate::{
     diagnostic::Diagnostics,
     tast::{
-        consteval::ConstantValue,
+        consteval::{try_evaluate_constant_expression, ConstantValue},
         def::DefKind,
-        scope::{Res, Scope},
+        scope::{resolve_name, Res, Scope},
         Module,
     },
 };
@@ -300,97 +300,95 @@ pub struct TypeSpec {
     pub ty: Type,
 }
 
-impl TypeCtxt {
-    /// Converts an AST type to a TAST type.
-    pub(crate) fn convert_type(
-        &mut self,
-        ty: ast::Type,
-        module: &Module,
-        scopes: &[Scope],
-        diag: &mut Diagnostics,
-    ) -> Type {
-        match ty {
-            ast::Type::TypeRef(tyref) => {
-                let Some(ident) = tyref.ident() else { return self.error.clone(); };
-                if let Some(res) = self.resolve_name(ident.text(), scopes) {
-                    match res {
-                        Res::Global(def_id) => {
-                            let def = module.def(def_id);
-                            match def.kind {
-                                DefKind::Struct(ref struct_def) => struct_def.ty.clone(),
-                                _ => {
-                                    diag.error("expected a type").location(ident).emit();
-                                    self.error.clone()
-                                }
+/// Converts an AST type to a TAST type.
+pub(crate) fn convert_type(
+    tyctxt: &mut TypeCtxt,
+    ty: ast::Type,
+    module: &Module,
+    scopes: &[Scope],
+    diag: &mut Diagnostics,
+) -> Type {
+    match ty {
+        ast::Type::TypeRef(tyref) => {
+            let Some(ident) = tyref.ident() else { return tyctxt.error.clone(); };
+            if let Some(res) = resolve_name(tyctxt, ident.text(), scopes) {
+                match res {
+                    Res::Global(def_id) => {
+                        let def = module.def(def_id);
+                        match def.kind {
+                            DefKind::Struct(ref struct_def) => struct_def.ty.clone(),
+                            _ => {
+                                diag.error("expected a type").location(ident).emit();
+                                tyctxt.error.clone()
                             }
                         }
-                        Res::PrimTy(ty) => ty,
-                        _ => {
-                            diag.error("expected a type").location(ident).emit();
-                            self.error.clone()
+                    }
+                    Res::PrimTy(ty) => ty,
+                    _ => {
+                        diag.error("expected a type").location(ident).emit();
+                        tyctxt.error.clone()
+                    }
+                }
+            } else {
+                // TODO better error message
+                diag.error("expected a type").location(ident).emit();
+                tyctxt.error.clone()
+            }
+        }
+        ast::Type::TupleType(_tuple_ty) => {
+            todo!("tuple types");
+            /*let fields: Vec<_> = tuple_ty
+                .fields()
+                .enumerate()
+                .map(|(i,f)| StructField {
+                    ast: None,
+                    name: format!("field{}", i),
+                    ty: self.convert_type(f),
+                })
+                .collect();
+            self.module.ty(TypeKind::Struct(Arc::new(StructDef {
+                ast: None,
+                name: "".to_string(), // TODO generate a name for tuples (or remove tuples entirely)
+                fields,
+                ty: (),
+            })))*/
+        }
+        ast::Type::ArrayType(array_type) => {
+            let element_type = array_type
+                .element_type()
+                .map(|ty| convert_type(tyctxt, ty, module, scopes, diag))
+                .unwrap_or_else(|| tyctxt.error.clone());
+
+            if let Some(expr) = array_type.length() {
+                if let Some(len) = try_evaluate_constant_expression(&expr, module, diag) {
+                    match len {
+                        ConstantValue::Int(len) => {
+                            let len = len as u32;
+                            tyctxt.ty(TypeKind::Array(element_type, len))
+                        }
+                        ConstantValue::Float(_) => {
+                            diag.error("array length must be an integer").location(expr).emit();
+                            tyctxt.error.clone()
+                        }
+                        ConstantValue::Bool(_) => {
+                            diag.error("array length must be an integer").location(expr).emit();
+                            tyctxt.error.clone()
                         }
                     }
                 } else {
                     // TODO better error message
-                    diag.error("expected a type").location(ident).emit();
-                    self.error.clone()
+                    diag.error("array length must be a constant expression")
+                        .location(expr)
+                        .emit();
+                    tyctxt.error.clone()
                 }
+            } else {
+                // no length
+                tyctxt.ty(TypeKind::RuntimeArray(element_type))
             }
-            ast::Type::TupleType(_tuple_ty) => {
-                todo!("tuple types");
-                /*let fields: Vec<_> = tuple_ty
-                    .fields()
-                    .enumerate()
-                    .map(|(i,f)| StructField {
-                        ast: None,
-                        name: format!("field{}", i),
-                        ty: self.convert_type(f),
-                    })
-                    .collect();
-                self.module.ty(TypeKind::Struct(Arc::new(StructDef {
-                    ast: None,
-                    name: "".to_string(), // TODO generate a name for tuples (or remove tuples entirely)
-                    fields,
-                    ty: (),
-                })))*/
-            }
-            ast::Type::ArrayType(array_type) => {
-                let element_type = array_type
-                    .element_type()
-                    .map(|ty| self.convert_type(ty, module, scopes, diag))
-                    .unwrap_or_else(|| self.error.clone());
-
-                if let Some(expr) = array_type.length() {
-                    if let Some(len) = self.try_evaluate_constant_expression(&expr, module, diag) {
-                        match len {
-                            ConstantValue::Int(len) => {
-                                let len = len as u32;
-                                self.ty(TypeKind::Array(element_type, len))
-                            }
-                            ConstantValue::Float(_) => {
-                                diag.error("array length must be an integer").location(expr).emit();
-                                self.error.clone()
-                            }
-                            ConstantValue::Bool(_) => {
-                                diag.error("array length must be an integer").location(expr).emit();
-                                self.error.clone()
-                            }
-                        }
-                    } else {
-                        // TODO better error message
-                        diag.error("array length must be a constant expression")
-                            .location(expr)
-                            .emit();
-                        self.error.clone()
-                    }
-                } else {
-                    // no length
-                    self.ty(TypeKind::RuntimeArray(element_type))
-                }
-            }
-            ast::Type::ClosureType(_closure_type) => {
-                todo!("closure types")
-            }
+        }
+        ast::Type::ClosureType(_closure_type) => {
+            todo!("closure types")
         }
     }
 }

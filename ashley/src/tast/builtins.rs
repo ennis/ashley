@@ -27,16 +27,16 @@ impl TypeCheckItemCtxt<'_, '_> {
                         let arg_types: Vec<_> = sig
                             .parameter_types
                             .iter()
-                            .map(|ty| pseudo_type_to_concrete_type(*ty, &self.tyctxt.prim_tys, vec_len, *ic))
+                            .map(|ty| pseudo_type_to_concrete_type(*ty, &self.sess.tyctxt.prim_tys, vec_len, *ic))
                             .collect();
                         let return_type =
-                            pseudo_type_to_concrete_type(sig.result_type, &self.tyctxt.prim_tys, vec_len, *ic);
+                            pseudo_type_to_concrete_type(sig.result_type, &self.sess.tyctxt.prim_tys, vec_len, *ic);
                         let parameters: Vec<FunctionParam> = arg_types.iter().map(|arg| FunctionParam {
                             ast: None,
                             ty: arg.clone(),
                             name: "".to_string(),
                         }).collect();
-                        let function_type = self.tyctxt.ty(FunctionType { arg_types, return_type });
+                        let function_type = self.sess.tyctxt.ty(FunctionType { arg_types, return_type });
 
                         self.module.defs.push(Def {
                             package: None,

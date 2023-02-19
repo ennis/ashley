@@ -1,16 +1,20 @@
-use std::collections::{HashSet, VecDeque};
-use std::ops::Range;
 use crate::{
-    diagnostic::{Diagnostics, SourceId},
+    diagnostic::{Diagnostics, SourceId, SourceLocation},
     syntax::{
         syntax_kind::{Lexer, SyntaxKind::*},
         SyntaxKind, SyntaxNode,
     },
-    T,
+    Session, T,
 };
 use rowan::{Checkpoint, GreenNodeBuilder, TextRange, TextSize};
-use crate::diagnostic::SourceLocation;
+use std::{
+    collections::{HashSet, VecDeque},
+    ops::Range,
+};
 
+/// List of built-in type names that should be recognized as such by the parser.
+///
+/// NOTE: contrary to the GLSL spec, these are not considered reserved keywords.
 const BUILTIN_TYPE_NAMES: &[&str] = &[
     "atomic_uint",
     "int",
@@ -174,7 +178,7 @@ const BUILTIN_TYPE_NAMES: &[&str] = &[
     "usubpassInputMS",
 ];
 
-pub(crate) fn parse_raw(text: &str, source_id: SourceId, diag: &mut Diagnostics) -> SyntaxNode {
+pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> SyntaxNode {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let mut lookahead = VecDeque::default();
@@ -185,13 +189,14 @@ pub(crate) fn parse_raw(text: &str, source_id: SourceId, diag: &mut Diagnostics)
     for ty in BUILTIN_TYPE_NAMES {
         types.insert(ty.to_string());
     }
+    sess.diag.set_current_source(source_id);
     let mut parser = Parser {
+        sess,
         source_id,
         text,
         lookahead,
         lex,
         b,
-        diag,
         types,
         consumed_tokens: 0,
     };
@@ -199,6 +204,7 @@ pub(crate) fn parse_raw(text: &str, source_id: SourceId, diag: &mut Diagnostics)
 }
 
 struct Parser<'a, 'diag> {
+    sess: &'a mut Session<'diag>,
     text: &'a str,
     source_id: SourceId,
     // Current token & span
@@ -209,9 +215,6 @@ struct Parser<'a, 'diag> {
     lookahead: VecDeque<(SyntaxKind, Range<usize>)>,
     /// the in-progress tree.
     b: GreenNodeBuilder<'static>,
-    /// The list of syntax errors we've accumulated
-    /// so far. They are reported all at once when parsing is complete.
-    diag: &'a mut Diagnostics<'diag>,
     types: HashSet<String>,
 }
 
@@ -373,7 +376,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     fn expect_ident(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
             let span = self.span();
-            self.diag
+            self.sess
+                .diag
                 .error(format!("expected {ident_kind}"))
                 .primary_label_opt(span, "expected IDENT")
                 .emit();
@@ -387,7 +391,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     fn expect_new_type_name(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
             let span = self.span();
-            self.diag
+            self.sess
+                .diag
                 .error(format!("expected {ident_kind}"))
                 .primary_label_opt(span, "expected IDENT")
                 .emit();
@@ -404,7 +409,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         if self.next() != Some(kind) {
             let span = self.span();
             let msg = format!("expected {kind:?}");
-            self.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+            self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
             false
         } else {
             self.eat();
@@ -422,7 +427,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
 
         let span = self.span();
         let msg = format!("expected one of {kinds:?}");
-        self.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+        self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
         false
     }
 
@@ -480,7 +485,11 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                     _ => {
                         // TODO better recovery
                         let span = self.span();
-                        self.diag.error("unexpected token").primary_label_opt(span, "").emit();
+                        self.sess
+                            .diag
+                            .error("unexpected token")
+                            .primary_label_opt(span, "")
+                            .emit();
                         self.eat();
                     }
                 }
@@ -536,7 +545,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             }
             _ => {
                 let span = self.span();
-                self.diag
+                self.sess
+                    .diag
                     .error("expected package parameter")
                     .primary_label_opt(span, "")
                     .emit();
@@ -631,7 +641,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             _ => {
                 // TODO better recovery
                 let span = self.span();
-                self.diag.error("unexpected token").primary_label_opt(span, "").emit();
+                self.sess.diag.error("unexpected token").primary_label_opt(span, "").emit();
                 self.b.start_node_at(cp, FN_DEF.into());
                 self.eat();
             }
@@ -655,7 +665,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 }
                 None => {
                     let cur_span = self.span();
-                    self.diag
+                    self.sess
+                        .diag
                         .error("unexpected end of file")
                         .primary_label_opt(cur_span, "")
                         .emit();
@@ -739,14 +750,16 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             }
             None => {
                 let cur_span = self.span();
-                self.diag
+                self.sess
+                    .diag
                     .error("unexpected end of file")
                     .primary_label_opt(cur_span, "")
                     .emit();
             }
             _ => {
                 let cur_span = self.span();
-                self.diag
+                self.sess
+                    .diag
                     .error("syntax error (TODO parse_type)")
                     .primary_label_opt(cur_span, "")
                     .emit();
@@ -772,7 +785,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             match self.next_ensure_progress(&mut progress) {
                 Some(x) if x == end => {
                     if trailing_sep && !allow_trailing {
-                        self.diag
+                        self.sess
+                            .diag
                             .error("trailing separator not allowed here")
                             .primary_label_opt(last_sep_span, "")
                             .emit()
@@ -788,7 +802,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 Some(x) if x == end => {
                     if item_count == 1 && tuple_rule {
                         // should end with a comma
-                        self.diag
+                        self.sess
+                            .diag
                             .error("single-element tuple types should have a trailing `,`")
                             .primary_label_opt(last_sep_span, "")
                             .emit()
@@ -802,7 +817,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 }
                 _ => {
                     let span = self.span();
-                    self.diag
+                    self.sess
+                        .diag
                         .error("syntax error (TODO)")
                         .primary_label_opt(span, "")
                         .emit();
@@ -905,7 +921,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             }*/
             _ => {
                 let span = self.span();
-                self.diag.error("syntax error").primary_label_opt(span, "").emit();
+                self.sess.diag.error("syntax error").primary_label_opt(span, "").emit();
                 self.eat();
             }
         }
@@ -956,7 +972,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             Some(_) => self.parse_expr_stmt(),
             _ => {
                 let loc = self.span();
-                self.diag.error("syntax error").primary_label_opt(loc, "").emit()
+                self.sess.diag.error("syntax error").primary_label_opt(loc, "").emit()
             }
         }
     }
@@ -1094,7 +1110,8 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 }
                 _ => {
                     let span = self.span();
-                    self.diag
+                    self.sess
+                        .diag
                         .error("syntax error (TODO)")
                         .primary_label_opt(span, "")
                         .emit();

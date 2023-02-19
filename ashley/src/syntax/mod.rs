@@ -7,6 +7,7 @@ pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{
     diagnostic::{AsSourceLocation, Diagnostics, SourceId, SourceLocation},
+    session::Session,
     syntax::{ast::AstNode, parse::parse_raw},
 };
 
@@ -42,8 +43,8 @@ impl AsSourceLocation for SyntaxNode {
 }
 
 /// Main entry point for parsing.
-pub fn parse(text: &str, file: SourceId, diag: &mut Diagnostics) -> ast::Root {
-    let node = parse_raw(text, file, diag);
+pub fn parse(session: &mut Session, text: &str, file: SourceId) -> ast::Root {
+    let node = parse_raw(session, text, file);
     ast::Root {
         source_id: file,
         module: ast::Module::cast(node).unwrap(),
@@ -57,19 +58,19 @@ mod tests {
     use crate::{
         diagnostic::SourceFileProvider,
         syntax,
-        syntax::{Diagnostics, SyntaxNode},
+        syntax::{ast::AstNode, Diagnostics, SyntaxNode},
+        Session,
     };
     use codespan_reporting::{
         term,
         term::termcolor::{ColorChoice, StandardStream},
     };
+    use std::num::FpCategory::Zero;
 
     fn parse_source_text(text: &str) -> SyntaxNode {
-        let mut sources = SourceFileProvider::new();
-        let src_id = sources.register_source("<input>", text);
-        let mut writer = StandardStream::stderr(ColorChoice::Always);
-        let mut diagnostics = Diagnostics::new(sources, src_id, &mut writer, term::Config::default());
-        syntax::parse_raw(text, src_id, &mut diagnostics)
+        let mut sess = Session::new();
+        let (package, _) = sess.get_or_create_package("test");
+        sess.parse(package, "test", text).module.syntax().clone()
     }
 
     fn expr(expr: &str) -> SyntaxNode {
@@ -283,7 +284,7 @@ public void main ( ) { }
     #[test]
     fn type_constructors() {
         insta::assert_debug_snapshot!(parse_source_text(
-                r#"
+            r#"
 void main() {
     float[3] v = float[3](1, 2, 3);
     float[3][4] v2 = float[3][4](float[3](0.0,0.0,0.0), float[3](0.0,0.0,0.0), float[3](0.0,0.0,0.0), float[3](0.0,0.0,0.0));
@@ -291,6 +292,6 @@ void main() {
     int y = int(x);
 }
     "#
-            ));
+        ));
     }
 }

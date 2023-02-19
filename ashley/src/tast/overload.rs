@@ -252,7 +252,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             for ic in image_classes {
                 for vec_len in 1..=max_vec_len {
                     if typecheck_builtin_helper(
-                        &self.tyctxt.prim_tys,
+                        &self.sess.tyctxt.prim_tys,
                         index,
                         sig.parameter_types,
                         sig.result_type,

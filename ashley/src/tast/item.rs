@@ -8,6 +8,7 @@ use crate::{
         Def, DefId, FunctionType, IdentExt, TypeCheckItemCtxt, TypeKind, Visibility,
     },
 };
+use crate::tast::ty::convert_type;
 
 enum Item {
     GlobalVariable(GlobalDef),
@@ -52,8 +53,8 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         let extern_ = global.extern_().map(|linkage| linkage.is_extern()).unwrap_or(false);
         let ty = global
             .ty()
-            .map(|ty| self.tyctxt.convert_type(ty, &self.module, &self.scopes, &mut self.diag))
-            .unwrap_or_else(|| self.tyctxt.error.clone());
+            .map(|ty| self.convert_type(ty))
+            .unwrap_or_else(|| self.sess.tyctxt.error.clone());
 
         //
         let external_linkage = visibility == tast::Visibility::Public || extern_;
@@ -106,8 +107,8 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             for param in param_list.parameters() {
                 let ty = param
                     .ty()
-                    .map(|ty| self.tyctxt.convert_type(ty, self.module, &self.scopes, self.diag))
-                    .unwrap_or_else(|| self.tyctxt.error.clone());
+                    .map(|ty| self.convert_type(ty))
+                    .unwrap_or_else(|| self.sess.tyctxt.error.clone());
                 arg_types.push(ty.clone());
                 params.push(FunctionParam {
                     ast: Some(param.clone()),
@@ -119,13 +120,13 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
 
         // return type
         let return_type = if let Some(return_type) = return_type {
-            self.tyctxt.convert_type(return_type, self.module, &self.scopes, self.diag)
+            self.convert_type(return_type)
         } else {
-            self.tyctxt.prim_tys.void.clone()
+            self.sess.tyctxt.prim_tys.void.clone()
         };
 
         // create function type
-        let func_type = self.tyctxt.ty(TypeKind::Function(FunctionType {
+        let func_type = self.sess.tyctxt.ty(TypeKind::Function(FunctionType {
             arg_types,
             return_type: return_type.clone(),
         }));
@@ -184,16 +185,15 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             let ty = field
                 .ty()
                 .map(|ty| {
-                    self.tyctxt
-                        .convert_type(ty.clone(), self.module, &self.scopes, self.diag)
+                    self.convert_type(ty.clone())
                 })
-                .unwrap_or_else(|| self.tyctxt.error.clone());
+                .unwrap_or_else(|| self.sess.tyctxt.error.clone());
             fields.push((field.ident().to_string_opt(), ty));
         }
 
         // define the type before the struct (there's a circular reference)
         let next_def_id = self.module.defs.next_id();
-        let ty = self.tyctxt.ty(TypeKind::Struct {
+        let ty = self.sess.tyctxt.ty(TypeKind::Struct {
             name: name.clone(),
             def: Some(DefId::from(next_def_id)),
             fields,

@@ -66,8 +66,8 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             return StmtKind::Error
         };
 
-        if condition.ty != self.tyctxt.prim_tys.bool {
-            self.diag
+        if condition.ty != self.sess.tyctxt.prim_tys.bool {
+            self.sess.diag
                 .error("condition must be a boolean expression")
                 .location(&ast_condition)
                 .emit();
@@ -120,8 +120,8 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
     fn typecheck_local_variable_stmt(&mut self, local: &ast::LocalVariable) -> StmtKind {
         let ty = local
             .ty()
-            .map(|t| self.tyctxt.convert_type(t, self.module, &self.scopes, self.diag))
-            .unwrap_or_else(|| self.error_type.clone());
+            .map(|t| self.convert_type(t))
+            .unwrap_or_else(|| self.sess.tyctxt.error.clone());
 
         let initializer = if let Some(initializer) = local.initializer() {
             if let Some(initializer) = initializer.expr() {

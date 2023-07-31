@@ -1,22 +1,17 @@
 use ashley::{
-    builtins::PrimitiveTypes,
-    diagnostic::{Diagnostics, SourceFileProvider},
-    hir, syntax,
-    syntax::{ast, ast::AstNode},
-    tast::{lower_to_hir, Module, TypeCtxt},
+    hir,
+    hir::TypeData,
+    tast::{lower_to_hir, Module},
+    Session,
 };
-use codespan_reporting::{
-    term,
-    term::termcolor::{ColorChoice, StandardStream},
-};
+use spirv::StorageClass;
 use spirv_tools::{
     assembler::{Assembler, DisassembleOptions},
     val::{Validator, ValidatorOptions},
 };
 use std::{fs, path::Path, sync::Arc};
-use ashley::package::DummyPackageResolver;
 
-fn validate_spirv(code: &[u32]) {
+fn validate_spirv(module_name: &str, code: &[u32]) {
     let validator = spirv_tools::val::create(None);
     let result = validator.validate(
         code,
@@ -34,40 +29,102 @@ fn validate_spirv(code: &[u32]) {
     match result {
         Ok(_) => {}
         Err(err) => {
-            eprintln!("SPIR-V validation failed: {}", err)
+            eprintln!("[{}] SPIR-V validation failed: {}", module_name, err)
+        }
+    }
+}
+
+fn print_interface(hir: &hir::Module) {
+    let mut inputs = vec![];
+    let mut outputs = vec![];
+    let mut images = vec![];
+    let mut uniforms = vec![];
+    let mut samplers = vec![];
+    let mut storage_buffers = vec![];
+
+    for (g, gdata) in hir.globals.iter() {
+        match gdata.storage_class {
+            StorageClass::Input => {
+                inputs.push(g);
+            }
+            StorageClass::Output => {
+                outputs.push(g);
+            }
+            StorageClass::Uniform => match hir.type_data(gdata.ty) {
+                TypeData::Pointer {
+                    storage_class,
+                    pointee_type,
+                } => match storage_class {
+                    StorageClass::Uniform => {
+                        uniforms.push(g);
+                    }
+                    StorageClass::StorageBuffer => {
+                        storage_buffers.push(g);
+                    }
+                    _ => {}
+                },
+                TypeData::Image(img) => {
+                    images.push(g);
+                }
+                TypeData::Sampler => {
+                    samplers.push(g);
+                }
+                TypeData::SamplerShadow => {
+                    samplers.push(g);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    if !inputs.is_empty() {
+        eprintln!("Inputs: \n");
+        for input in inputs.iter() {
+            let gd = &hir.globals[*input];
+            eprintln!("\t {} : {:?}", gd.name, hir.debug_type(gd.ty));
+        }
+    }
+    if !outputs.is_empty() {
+        eprintln!("\nOutputs: \n");
+        for output in outputs.iter() {
+            let gd = &hir.globals[*output];
+            eprintln!("\t {} : {:?}", gd.name, hir.debug_type(gd.ty));
+        }
+    }
+    if !uniforms.is_empty() {
+        eprintln!("\nUniforms: \n");
+        for uniform in uniforms.iter() {
+            let gd = &hir.globals[*uniform];
+            eprintln!("\t {} : {:?}", gd.name, hir.debug_type(gd.ty));
+        }
+    }
+    if !images.is_empty() {
+        eprintln!("\nTextures: \n");
+        for tex in images.iter() {
+            let gd = &hir.globals[*tex];
+            eprintln!("\t {} : {:?}", gd.name, hir.debug_type(gd.ty));
         }
     }
 }
 
 fn test_lower_one(path: &Path) {
     let source: Arc<str> = fs::read_to_string(path).unwrap().into();
-    let sources = SourceFileProvider::new();
-    let src_id = sources.register_source(path.to_str().unwrap(), source.clone());
-    let mut writer = StandardStream::stderr(ColorChoice::Always);
-    let mut diag = Diagnostics::new(sources, src_id, &mut writer, term::Config::default());
+    let mut sess = Session::new();
+
+    let file_stem = path.file_stem().unwrap().to_str().unwrap();
+    let file_name = path.file_name().unwrap().to_str().unwrap();
 
     // 0. parse
-    let ast_root = syntax::parse(&source, src_id, &mut diag);
-
-    // 1. typecheck
-    let mut type_ctxt = TypeCtxt::new();
-    let mut package_resolver = DummyPackageResolver;
-    let module = type_ctxt.typecheck_items(ast_root, &mut package_resolver, &mut diag);
-    let mut bodies = Vec::new();
-    for (def_id, def) in module.definitions() {
-        if def.builtin {
-            continue;
-        }
-        let body = type_ctxt.typecheck_body(&module, def_id, &mut diag);
-        bodies.push(body);
-    }
+    let pkg = sess.create_source_package(file_stem, file_name, &source);
 
     // 2. lower to HIR
-    let hir = lower_to_hir(&mut type_ctxt, module, &mut diag);
+    let hir = lower_to_hir(&mut sess, pkg).expect("failed to create hir");
+    print_interface(&hir);
 
     // 3. emit SPIR-V bytecode
     let spv_bytecode = ashley::hir::transform::write_spirv(&hir);
-    validate_spirv(&spv_bytecode);
+    validate_spirv(file_stem, &spv_bytecode);
 
     // 4. load bytecode with rspirv and disassemble
     let assembler = spirv_tools::assembler::create(None);

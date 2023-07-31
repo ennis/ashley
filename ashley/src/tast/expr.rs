@@ -2,7 +2,7 @@ use crate::{
     builtins,
     builtins::{BuiltinOperation, BuiltinSignature, Constructor},
     diagnostic::{AsSourceLocation, SourceLocation},
-    syntax::ast,
+    syntax::{ast, ast::AstNode, SyntaxNode},
     tast::{
         consteval::ConstantValue,
         def::DefKind,
@@ -15,31 +15,20 @@ use crate::{
     utils::DisplayCommaSeparated,
 };
 use ordered_float::OrderedFloat;
-use smallvec::SmallVec;
 use std::ops::Deref;
 
-/*pub enum FunctionRef {
-    Builtin(BuiltinOperation, u32),
-    /// Function defined in the current module.
-    Module(Arc<FunctionDef>),
-    /// Imported
-    Imported,
-}*/
-/*
-pub enum Operation {
-    Builtin {
-        op: BuiltinOperation,
-        overload_index: usize,
-    },
-    /// Function call in the current module.
-    FunctionCall(FunctionRef),
-}*/
-
+/// Represents an expression with its inferred type.
 #[derive(Clone, Debug)]
 pub struct Expr {
-    pub ast: Option<ast::Expr>,
+    pub syntax: Option<SyntaxNode>,
     pub ty: Type,
     pub kind: ExprKind,
+}
+
+impl Expr {
+    pub(crate) fn new(kind: ExprKind, ty: Type) -> Self {
+        Expr { kind, ty, syntax: None }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,7 +42,7 @@ pub enum ConversionKind {
     FloatToUnsignedInt,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/*#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConstructorKind {
     /// Identity constructor (scalar or vector)
     /// Conversion constructors are handled by "ImplicitConversion" subexpressions.
@@ -72,7 +61,7 @@ pub enum ConstructorKind {
     Array,
     /// Struct constructor
     Struct,
-}
+}*/
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
@@ -126,6 +115,7 @@ pub enum ExprKind {
         //def: Arc<StructDef>,
         index: usize,
     },
+    /// Vector component access & shuffle (e.g. `pos.y` or `offset.yx`).
     ComponentAccess {
         expr: ExprId,
         components: ComponentIndices,
@@ -144,22 +134,7 @@ pub enum ExprKind {
     Undef,
 }
 
-pub(crate) struct TypedExpr {
-    pub(crate) expr: ExprKind,
-    pub(crate) ty: Type,
-}
-
-impl TypedExpr {
-    pub(crate) fn new(expr: ExprKind, ty: Type) -> Self {
-        TypedExpr { expr, ty }
-    }
-
-    /*pub(crate) fn error(types: &mut Types) -> Self {
-        TypedExpr::new(ExprKind::Undef, types.intern(TypeKind::Error))
-    }*/
-}
-
-enum AccessKind {
+/*enum AccessKind {
     Index(usize),
     Field(usize),
     Component(ComponentIndices),
@@ -168,7 +143,7 @@ enum AccessKind {
 struct Access {
     ty: TypeKind,
     kind: AccessKind,
-}
+}*/
 
 impl TypeCheckBodyCtxt<'_, '_> {
     /*pub(crate) fn error_expr(&mut self) -> TypedExpr {
@@ -178,34 +153,38 @@ impl TypeCheckBodyCtxt<'_, '_> {
             ty: err_ty.clone(),
             kind: ExprKind::Undef,
         });
-        TypedExpr { id, ty: err_ty }
+        Expr { id, ty: err_ty }
     }*/
 
-    fn error_expr(&mut self) -> TypedExpr {
-        TypedExpr::new(ExprKind::Undef, self.sess.tyctxt.ty(TypeKind::Error))
+    fn error_expr(&mut self) -> Expr {
+        Expr::new(ExprKind::Undef, self.sess.tyctxt.ty(TypeKind::Error))
     }
 
-    pub(crate) fn add_expr(&mut self, expr: TypedExpr) -> ExprId {
+    pub(crate) fn add_expr(&mut self, expr: Expr) -> ExprId {
+        self.typed_body.exprs.push(expr)
+    }
+
+    /*pub(crate) fn add_expr_with_syntax(&mut self, expr: Expr, syntax: &SyntaxNode) -> ExprId {
         self.typed_body.exprs.push(Expr {
-            ast: None,
+            syntax: Some(syntax.clone()),
             ty: expr.ty,
             kind: expr.expr,
         })
-    }
+    }*/
 
     fn typecheck_constructor_components(
         &mut self,
         arglist: &ast::ArgList,
         target_scalar_type: ScalarType,
-    ) -> (Vec<TypedExpr>, usize) {
-        let mut has_invalid_components = false;
+    ) -> (Vec<Expr>, usize) {
+        //let mut has_invalid_components = false;
         let mut args = vec![];
         let mut num_components = 0;
         for arg_expr in arglist.arguments() {
             let arg = self.typecheck_expr(&arg_expr);
             if !arg.ty.is_scalar_or_vector() {
                 self.sess.diag.error("invalid component type in constructor").emit();
-                has_invalid_components = true;
+                //has_invalid_components = true;
             } else {
                 num_components += arg.ty.num_components().unwrap() as usize;
                 let conv_ty = self.sess.tyctxt.ty(arg.ty.with_scalar_type(target_scalar_type));
@@ -216,7 +195,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         (args, num_components)
     }
 
-    pub(crate) fn typecheck_constructor_expr(&mut self, expr: &ast::ConstructorExpr) -> TypedExpr {
+    pub(crate) fn typecheck_constructor_expr(&mut self, expr: &ast::ConstructorExpr) -> Expr {
         let Some(ty) = expr.ty().map(|ty| self.convert_type(ty)) else { return self.error_expr(); };
         let Some(ast_args) = expr.args() else { return self.error_expr(); };
 
@@ -235,7 +214,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             TK::Scalar(_) | TK::Vector(_, _) | TK::Matrix { .. } => {
                 for &ctor in builtins::CONSTRUCTORS {
                     if ctor.ty == *ty && ctor.args.iter().zip(arg_tys.iter()).all(|(a, b)| *a == **b) {
-                        return TypedExpr::new(
+                        return Expr::new(
                             ExprKind::BuiltinConstructor {
                                 ctor,
                                 args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
@@ -262,8 +241,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    pub(crate) fn typecheck_expr(&mut self, expr: &ast::Expr) -> TypedExpr {
-        match expr {
+    pub(crate) fn typecheck_expr(&mut self, expr: &ast::Expr) -> Expr {
+        let expr = match expr {
             ast::Expr::BinExpr(bin_expr) => self.typecheck_bin_expr(bin_expr),
             ast::Expr::CallExpr(call_expr) => self.typecheck_call_expr(call_expr),
             ast::Expr::IndexExpr(index_expr) => self.typecheck_index_expr(index_expr),
@@ -282,10 +261,16 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
             ast::Expr::PrefixExpr(prefix_expr) => self.typecheck_prefix_expr(prefix_expr),
             ast::Expr::ConstructorExpr(constructor) => self.typecheck_constructor_expr(constructor),
+        };
+        if let Some(ref syntax) = expr.syntax {
+            eprintln!("typecheck_expr {} : {}", syntax.text(), expr.ty);
+        } else {
+            eprintln!("typecheck_expr : {}", expr.ty);
         }
+        expr
     }
 
-    fn typecheck_index_expr(&mut self, index_expr: &ast::IndexExpr) -> TypedExpr {
+    fn typecheck_index_expr(&mut self, index_expr: &ast::IndexExpr) -> Expr {
         let Some(array_expr) = index_expr.array() else { return self.error_expr() };
         let Some(index_expr) = index_expr.index() else { return self.error_expr() };
 
@@ -316,8 +301,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
         };
 
-        TypedExpr {
-            expr: ExprKind::Index {
+        Expr {
+            syntax: Some(index_expr.syntax().clone()),
+            kind: ExprKind::Index {
                 array: self.add_expr(array),
                 index: self.add_expr(index),
             },
@@ -325,7 +311,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_call_expr(&mut self, call_expr: &ast::CallExpr) -> TypedExpr {
+    fn typecheck_call_expr(&mut self, call_expr: &ast::CallExpr) -> Expr {
         let Some(ast_callee) = call_expr.callee() else {return self.error_expr() };
         let Some(arg_list) = call_expr.arg_list() else {return self.error_expr() };
 
@@ -378,8 +364,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     })
                     .collect();
 
-                TypedExpr {
-                    expr: ExprKind::Call {
+                Expr {
+                    syntax: Some(call_expr.syntax().clone()),
+                    kind: ExprKind::Call {
                         function: overloads[candidate.index],
                         args,
                     },
@@ -394,7 +381,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     .location(&call_expr)
                     .note(format!("argument types are: ({})", DisplayCommaSeparated(&arg_types)));
                 for overload in overloads.iter() {
-                    let def = self.module.def(*overload);
+                    let def = self.sess.pkgs.def(*overload);
                     if def.as_function().unwrap().parameters.len() != args.len() {
                         continue;
                     }
@@ -411,7 +398,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     .error(format!("ambiguous call to overloaded function `{func_name}`"))
                     .location(&call_expr);
                 for candidate in candidates.iter() {
-                    let def = self.module.def(overloads[candidate.index]);
+                    let def = self.sess.pkgs.def(overloads[candidate.index]);
                     diag = diag.note(format!("candidate: `{}`", def.display_declaration()));
                 }
                 diag.emit();
@@ -420,7 +407,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_prefix_expr(&mut self, prefix_expr: &ast::PrefixExpr) -> TypedExpr {
+    fn typecheck_prefix_expr(&mut self, prefix_expr: &ast::PrefixExpr) -> Expr {
         let Some(op) = prefix_expr.op_details() else {return self.error_expr() };
         let Some(expr) = prefix_expr.expr() else {return self.error_expr() };
         let value = self.typecheck_expr(&expr);
@@ -432,8 +419,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
         match self.typecheck_builtin_operation(operation, &[value.ty.clone()]) {
             Ok(overload) => {
                 let conv_expr = self.apply_implicit_conversion(value, None, overload.parameter_types[0].clone());
-                TypedExpr {
-                    expr: ExprKind::Unary {
+                Expr {
+                    syntax: Some(prefix_expr.syntax().clone()),
+                    kind: ExprKind::Unary {
                         op: op.1,
                         signature: operation.signatures[overload.index],
                         expr: self.add_expr(conv_expr),
@@ -453,18 +441,18 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_expr_with_implicit_conversion(&mut self, expr: &ast::Expr, target_ty: Type) -> TypedExpr {
+    fn typecheck_expr_with_implicit_conversion(&mut self, expr: &ast::Expr, target_ty: Type) -> Expr {
         let e = self.typecheck_expr(expr);
         self.apply_implicit_conversion(e, Some(expr.source_location()), target_ty)
     }
 
-    fn typecheck_path_expr(&mut self, path_expr: &ast::PathExpr) -> TypedExpr {
+    fn typecheck_path_expr(&mut self, path_expr: &ast::PathExpr) -> Expr {
         let Some(path) = path_expr.ident() else { return self.error_expr(); };
         let res = self.resolve_name(path.text());
         match res {
             Some(res) => {
                 match res {
-                    Res::OverloadSet(func) => {
+                    Res::OverloadSet(_func) => {
                         self.sess
                             .diag
                             .error("cannot use a function as a place")
@@ -473,7 +461,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                         self.error_expr()
                     }
                     Res::Global(def) => {
-                        let ty = match &self.module.def(def).kind {
+                        let ty = match &self.sess.pkgs.def(def).kind {
                             DefKind::Function(_) => unreachable!(), // would have been an overload set
                             DefKind::Global(global) => global.ty.clone(),
                             DefKind::Struct(_) => {
@@ -486,15 +474,17 @@ impl TypeCheckBodyCtxt<'_, '_> {
                                 return self.error_expr();
                             }
                         };
-                        TypedExpr {
-                            expr: ExprKind::GlobalVar { var: def },
+                        Expr {
+                            syntax: Some(path_expr.syntax().clone()),
+                            kind: ExprKind::GlobalVar { var: def },
                             ty,
                         }
                     }
                     Res::Local(local) => {
                         let ty = self.typed_body.local_vars[local].ty.clone();
-                        TypedExpr {
-                            expr: ExprKind::LocalVar { var: local },
+                        Expr {
+                            syntax: Some(path_expr.syntax().clone()),
+                            kind: ExprKind::LocalVar { var: local },
                             ty,
                         }
                     }
@@ -517,21 +507,20 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_field_expr(&mut self, field_expr: &ast::FieldExpr) -> TypedExpr {
+    fn typecheck_field_expr(&mut self, field_expr: &ast::FieldExpr) -> Expr {
         // typecheck base expression
         let Some(base) = field_expr.expr() else { return self.error_expr() };
         let base = self.typecheck_expr(&base);
 
         let Some(field_name) = field_expr.field() else { return self.error_expr() };
         match base.ty.deref() {
-            TypeKind::Struct { name, fields, def } => {
-                //let def = self.module.def(*def);
-                //let struct_def = def.as_struct().unwrap();
+            TypeKind::Struct { name, fields, def: _ } => {
                 if let Some(field_index) = fields.iter().position(|field| field.0 == field_name.text()) {
                     let ty = fields[field_index].1.clone();
                     // base expression is not a place
-                    TypedExpr {
-                        expr: ExprKind::Field {
+                    Expr {
+                        syntax: Some(field_expr.syntax().clone()),
+                        kind: ExprKind::Field {
                             expr: self.add_expr(base),
                             index: field_index,
                         },
@@ -566,8 +555,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             TypeKind::Vector(*scalar_type, components.len() as u8)
                         });
                         // base expression is not a place
-                        TypedExpr {
-                            expr: ExprKind::ComponentAccess {
+                        Expr {
+                            syntax: Some(field_expr.syntax().clone()),
+                            kind: ExprKind::ComponentAccess {
                                 expr: self.add_expr(base),
                                 components,
                             },
@@ -596,15 +586,15 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_builtin(&mut self, op: &BuiltinOperation) {}
+    //fn typecheck_builtin(&mut self, op: &BuiltinOperation) {}
 
-    fn typecheck_place(&mut self, place_expr: &ast::Expr) -> TypedExpr {
+    fn typecheck_place(&mut self, place_expr: &ast::Expr) -> Expr {
         let expr = self.typecheck_expr(place_expr);
         // TODO check value category
         expr
     }
 
-    fn apply_implicit_conversion(&mut self, value: TypedExpr, loc: Option<SourceLocation>, ty: Type) -> TypedExpr {
+    fn apply_implicit_conversion(&mut self, value: Expr, loc: Option<SourceLocation>, ty: Type) -> Expr {
         use ConversionKind as ICK;
         use ExprKind as EK;
         use ScalarType as ST;
@@ -617,29 +607,33 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
         match (value.ty.deref(), ty.deref()) {
             (TK::Scalar(tsrc), TK::Scalar(tdst)) => match (tsrc, tdst) {
-                (ST::Int, ST::UnsignedInt) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Int, ST::UnsignedInt) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::IntBitcast,
                     },
                     ty: ty.clone(),
                 },
-                (ST::Int, ST::Float | ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Int, ST::Float | ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::SignedIntToFloat,
                     },
                     ty: ty.clone(),
                 },
-                (ST::UnsignedInt, ST::Float | ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::UnsignedInt, ST::Float | ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::UnsignedIntToFloat,
                     },
                     ty: ty.clone(),
                 },
-                (ST::Float, ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Float, ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::FloatConvert,
                     },
@@ -654,29 +648,33 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 }
             },
             (TK::Vector(tsrc, n2), TK::Vector(tdst, n1)) if n1 == n2 => match (tsrc, tdst) {
-                (ST::Int, ST::UnsignedInt) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Int, ST::UnsignedInt) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::IntBitcast,
                     },
                     ty: ty.clone(),
                 },
-                (ST::Int, ST::Float | ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Int, ST::Float | ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::SignedIntToFloat,
                     },
                     ty: ty.clone(),
                 },
-                (ST::UnsignedInt, ST::Float | ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::UnsignedInt, ST::Float | ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::UnsignedIntToFloat,
                     },
                     ty: ty.clone(),
                 },
-                (ST::Float, ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Float, ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::FloatConvert,
                     },
@@ -702,8 +700,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     columns: c2,
                 },
             ) if r1 == r2 && c1 == c2 => match (tsrc, tdst) {
-                (ST::Float, ST::Double) => TypedExpr {
-                    expr: EK::ImplicitConversion {
+                (ST::Float, ST::Double) => Expr {
+                    syntax: value.syntax.clone(),
+                    kind: EK::ImplicitConversion {
                         expr: self.add_expr(value),
                         kind: ICK::FloatConvert,
                     },
@@ -727,7 +726,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_bin_expr(&mut self, bin_expr: &ast::BinExpr) -> TypedExpr {
+    fn typecheck_bin_expr(&mut self, bin_expr: &ast::BinExpr) -> Expr {
         let Some((op_token, ast_operator)) = bin_expr.op_details() else {
             // syntax error
             return self.error_expr()
@@ -791,14 +790,17 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let lhs = self.typecheck_expr(&ast_lhs);
         let rhs = self.typecheck_expr(&ast_rhs);
 
+        //eprintln!("")
+
         if let Some(operation) = operation {
             match self.typecheck_builtin_operation(operation, &[lhs.ty.clone(), rhs.ty.clone()]) {
                 Ok(overload) => {
                     let lhs_conv = self.apply_implicit_conversion(lhs, None, overload.parameter_types[0].clone());
                     let rhs_conv = self.apply_implicit_conversion(rhs, None, overload.parameter_types[1].clone());
                     if is_assignment {
-                        TypedExpr {
-                            expr: ExprKind::BinaryAssign {
+                        Expr {
+                            syntax: Some(bin_expr.syntax().clone()),
+                            kind: ExprKind::BinaryAssign {
                                 op: ast_operator,
                                 signature: operation.signatures[overload.index],
                                 lhs: self.add_expr(lhs_conv),
@@ -807,8 +809,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             ty: self.sess.tyctxt.prim_tys.void.clone(),
                         }
                     } else {
-                        TypedExpr {
-                            expr: ExprKind::Binary {
+                        Expr {
+                            syntax: Some(bin_expr.syntax().clone()),
+                            kind: ExprKind::Binary {
                                 op: ast_operator,
                                 signature: operation.signatures[overload.index],
                                 lhs: self.add_expr(lhs_conv),
@@ -829,8 +832,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
         } else {
             let rhs_conv = self.apply_implicit_conversion(rhs, Some(rhs_loc), lhs.ty.clone());
-            TypedExpr {
-                expr: ExprKind::Assign {
+            Expr {
+                syntax: Some(bin_expr.syntax().clone()),
+                kind: ExprKind::Assign {
                     lhs: self.add_expr(lhs),
                     rhs: self.add_expr(rhs_conv),
                 },
@@ -840,7 +844,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
     }
 
     /// Typechecks a literal expression.
-    pub(crate) fn typecheck_lit_expr(&mut self, lit_expr: &ast::LitExpr) -> TypedExpr {
+    pub(crate) fn typecheck_lit_expr(&mut self, lit_expr: &ast::LitExpr) -> Expr {
         match lit_expr.kind() {
             ast::LiteralKind::String(_str) => {
                 todo!("literal string")
@@ -850,9 +854,10 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     Ok(v) => {
                         // TODO warn about overflow
                         // TODO unsigned suffixes
-                        TypedExpr {
+                        Expr {
+                            syntax: Some(lit_expr.syntax().clone()),
                             ty: self.sess.tyctxt.prim_tys.int.clone(),
-                            expr: ExprKind::Literal {
+                            kind: ExprKind::Literal {
                                 value: ConstantValue::Int(v as i32),
                             },
                         }
@@ -863,9 +868,10 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .error(format!("error parsing integer value: {err}"))
                             .location(&v)
                             .emit();
-                        TypedExpr {
+                        Expr {
+                            syntax: Some(lit_expr.syntax().clone()),
                             ty: self.sess.tyctxt.prim_tys.int.clone(),
-                            expr: ExprKind::Undef,
+                            kind: ExprKind::Undef,
                         }
                     }
                 }
@@ -874,9 +880,10 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 match v.value() {
                     Ok(v) => {
                         // TODO warn about non-representable floats
-                        TypedExpr {
+                        Expr {
+                            syntax: Some(lit_expr.syntax().clone()),
                             ty: self.sess.tyctxt.prim_tys.float.clone(),
-                            expr: ExprKind::Literal {
+                            kind: ExprKind::Literal {
                                 value: ConstantValue::Float(OrderedFloat::from(v as f32)),
                             },
                         }
@@ -887,16 +894,18 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             .error(format!("error parsing floating-point value: {err}"))
                             .location(&v)
                             .emit();
-                        TypedExpr {
+                        Expr {
+                            syntax: Some(lit_expr.syntax().clone()),
                             ty: self.sess.tyctxt.prim_tys.float.clone(),
-                            expr: ExprKind::Undef,
+                            kind: ExprKind::Undef,
                         }
                     }
                 }
             }
-            ast::LiteralKind::Bool(v) => TypedExpr {
+            ast::LiteralKind::Bool(v) => Expr {
+                syntax: Some(lit_expr.syntax().clone()),
                 ty: self.sess.tyctxt.prim_tys.bool.clone(),
-                expr: ExprKind::Literal {
+                kind: ExprKind::Literal {
                     value: ConstantValue::Bool(v),
                 },
             },

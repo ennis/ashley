@@ -1,9 +1,14 @@
 use id_arena::ArenaBehavior;
 use std::{fmt, marker::PhantomData, ops::Index};
 
+mod field_layout;
 pub mod interner;
 mod typed_vec;
-pub use typed_vec::{Id, TypedIndexMap, TypedIndexSet, TypedVec};
+
+pub use ashley_derive::HirType;
+pub use field_layout::HirType;
+//pub(crate) use interner::UniqueArena;
+pub(crate) use typed_vec::{Id, TypedIndexMap, TypedIndexSet, TypedVec, TypedVecMap};
 
 /// Defines arena ID types.
 macro_rules! id_types {
@@ -97,7 +102,6 @@ impl<Id: ArenaBehavior, T> Index<Id::Id> for IdMap<Id, T> {
         self.map[Id::index(index)].as_ref().unwrap()
     }
 }
-
 
 pub struct DisplayCommaSeparated<'a, T>(pub &'a [T]);
 

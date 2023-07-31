@@ -1,24 +1,24 @@
-use crate::{hir, syntax::ast, tast::DefId, Session};
-use ashley::tast::TypeCtxt;
+use crate::{
+    hir,
+    syntax::ast,
+    tast::{
+        consteval::{try_evaluate_constant_expression, ConstantValue},
+        def::DefKind,
+        scope::{resolve_name, Res, Scope},
+        DefId,
+    },
+    Session,
+};
 use spirv::Dim;
 use std::{
     fmt,
-    fmt::{Display, Formatter},
+    fmt::Display,
     hash::{Hash, Hasher},
     ops::Deref,
     ptr,
     sync::Arc,
 };
 
-use crate::{
-    diagnostic::Diagnostics,
-    tast::{
-        consteval::{try_evaluate_constant_expression, ConstantValue},
-        def::DefKind,
-        scope::{resolve_name, Res, Scope},
-        Module,
-    },
-};
 pub use hir::types::{ImageSampling, ImageType};
 
 pub type ScalarType = hir::types::ScalarType;
@@ -51,11 +51,11 @@ impl<'a> fmt::Display for ImageTypeDisplay<'a> {
             sampled_type,
             dim,
             arrayed,
-            depth,
+            depth: _,
             ms,
             sampled,
-            image_format,
-            access,
+            image_format: _,
+            access: _,
         } = self.0;
         let base_type = match sampled {
             ImageSampling::Sampled => "texture",
@@ -284,6 +284,10 @@ impl TypeKind {
         }
     }
 
+    pub fn is_unit(&self) -> bool {
+        matches!(self, TypeKind::Unit)
+    }
+
     pub fn num_components(&self) -> Option<u8> {
         match self {
             TypeKind::Scalar(_) => Some(1),
@@ -301,38 +305,32 @@ pub struct TypeSpec {
 }
 
 /// Converts an AST type to a TAST type.
-pub(crate) fn convert_type(
-    tyctxt: &mut TypeCtxt,
-    ty: ast::Type,
-    module: &Module,
-    scopes: &[Scope],
-    diag: &mut Diagnostics,
-) -> Type {
+pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) -> Type {
     match ty {
         ast::Type::TypeRef(tyref) => {
-            let Some(ident) = tyref.ident() else { return tyctxt.error.clone(); };
-            if let Some(res) = resolve_name(tyctxt, ident.text(), scopes) {
+            let Some(ident) = tyref.ident() else { return sess.tyctxt.error.clone(); };
+            if let Some(res) = resolve_name(&sess.tyctxt, ident.text(), scopes) {
                 match res {
                     Res::Global(def_id) => {
-                        let def = module.def(def_id);
+                        let def = sess.pkgs.def(def_id);
                         match def.kind {
                             DefKind::Struct(ref struct_def) => struct_def.ty.clone(),
                             _ => {
-                                diag.error("expected a type").location(ident).emit();
-                                tyctxt.error.clone()
+                                sess.diag.error("expected a type").location(ident).emit();
+                                sess.tyctxt.error.clone()
                             }
                         }
                     }
                     Res::PrimTy(ty) => ty,
                     _ => {
-                        diag.error("expected a type").location(ident).emit();
-                        tyctxt.error.clone()
+                        sess.diag.error("expected a type").location(ident).emit();
+                        sess.tyctxt.error.clone()
                     }
                 }
             } else {
                 // TODO better error message
-                diag.error("expected a type").location(ident).emit();
-                tyctxt.error.clone()
+                sess.diag.error("expected a type").location(ident).emit();
+                sess.tyctxt.error.clone()
             }
         }
         ast::Type::TupleType(_tuple_ty) => {
@@ -356,35 +354,36 @@ pub(crate) fn convert_type(
         ast::Type::ArrayType(array_type) => {
             let element_type = array_type
                 .element_type()
-                .map(|ty| convert_type(tyctxt, ty, module, scopes, diag))
-                .unwrap_or_else(|| tyctxt.error.clone());
+                .map(|ty| convert_type(ty, sess, scopes))
+                .unwrap_or_else(|| sess.tyctxt.error.clone());
 
             if let Some(expr) = array_type.length() {
-                if let Some(len) = try_evaluate_constant_expression(&expr, module, diag) {
+                if let Some(len) = try_evaluate_constant_expression(&expr, &mut sess.diag) {
                     match len {
                         ConstantValue::Int(len) => {
                             let len = len as u32;
-                            tyctxt.ty(TypeKind::Array(element_type, len))
+                            sess.tyctxt.ty(TypeKind::Array(element_type, len))
                         }
                         ConstantValue::Float(_) => {
-                            diag.error("array length must be an integer").location(expr).emit();
-                            tyctxt.error.clone()
+                            sess.diag.error("array length must be an integer").location(expr).emit();
+                            sess.tyctxt.error.clone()
                         }
                         ConstantValue::Bool(_) => {
-                            diag.error("array length must be an integer").location(expr).emit();
-                            tyctxt.error.clone()
+                            sess.diag.error("array length must be an integer").location(expr).emit();
+                            sess.tyctxt.error.clone()
                         }
                     }
                 } else {
                     // TODO better error message
-                    diag.error("array length must be a constant expression")
+                    sess.diag
+                        .error("array length must be a constant expression")
                         .location(expr)
                         .emit();
-                    tyctxt.error.clone()
+                    sess.tyctxt.error.clone()
                 }
             } else {
                 // no length
-                tyctxt.ty(TypeKind::RuntimeArray(element_type))
+                sess.tyctxt.ty(TypeKind::RuntimeArray(element_type))
             }
         }
         ast::Type::ClosureType(_closure_type) => {

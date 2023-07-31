@@ -1,8 +1,10 @@
 use crate::{
-    syntax::ast,
-    tast::{scope::Scope, Block, BlockId, Expr, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt},
+    syntax::{ast, ast::AstNode},
+    tast::{
+        scope::{Res, Scope},
+        Block, BlockId, Expr, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt,
+    },
 };
-use crate::tast::scope::Res;
 
 #[derive(Debug)]
 pub struct Stmt {
@@ -50,9 +52,9 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         })
     }*/
 
-    fn add_stmt(&mut self, stmt: Stmt) -> StmtId {
+    /*fn add_stmt(&mut self, stmt: Stmt) -> StmtId {
         self.typed_body.stmts.push(stmt)
-    }
+    }*/
 
     fn typecheck_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> StmtKind {
         let Some(ast_condition) = if_stmt.condition().and_then(|c| c.expr()) else {
@@ -67,7 +69,8 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         };
 
         if condition.ty != self.sess.tyctxt.prim_tys.bool {
-            self.sess.diag
+            self.sess
+                .diag
                 .error("condition must be a boolean expression")
                 .location(&ast_condition)
                 .emit();
@@ -97,11 +100,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
     fn typecheck_expr_stmt(&mut self, expr_stmt: &ast::ExprStmt) -> StmtKind {
         if let Some(ast_expr) = expr_stmt.expr() {
             let expr = self.typecheck_expr(&ast_expr);
-            let id = self.typed_body.exprs.push(Expr {
-                ast: Some(ast_expr.clone()),
-                ty: expr.ty,
-                kind: expr.expr,
-            });
+            let id = self.typed_body.exprs.push(expr);
             StmtKind::ExprStmt { expr: id }
         } else {
             StmtKind::Error

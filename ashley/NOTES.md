@@ -1273,3 +1273,196 @@ Alternative:
 No
 
 # Packages
+
+# Query system
+
+There should be set of functions in `Session` to query:
+- the AST of some source code (this creates a new package)
+- the definitions exposed by a package
+- the type-checked body of a definition (identified by DefId)
+
+Problem: these return references, but they can't lock the session object since it may be used recursively.
+
+Q: should there be caching in `Session`?
+A: maybe, after all the goal is to use this compiler in an interactive context
+
+This is related to the issue of incremental recomputation for the GUI
+
+Too many unknowns: a query-based system is needed, but just go pass-based for now, so that we can continue building the rest of the compiler.
+For now, consider `Session` to be a package resolution cache. Don't cache `TypedBody`s, or `hir::Module`s in it.
+
+# Session = cache
+
+# Next steps
+- specify uniform set, binding numbers in generated code
+  - Q: session API for that? A: implement in HIR first
+    - `sess.shader_interface(pkg) -> ShaderInterface`
+  - do it after HIR generation
+- specify execution context
+
+```
+struct ShaderInterface {
+  inputs: Vec<hir::GlobalVariable>,
+  outputs: Vec<hir::GlobalVariable>,
+  uniforms: Vec<hir::GlobalVariable>,
+}
+
+impl ShaderInterface {
+}
+
+// Put specified uniforms in a buffer and replace accesses to them.
+hir::transform::bufferize_uniforms(...);
+
+// Assign a binding location to the specified uniform var.
+hir::transform::assign_binding_locations(...);
+
+```
+
+
+## Linking
+
+Provide a way to group uniforms into buffers.
+
+```rust
+const SCENE_UNIFORMS: &[&str] = &[
+  "u_camera",
+  "u_resolution"
+];
+
+fn test() {
+  let mut sm = ShaderInterfaceMap::builder(&hir);
+  let camera_data_type = hir.ty_struct_by_name("CameraData");
+  
+  // provide "u_camera" into a UBO at set 0, binding 0
+  sm.provide_uniform("u_camera", Some(camera_data_type), 0, 0);
+  
+  let mut ubo_desc = todo!(); 
+  ubo_desc.field("...", ty);
+  ubo_desc.field("...", "");
+  ubo_desc.indirect_index("...", );
+  
+  sm.provide_texture_from_descriptor_array("...", 0, 0);
+  
+  
+  // FIXME: could probably provide the whole uniform buffer at once
+  
+  
+  
+  //
+  let custom_uniforms = sm.unmapped_uniforms();
+  for u in custom_uniforms {
+    // decide what to do with them
+  }
+  
+  // apply remapping
+  let bsm = sm.build();
+  transform::remap(&mut hir, bsm);
+  
+  
+  sm.textures_by_name(&[""]);
+  
+  // FIXME: with the uniform locations not specified in shader, we now must 
+  // specify interfaces at 3 locations:
+  // 1. in the shader
+  // 2. in the remapping code
+  // 3. in the struct
+  
+}
+```
+
+
+```
+struct Material {
+  ptr<Material> next;
+  vec4 color;
+}
+
+struct Data {
+   // How to specify that this is a pointer?
+   Material material;
+   
+   
+   // 1: buffer Material mat;
+   // 2: Material* mat;
+   // 3: [buffer_reference] Material mat;
+   // 4: buffer_reference Material mat;
+   // 5: buffer_reference<Material> mat;
+} 
+
+// Alternative, specified on the type:
+[[buffer_reference(align=16)]] struct Material { ... };
+buffer_reference struct Material { ... };
+
+// Issue: must create a specific type, can't just declare `buffer float[] data;`
+```
+
+Avoid pointer syntax, because then we'd need to use `->` for consistency with C.
+For now, go with `ptr<type>`.
+
+
+```
+textures descriptor_array (set = 0, binding = 0) {
+   // match all textures and put them in a descriptor array 
+   // in turn, this produces more values (texture indices) that have to be bound somewhere
+   *
+}
+
+camera_info uniform_buffer (set=1, binding=0) {
+   // match one uniform variable named "u_camera_info", of type "CameraInfo"
+   CameraInfo u_camera_info;  
+}
+
+object_info indexed_buffer (set=1, binding=1) {
+   // match one uniform variable named "u_camera_info", of type "CameraInfo"
+   CameraInfo u_camera_info;  
+}
+
+push_constants {
+   textures
+}
+```
+
+Two situations with shaders:
+- either the application expects a fixed interface, in which case it's simply a matter of remapping the uniforms to buffers & push constants
+- it's a user-provided shader, and it has custom uniforms, in which case the app should reflect them and expose them in some kind of UI (or figure out how to provide the data for them)
+
+Two steps:
+1. query groups of interface items (e.g. all textures, etc.)
+2. set the binding strategy for the group:
+  - descriptor array: for lists of textures, specify set, binding and an entry in the push constants for the index
+  - storage buffer indirect: specify a storage buffer and an entry in the push constants for the index
+  - push constants: pass them in push constants
+
+Or:
+1. apply static shader interfaces
+2. decide what to do with the remaining items
+  - reflect them 
+  - group them
+  - set the binding strategy for the group
+
+
+```
+#[derive(ShaderInterface)]
+#[push_constants]
+struct PushConstants {
+  #[texture_array_index("textures")]
+  diffuse: u32,
+}
+
+
+```
+
+
+Q: should `utils::StructuredBufferData` return `hir::Type` or `tast::Type`? Or something else?
+
+`tast::Type` is specific to the AST (contains DefIds). So `hir::Type` makes the most sense.
+What do we need to describe? The type of the fields of structs that are passed to the shader, and their offsets and sizes.
+
+Don't like the fact that we need to derive two traits: `utils::HirType` and `utils::StructuredBufferData`.
+
+TODO:
+* add offsets to `hir::types::Field`s
+* add a pass to generate offsets for struct types in HIR
+
+Suggestion: one of the goals is to abstract the strategy used to pass uniforms (or, more generally, data) to the shaders.
+Instead of rewriting code, it's better to use functions (externally defined) in the code to access data, and then link the concrete implementation later.

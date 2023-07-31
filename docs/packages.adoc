@@ -125,3 +125,46 @@ Case study: resolving packages from the file system:
 6. For each module in the Compilation
 
 
+Start by providing either:
+
+* raw sources that are visible as packages (`session.add_source(name, src)`)
+* a folder containing source files, each visible as individual packages (`session.add_folder(path)`)
+* some kind of function or object that can "produce" a package when queried (`session.add_provider(object)`)
+
+Each of those "providers" have an associated priority. When resolving a name, providers are ordered by priority.
+Each package has an associated ID, and each package has an associated provider (the one that resolved it from the name).
+
+Providers respond to queries from the compilation:
+
+* get the list of definitions in the package (list of DefIds). Providers can do that in various ways:
+
+** for file-based providers, this means parsing the source file to create a `tast::Module`.
+** for procedurally-generated packages,
+
+* get the type-checked body of a definition (if the body is available)
+* generate SPIR-V code for the package
+
+Important entry points are:
+
+* `Session::get_def(id: DefId) -> &Def`: looks into the definition cache to see if there's a corresponding definition, otherwise
+  asks the corresponding provider to fill the cache
+* `Session::resolve_package(name: PackageName) -> Option<PackageId>`: sees if a package has been resolved, otherwise asks the providers to resolve the name (will call `Cache::create_package`)
+* `Session::definitions(package: PackageId)`: returns all DefIds exposed by a package
+
+* `Cache::parse_module(&self)`: called by providers to load the AST of a package into the cache (IndexMap PackageId -> AST)
+    ** It may call back into `Session` to resolve imports
+* `Cache::parse_typed_module()`: called by providers to type-check the AST of a package (IndexMap PackageId -> typed-AST)
+* `Cache::create_package(name: PackageName)`: creates a new package ID for the name
+
+=== Standardize queries
+
+- queries should return `Result<Item, SessionError>`
+- `get_cached_def()`: returns the definition
+- `get_def()`: checks a specific definition
+- `get_package_definitions()`
+- `get_cached_package_definitions()`
+
+Ideally, `get_cached_xxx` shouldn't exist. But we need non-mut versions of the functions
+(otherwise it's near impossible to use any query that returns a borrow; e.g. `definition(&mut self)` would return a `&Def` mut-borrowing the session object, and locking access to `diag`)
+
+Must have `definition(&self)` and interior mutability, same for `diag`.

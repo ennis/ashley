@@ -5,6 +5,7 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
+    mem,
     num::NonZeroU32,
     ops::{Index, IndexMut},
 };
@@ -112,12 +113,20 @@ impl<T, I: TypedIndex> TypedVec<T, I> {
     /// Inserts an item and returns its ID.
     pub fn push(&mut self, item: T) -> I {
         self.items.push(item);
-        unsafe { I::from_index(self.items.len() - 1) }
+        I::from_index(self.items.len() - 1)
+    }
+
+    /// Resizes the vector.
+    pub fn resize(&mut self, new_len: usize, value: T)
+    where
+        T: Clone,
+    {
+        self.items.resize(new_len, value);
     }
 
     /// Returns the index of the next item to be inserted.
     pub fn next_id(&self) -> I {
-        unsafe { I::from_index(self.items.len()) }
+        I::from_index(self.items.len())
     }
 
     /// Returns the last item in the vector.
@@ -139,6 +148,16 @@ impl<T, I: TypedIndex> TypedVec<T, I> {
     pub fn len(&self) -> usize {
         self.items.len()
     }
+
+    /// Returns the element at the given index.
+    pub fn get(&self, id: I) -> Option<&T> {
+        self.items.get(id.index())
+    }
+
+    /// Returns a mutable reference to the element at the given index.
+    pub fn get_mut(&mut self, id: I) -> Option<&mut T> {
+        self.items.get_mut(id.index())
+    }
 }
 
 impl<T, I: TypedIndex> Index<I> for TypedVec<T> {
@@ -152,6 +171,84 @@ impl<T, I: TypedIndex> Index<I> for TypedVec<T> {
 impl<T, I: TypedIndex> IndexMut<I> for TypedVec<T> {
     fn index_mut(&mut self, id: I) -> &mut Self::Output {
         &mut self.items[id.index()]
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Flat map using strongly-typed indices as keys.
+///
+/// The map is backed by a vector.
+pub struct TypedVecMap<K, V> {
+    items: Vec<Option<V>>,
+    _phantom: PhantomData<fn() -> K>,
+}
+
+impl<K, V> TypedVecMap<K, V> {
+    pub fn new() -> TypedVecMap<K, V> {
+        TypedVecMap {
+            items: vec![],
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<K: TypedIndex, V> TypedVecMap<K, V> {
+    /// Inserts an element in the map.
+    ///
+    /// Returns the previous value if any.
+    pub fn insert(&mut self, id: K, item: V) -> Option<V> {
+        let index = id.index();
+        if index >= self.items.len() {
+            self.items.resize_with(index + 1, || None);
+        }
+        mem::replace(&mut self.items[index], Some(item))
+    }
+
+    /// Removes an element from the map.
+    pub fn remove(&mut self, id: K) -> Option<V> {
+        let index = id.index();
+        if index < self.items.len() {
+            self.items[index].take()
+        } else {
+            None
+        }
+    }
+
+    /// Returns the element at the given index.
+    pub fn get(&self, id: K) -> Option<&V> {
+        let index = id.index();
+        if index < self.items.len() {
+            self.items[index].as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the element at the given index.
+    pub fn get_mut(&mut self, id: K) -> Option<&mut V> {
+        let index = id.index();
+        if index < self.items.len() {
+            self.items[index].as_mut()
+        } else {
+            None
+        }
+    }
+
+    /// Returns an iterator over the items.
+    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> + '_ {
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.as_ref().map(|v| (K::from_index(i), v)))
+    }
+
+    /// Returns a mutable iterator over the items.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> + '_ {
+        self.items
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, v)| v.as_mut().map(|v| (K::from_index(i), v)))
     }
 }
 
@@ -267,8 +364,7 @@ where
 }
 
 /// Indexing with the index
-impl<K, V> Index<Id<V>> for TypedIndexMap<K, V>
-{
+impl<K, V> Index<Id<V>> for TypedIndexMap<K, V> {
     type Output = V;
 
     fn index(&self, id: Id<V>) -> &V {
@@ -277,8 +373,7 @@ impl<K, V> Index<Id<V>> for TypedIndexMap<K, V>
 }
 
 /// Indexing with the index
-impl<K, V> IndexMut<Id<V>> for TypedIndexMap<K, V>
-{
+impl<K, V> IndexMut<Id<V>> for TypedIndexMap<K, V> {
     fn index_mut(&mut self, id: Id<V>) -> &mut V {
         self.map.get_index_mut(id.index()).unwrap().1
     }

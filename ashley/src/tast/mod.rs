@@ -11,7 +11,7 @@ mod stmt;
 mod swizzle;
 pub mod ty;
 
-pub use def::{Def, FunctionDef, Qualifier, Visibility};
+pub use def::{Def, DefKind, FunctionDef, Qualifier, Visibility};
 pub use expr::Expr;
 pub use lower::lower_to_hir;
 pub(crate) use scope::Scope;
@@ -19,9 +19,9 @@ pub use ty::{FunctionType, ScalarType, Type, TypeKind};
 
 use crate::{
     builtins::PrimitiveTypes,
-    package::Package,
+    session::{PackageId, QueryError},
     syntax::ast,
-    tast::{def::DefKind, stmt::Stmt, ty::convert_type},
+    tast::{stmt::Stmt, ty::convert_type},
     utils::{Id, TypedVec},
     Session,
 };
@@ -37,21 +37,20 @@ use std::{
 pub type ExprId = Id<Expr>;
 pub type StmtId = Id<Stmt>;
 pub type BlockId = Id<Block>;
-pub type PackageImportId = Id<Package>;
 pub type LocalDefId = Id<Def>;
 pub type LocalVarId = Id<LocalVar>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct DefId {
-    pub package: Option<PackageImportId>,
+    pub package: PackageId,
     pub local_def: LocalDefId,
 }
 
-impl From<LocalDefId> for DefId {
-    fn from(local_def: LocalDefId) -> Self {
+impl DefId {
+    pub fn new(package: PackageId, local_def_id: LocalDefId) -> DefId {
         DefId {
-            package: None,
-            local_def,
+            package,
+            local_def: local_def_id,
         }
     }
 }
@@ -126,27 +125,29 @@ impl IdentExt for Option<ast::Ident> {
 #[derive(Debug)]
 pub struct Module {
     /// Imported packages.
-    packages: TypedVec<Package, PackageImportId>,
+    pub imported_packages: Vec<PackageId>,
     /// All definitions in this module.
-    defs: TypedVec<Def>,
+    pub defs: TypedVec<Def>,
+    // TODO errors?
 }
 
 impl Module {
     /// Creates a new module.
     pub fn new() -> Module {
         Module {
-            packages: Default::default(),
+            imported_packages: vec![],
             defs: Default::default(),
         }
     }
 
-    /// Returns the definition with the given ID.
+    // TODO: move somewhere else
+    /*/// Returns the definition with the given ID.
     pub fn def(&self, id: DefId) -> &Def {
         match id.package {
             Some(package) => &self.packages[package].defs[id.local_def],
             None => &self.defs[id.local_def],
         }
-    }
+    }*/
 
     /// Iterates over all the local definitions in this module.
     pub fn definitions(&self) -> impl Iterator<Item = (LocalDefId, &Def)> {
@@ -210,36 +211,23 @@ impl TypeCtxt {
 /// Context for type-checking a single source file.
 pub(crate) struct TypeCheckItemCtxt<'a, 'diag> {
     sess: &'a mut Session<'diag>,
+    package: PackageId,
     module: &'a mut Module,
     scopes: Vec<Scope>,
 }
 
 impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
-        convert_type(&mut self.sess.tyctxt, ty, self.module, &self.scopes, &mut self.sess.diag)
+        convert_type(ty, self.sess, &self.scopes)
     }
 }
 
-fn build_scope_for_def_body(module: &Module, def: LocalDefId) -> Scope {
-    let mut scope = Scope::new();
-    // bring package contents in scope
-    for package in module.packages.iter() {
-        package.import(&mut scope);
-    }
-    // reconstruct the set of visible declarations before the item body (there are no forward references in GLSL)
-    for def_index in 0..def.index() {
-        let id = LocalDefId::from_index(def_index);
-        let def = &module.defs[id];
-        scope.add_def(DefId::from(id), def);
-    }
-    scope
-}
-
-pub(crate) fn typecheck_items(sess: &mut Session, ast: ast::Root) -> Module {
+pub(crate) fn typecheck_items(sess: &mut Session, package: PackageId, ast: ast::Root) -> Module {
     let mut module = Module::new();
     sess.diag.set_current_source(ast.source_id);
     let mut ctxt = TypeCheckItemCtxt {
         sess,
+        package,
         module: &mut module,
         scopes: Vec::new(),
     };
@@ -250,35 +238,65 @@ pub(crate) fn typecheck_items(sess: &mut Session, ast: ast::Root) -> Module {
 
 pub(crate) struct TypeCheckBodyCtxt<'a, 'diag> {
     sess: &'a mut Session<'diag>,
-    module: &'a Module,
     scopes: Vec<Scope>,
     typed_body: &'a mut TypedBody,
-    //error_type: Type,
 }
 
 impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
-        convert_type(&mut self.sess.tyctxt, ty, self.module, &self.scopes, &mut self.sess.diag)
+        convert_type(ty, self.sess, &self.scopes)
     }
 }
 
-
 // TODO: some defs do not have bodies, return None for them
-pub(crate) fn typecheck_body(sess: &mut Session, module: &Module, def: LocalDefId) -> TypedBody {
-    let scope = build_scope_for_def_body(module, def);
+
+/// Builds a scope with all visible global-scope definitions visible to the body of the specified definition.
+fn build_scope_for_def_body(sess: &mut Session, def_id: DefId) -> Result<Scope, QueryError> {
+    let mut scope = Scope::new();
+
+    // bring definitions from imported packages in the scope
+    // TODO: import only externally visible definitions,
+    // TODO: import only the items specified in the import clause
+    // for now there's no syntax for that (we bring the whole package in scope), but this might change at some point
+    let imported_packages = sess.imports(def_id.package)?;
+    for imp_pkg in imported_packages {
+        let imp_defs = sess.definitions(imp_pkg)?;
+        for imp_local_def_id in imp_defs {
+            // retrieve the name of the definition, and add a new entry to the scope under that name
+            // NOTE: at some point we may gain the ability to import definitions under different names,
+            // and this will need to be updated.
+            let imp_def_id = DefId::new(imp_pkg, imp_local_def_id);
+            let imp_def = sess.pkgs.def(imp_def_id);
+            scope.add_def(imp_def_id, imp_def);
+        }
+    }
+
+    // reconstruct the set of visible declarations before the item body
+    // (there are no forward references in GLSL)
+    for prev_def_index in 0..def_id.local_def.index() {
+        let prev_def_id = DefId::new(def_id.package, LocalDefId::from_index(prev_def_index));
+        let prev_def = sess.pkgs.def(prev_def_id);
+        scope.add_def(prev_def_id, prev_def);
+    }
+
+    Ok(scope)
+}
+
+/// Typechecks the body of a definition.
+pub(crate) fn typecheck_body(sess: &mut Session, def: DefId) -> Result<TypedBody, QueryError> {
+    let scope = build_scope_for_def_body(sess, def)?;
 
     // HACK: to count the number of errors during type-checking, count the difference in number of errors
     let initial_err_count = sess.diag.error_count();
 
     let mut typed_body = TypedBody::new();
     let mut ctxt = TypeCheckBodyCtxt {
-        module,
         sess,
         scopes: vec![scope],
         typed_body: &mut typed_body,
     };
 
-    match ctxt.module.def(DefId::from(def)).kind {
+    match ctxt.sess.pkgs.def(def).kind {
         DefKind::Function(ref func) => {
             if let Some(ref ast) = func.ast {
                 if let Some(ref body) = ast.block() {
@@ -290,6 +308,7 @@ pub(crate) fn typecheck_body(sess: &mut Session, module: &Module, def: LocalDefI
                         });
                         ctxt.typed_body.params.push(id);
                     }
+                    // typecheck main block
                     let entry_block = ctxt.typecheck_block(body);
                     ctxt.typed_body.entry_block = Some(entry_block);
                 }
@@ -310,9 +329,8 @@ pub(crate) fn typecheck_body(sess: &mut Session, module: &Module, def: LocalDefI
 
     let final_err_count = sess.diag.error_count();
     typed_body.errors = final_err_count - initial_err_count;
-    typed_body
+    Ok(typed_body)
 }
-
 
 #[cfg(test)]
 mod tests {}

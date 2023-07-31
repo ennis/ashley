@@ -1,4 +1,4 @@
-use crate::{diagnostic::Diagnostics, Session, syntax::ast, tast::{Module, TypeCtxt}};
+use crate::{diagnostic::Diagnostics, syntax::ast};
 use ordered_float::OrderedFloat;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -10,7 +10,7 @@ pub enum ConstantValue {
 
 pub(crate) fn try_evaluate_constant_expression(
     expr: &ast::Expr,
-    _module: &Module,
+    //_module: &Module,
     diag: &mut Diagnostics,
 ) -> Option<ConstantValue> {
     match expr {
@@ -53,4 +53,3 @@ pub(crate) fn try_evaluate_constant_expression(
         _ => None,
     }
 }
-

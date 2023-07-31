@@ -20,3 +20,21 @@ Useful for early-stage exploration, when the graphics pipeline is not clear yet:
 ** E.g. minimize state transitions, descriptor changes
 ** A bit unclear for now
 
+== Architecture
+
+Programs are divided into packages, of which there are two kinds:
+- source package, where the user provides the source code, which is then parsed
+- declaration packages, for which there are no sources, and the user (by that I mean, the developer of the application) provides definitions directly
+
+Source packages are parsed to ASTs. ASTs are then typechecked, producing a typed-AST (TAST). Bodies of declarations are typechecked on demand. Finally, the TAST of a package and its dependencies can be lowered to HIR, which is basically an in-memory representation of SPIR-V.
+
+
+=== HIR flow
+
+The resulting HIR is not yet a shader module. Parameters and the I/O interface may not have explicit binding numbers, there might be refs to external declarations, and the HIR may have multiple entry points.
+
+* Linking: to provide a definition for external decls
+* Interface layout specification: the layout of the shader interface is specified: individual uniform params are mapped to UBO fields
+& set/binding numbers are assigned
+** the app provides the layout of the data made available to the shader
+** in return, the app can reflect the shader params that have not been mapped to anything

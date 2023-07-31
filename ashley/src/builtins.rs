@@ -523,33 +523,27 @@ pub(crate) fn pseudo_type_to_concrete_type(
             4 => builtins.ivec4.clone(),
             _ => panic!("invalid vector length"),
         },
-        PT::modf_result_vecN => {
-            match vec_len {
-                1 => builtins.modf_result_float.clone(),
-                2 => builtins.modf_result_vec2.clone(),
-                3 => builtins.modf_result_vec3.clone(),
-                4 => builtins.modf_result_vec4.clone(),
-                _ => panic!("invalid vector length"),
-            }
-        }
-        PT::modf_result_dvecN => {
-            match vec_len {
-                1 => builtins.modf_result_double.clone(),
-                2 => builtins.modf_result_dvec2.clone(),
-                3 => builtins.modf_result_dvec3.clone(),
-                4 => builtins.modf_result_dvec4.clone(),
-                _ => panic!("invalid vector length"),
-            }
-        }
-        PT::frexp_result_highp_vecN => {
-            match vec_len {
-                1 => builtins.frexp_result_float.clone(),
-                2 => builtins.frexp_result_vec2.clone(),
-                3 => builtins.frexp_result_vec3.clone(),
-                4 => builtins.frexp_result_vec4.clone(),
-                _ => panic!("invalid vector length"),
-            }
-        }
+        PT::modf_result_vecN => match vec_len {
+            1 => builtins.modf_result_float.clone(),
+            2 => builtins.modf_result_vec2.clone(),
+            3 => builtins.modf_result_vec3.clone(),
+            4 => builtins.modf_result_vec4.clone(),
+            _ => panic!("invalid vector length"),
+        },
+        PT::modf_result_dvecN => match vec_len {
+            1 => builtins.modf_result_double.clone(),
+            2 => builtins.modf_result_dvec2.clone(),
+            3 => builtins.modf_result_dvec3.clone(),
+            4 => builtins.modf_result_dvec4.clone(),
+            _ => panic!("invalid vector length"),
+        },
+        PT::frexp_result_highp_vecN => match vec_len {
+            1 => builtins.frexp_result_float.clone(),
+            2 => builtins.frexp_result_vec2.clone(),
+            3 => builtins.frexp_result_vec3.clone(),
+            4 => builtins.frexp_result_vec4.clone(),
+            _ => panic!("invalid vector length"),
+        },
         PT::mat2 => builtins.mat2.clone(),
         PT::mat3 => builtins.mat3.clone(),
         PT::mat4 => builtins.mat4.clone(),
@@ -783,6 +777,9 @@ pub struct BuiltinOperation {
 
 trait FunctionBuilderExt {
     fn emit_splat(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::IdRef;
+    fn emit_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    fn emit_i_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    //fn emit_u_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
 }
 
 impl FunctionBuilderExt for hir::FunctionBuilder<'_> {
@@ -790,10 +787,24 @@ impl FunctionBuilderExt for hir::FunctionBuilder<'_> {
     fn emit_splat(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::IdRef {
         match self.vector_length(result_type) {
             2 => self.emit_composite_construct(result_type, &[scalar, scalar]).into(),
-            3 => self.emit_composite_construct(result_type, &[scalar, scalar, scalar]).into(),
-            4 => self.emit_composite_construct(result_type, &[scalar, scalar, scalar, scalar]).into(),
-            _ => panic!("invalid vector length")
+            3 => self
+                .emit_composite_construct(result_type, &[scalar, scalar, scalar])
+                .into(),
+            4 => self
+                .emit_composite_construct(result_type, &[scalar, scalar, scalar, scalar])
+                .into(),
+            _ => panic!("invalid vector length"),
         }
+    }
+
+    fn emit_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
+        let splat = self.emit_splat(result_type, b);
+        self.emit_f_add(result_type, a, splat)
+    }
+
+    fn emit_i_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
+        let splat = self.emit_splat(result_type, b);
+        self.emit_i_add(result_type, a, splat)
     }
 }
 
@@ -833,6 +844,23 @@ builtin_operations! {
     //////////////////////////////////////////////////////
     // Operators
     //////////////////////////////////////////////////////
+
+    // NOTE: the ordering of overloads matters since there might be overlaps.
+    //
+    // For instance, `float + float` will be match by both the `vecN(vecN, vecN)` overload
+    // of operator+ and the `vecN(vecN, float)` overload. These two overloads have different lowerings
+    // (the first one is a single OpFAdd, while the second one has an additional splat).
+    // Thus we put `vecN(vecN, vecN)` first so that float+float is handled by the simplest lowering.
+    //
+    // The GLSL spec has similar overlaps in overload specifications. E.g. with the `min` function,
+    // `min(float,float)` is matched by two entries in the overload list:
+    //
+    //      genFType min(genFType x, genFType y)
+    //      genFType min(genFType x, float y)
+    //
+    // The result is the same anyway so there isn't any ambiguity in the specification.
+
+
     And {
        bool(bool,bool)      => |_ctxt, fb, args, _types, ret| fb.emit_logical_and(ret, args[0], args[1]);
     }
@@ -882,6 +910,13 @@ builtin_operations! {
         dvecN(dvecN,dvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_f_add(ret, args[0], args[1]);
         ivecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_add(ret, args[0], args[1]);
         uvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_add(ret, args[0], args[1]);
+
+        vecN(float,vecN)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_plus_scalar(ret, args[1], args[0]);
+        vecN(vecN,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_plus_scalar(ret, args[0], args[1]);
+        ivecN(int,ivecN)      => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_plus_scalar(ret, args[1], args[0]);
+        ivecN(ivecN,int)      => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_plus_scalar(ret, args[0], args[1]);
+        uvecN(uint,uvecN)     => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_plus_scalar(ret, args[1], args[0]);
+        uvecN(uvecN,uint)     => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_plus_scalar(ret, args[0], args[1]);
     }
     Mul {
         vec2(vec2,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);

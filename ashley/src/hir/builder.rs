@@ -203,10 +203,6 @@ impl IntoOperand for LoopControl {
 }
 
 /// Used to build a HIR function.
-
-// FIXME: this is a bit crap: since we have no reference to the parent module, we can't infer the type
-// of operations that reference globals or constants
-// TODO: borrow module instead
 pub struct FunctionBuilder<'a> {
     pub module: &'a mut Module,
     function: &'a mut FunctionData,

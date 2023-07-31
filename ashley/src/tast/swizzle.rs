@@ -6,7 +6,7 @@ pub(crate) enum ComponentSyntaxError {
     TooManyComponents,
 }
 
-pub(crate) type ComponentIndices = SmallVec<[i32;4]>;
+pub(crate) type ComponentIndices = SmallVec<[i32; 4]>;
 
 /// Converts a component selection syntax into corresponding component indices.
 ///
@@ -25,16 +25,26 @@ pub(crate) type ComponentIndices = SmallVec<[i32;4]>;
 ///
 /// * "rgba" => `vec![0,1,2,3]`
 /// * "yyxx" => `vec![1,1,2,2]`
-pub(crate) fn get_component_indices(selection: &str, num_components: usize) -> Result<ComponentIndices, ComponentSyntaxError> {
-    let check_component_name_set =
-        |names: &str| -> Option<ComponentIndices> { selection.chars().map(|c| names.find(c).map(|i| i as i32)).collect() };
+pub(crate) fn get_component_indices(
+    selection: &str,
+    num_components: usize,
+) -> Result<ComponentIndices, ComponentSyntaxError> {
+    if selection.is_empty() {
+        return Err(ComponentSyntaxError::InvalidSyntax);
+    }
+
+    let check_component_name_set = |names: &str| -> Option<ComponentIndices> {
+        selection.chars().map(|c| names.find(c).map(|i| i as i32)).collect()
+    };
 
     let v = check_component_name_set("rgba")
         .or_else(|| check_component_name_set("xyzw"))
         .or_else(|| check_component_name_set("stpq"));
 
     if let Some(v) = v {
-        if v.len() < num_components {
+        // check that the maximum component index fits in the source type
+        let max_component_index = v.iter().cloned().max().unwrap();
+        if max_component_index < num_components as i32 {
             Ok(v)
         } else {
             Err(ComponentSyntaxError::TooManyComponents)

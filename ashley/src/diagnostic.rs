@@ -6,7 +6,6 @@ use codespan_reporting::{
 };
 use rowan::TextRange;
 use std::{
-    collections::HashMap,
     ops::Range,
     sync::{Arc, RwLock},
 };
@@ -61,7 +60,7 @@ impl SourceFile {
 #[derive(Debug)]
 struct SourceFileProviderInner {
     files: Vec<SourceFile>,
-    files_by_path: HashMap<String, usize>,
+    //files_by_path: HashMap<String, usize>,
 }
 
 /// Provides access to source files by ID and by path, for use with diagnostics.
@@ -72,7 +71,7 @@ impl SourceFileProvider {
     pub fn new() -> SourceFileProvider {
         SourceFileProvider(Arc::new(RwLock::new(SourceFileProviderInner {
             files: vec![],
-            files_by_path: Default::default(),
+            //files_by_path: Default::default(),
         })))
     }
 
@@ -193,11 +192,7 @@ pub struct Diagnostics<'a> {
 }
 
 impl<'a> Diagnostics<'a> {
-    pub fn new(
-        files: SourceFileProvider,
-        writer: impl WriteColor + 'a,
-        config: term::Config,
-    ) -> Diagnostics<'a> {
+    pub fn new(files: SourceFileProvider, writer: impl WriteColor + 'a, config: term::Config) -> Diagnostics<'a> {
         Diagnostics {
             files,
             config,
@@ -328,7 +323,7 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
         self
     }
 
-    pub fn emit(mut self) {
+    pub fn emit(self) {
         match self.diag.severity {
             Severity::Bug => {
                 self.sink.inner.bug_count += 1;
@@ -349,11 +344,4 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
         )
         .expect("diagnostic output failed")
     }
-}
-
-/// Diagnostic object in the process of being built.
-///
-/// It must be reported to a diagnostic sink (see `Diagnostics::emit`).
-pub struct Diagnostic {
-    diag: CsDiagnostic<SourceId>,
 }

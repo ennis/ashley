@@ -1,12 +1,14 @@
 mod builder;
 mod constant;
-mod list;
+//mod list;
 //pub mod print;
+mod layout;
 pub mod transform;
 pub mod types;
 mod visit;
 
 use crate::{
+    diagnostic::SourceLocation,
     hir::types::ScalarType,
     utils::{id_types, interner::UniqueArena},
 };
@@ -14,9 +16,15 @@ use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::{spirv, spirv::LinkageType};
 use smallvec::SmallVec;
-use std::{fmt, hash::Hash, num::NonZeroU32};
+use spirv::StorageClass;
+use std::{collections::HashSet, fmt, hash::Hash, num::NonZeroU32};
 
-pub use self::{builder::FunctionBuilder, constant::ConstantData, types::TypeData};
+pub use self::{
+    builder::FunctionBuilder,
+    constant::ConstantData,
+    layout::{ArrayLayout, InnerLayout, Layout, LayoutError, StructLayout},
+    types::{TypeData, TypeDataDebug},
+};
 
 //--------------------------------------------------------------------------------------------------
 
@@ -409,7 +417,7 @@ impl FunctionData {
     ) -> (FunctionData, Block) {
         let mut blocks = Arena::new();
         let mut values = Arena::new();
-        let mut locals = Arena::new();
+        let locals = Arena::new();
 
         let arguments: Vec<_> = parameters
             .iter()
@@ -518,12 +526,19 @@ pub enum Domain {
 
 /// Describes a global variable.
 pub struct GlobalVariableData {
+    /// Name of the global variable. Should be unique across all global variables and functions in a module.
     pub name: String,
     /// Type of the global variable (not necessarily a pointer).
     /// TODO replace with a pointer?
     pub ty: Type,
+    /// Storage class.
     pub storage_class: spirv::StorageClass,
-    pub linkage: Option<LinkageType>,
+    /// Optional source location.
+    pub source_location: Option<SourceLocation>,
+    /// SPIR-V variable decorations.
+    pub decorations: Vec<rspirv::sr::Decoration>,
+    /// Whether the global variable has been explicitly removed.
+    pub removed: bool,
 }
 
 pub enum ProgramKind {
@@ -638,6 +653,16 @@ impl Module {
         self.define_type(TypeData::Struct(Arc::new(struct_type)))
     }*/
 
+    /// Returns information about a type
+    pub fn type_data(&self, ty: Type) -> &TypeData<'static> {
+        &self.types[ty]
+    }
+
+    /// Returns a proxy for debug-printing a type.
+    pub fn debug_type(&self, ty: Type) -> TypeDataDebug {
+        TypeDataDebug(self, self.type_data(ty))
+    }
+
     /// Returns the unknown type.
     pub fn ty_unknown(&self) -> Type {
         self.ty_unknown
@@ -653,6 +678,42 @@ impl Module {
         self.ty_unit
     }
 
+    /// Defines and returns the float type.
+    pub fn ty_float(&mut self) -> Type {
+        self.define_type(TypeData::Scalar(ScalarType::Float))
+    }
+
+    /// Defines and returns the int type.
+    pub fn ty_int(&mut self) -> Type {
+        self.define_type(TypeData::Scalar(ScalarType::Int))
+    }
+
+    /// Defines and returns the vec2 type.
+    pub fn ty_vec2(&mut self) -> Type {
+        self.define_type(TypeData::Vector(ScalarType::Float, 2))
+    }
+    /// Defines and returns the vec3 type.
+    pub fn ty_vec3(&mut self) -> Type {
+        self.define_type(TypeData::Vector(ScalarType::Float, 3))
+    }
+    /// Defines and returns the vec4 type.
+    pub fn ty_vec4(&mut self) -> Type {
+        self.define_type(TypeData::Vector(ScalarType::Float, 4))
+    }
+
+    /// Defines and returns the ivec2 type.
+    pub fn ty_ivec2(&mut self) -> Type {
+        self.define_type(TypeData::Vector(ScalarType::Int, 2))
+    }
+    /// Defines and returns the ivec3 type.
+    pub fn ty_ivec3(&mut self) -> Type {
+        self.define_type(TypeData::Vector(ScalarType::Int, 3))
+    }
+    /// Defines and returns the ivec4 type.
+    pub fn ty_ivec4(&mut self) -> Type {
+        self.define_type(TypeData::Vector(ScalarType::Int, 4))
+    }
+
     /// Interns a constant.
     pub fn define_constant(&mut self, c: ConstantData) -> Constant {
         if let Some(id) = self.constants.get_index_of(&c) {
@@ -666,6 +727,11 @@ impl Module {
         self.globals.alloc(v)
     }
 
+    /// Computes the layout of a type (size and alignment) according to std140 rules.
+    pub fn std140_layout(&self, ty: Type) -> Result<Layout, LayoutError> {
+        layout::std140_layout(self, self.type_data(ty))
+    }
+
     /// Returns a pointer type.
     pub fn pointer_type(&mut self, pointee_type: Type, storage_class: spirv::StorageClass) -> Type {
         self.define_type(TypeData::Pointer {
@@ -674,6 +740,50 @@ impl Module {
         })
     }
 
+    /// Returns an iterator over all interface variables (global vars with input, output or uniform storage classes).
+    ///
+    /// Global variables marked as removed are not considered.
+    pub fn interface_variables(&self) -> impl Iterator<Item = (GlobalVariable, &'_ GlobalVariableData)> + '_ {
+        self.globals.iter().filter(|(_, gdata)| {
+            !gdata.removed
+                && match gdata.storage_class {
+                    StorageClass::Input | StorageClass::Output | StorageClass::Uniform => true,
+                    _ => false,
+                }
+        })
+    }
+
+    /// Finds a global variable by name.
+    ///
+    /// Global variables marked as removed are not considered.
+    pub fn find_variable(&self, name: &str) -> Option<(GlobalVariable, &GlobalVariableData)> {
+        self.globals
+            .iter()
+            .find(|(g, gdata)| !gdata.removed && &gdata.name == name)
+    }
+
+    /// Finds an interface variable by name.
+    ///
+    /// Global variables marked as removed are not considered.
+    pub fn find_interface_variable(&self, name: &str) -> Option<(GlobalVariable, &GlobalVariableData)> {
+        self.interface_variables()
+            .find(|(g, gdata)| !gdata.removed && &gdata.name == name)
+    }
+
+    /// Flags the specified global variable as removed.
+    ///
+    /// Note that this doesn't actually remove the global variables from `self.globals` as the
+    /// underlying data structure doesn't support it. Instead the `removed` flag of the `GlobalVariableData`
+    /// is set.
+    pub fn remove_global(&mut self, var: GlobalVariable) {
+        self.globals[var].removed = true;
+    }
+
+    /// Returns the vector length of a vector type, or 1 for scalar types.
+    ///
+    /// # Panics
+    ///
+    /// If the type isn't a scalar or vector type.
     pub fn vector_length(&self, ty: Type) -> usize {
         match self.types[ty] {
             TypeData::Scalar(_) => 1,

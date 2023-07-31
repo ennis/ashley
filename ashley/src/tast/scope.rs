@@ -1,10 +1,5 @@
-use crate::{
-    builtins::BuiltinOperation,
-    tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCheckItemCtxt, TypeCtxt},
-    Session,
-};
+use crate::tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCheckItemCtxt, TypeCtxt};
 use std::{collections::HashMap, sync::Arc};
-use tracing::trace;
 
 /// Result of scope resolution.
 #[derive(Clone, Debug)]
@@ -89,10 +84,10 @@ impl Scope {
 }
 
 impl TypeCheckItemCtxt<'_, '_> {
-    /// Resolves a name in the current scope
+    /*/// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
         resolve_name(&self.sess.tyctxt, name, &self.scopes)
-    }
+    }*/
 }
 
 impl TypeCheckBodyCtxt<'_, '_> {

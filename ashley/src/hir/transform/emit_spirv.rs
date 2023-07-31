@@ -11,6 +11,7 @@ use rspirv::{
     dr::InsertPoint,
     spirv,
     spirv::{AddressingModel, Capability, LinkageType, MemoryModel, Word},
+    sr::Decoration,
 };
 use spirv::StorageClass;
 use tracing::error;
@@ -299,7 +300,7 @@ impl<'a> Ctxt<'a> {
                         let condition_id = match condition {
                             IdRef::Value(v) => values[*v],
                             IdRef::Constant(c) => self.emit_constant_recursive(*c),
-                            _ => panic!("invalid branch condition")
+                            _ => panic!("invalid branch condition"),
                         };
                         self.builder
                             .branch_conditional(condition_id, labels[*true_block], labels[*false_block], [])
@@ -349,12 +350,26 @@ impl<'a> Ctxt<'a> {
         }
 
         let gdata = &self.module.globals[g];
+        if gdata.removed {
+            panic!("emit_global called on removed global variable");
+        }
+
         let ty = self.emit_type_recursive(gdata.ty);
         let ptr_ty = self.builder.type_pointer(None, gdata.storage_class, ty);
         let id = self.builder.variable(ptr_ty, None, gdata.storage_class, None); // TODO initializers
-        if let Some(linkage) = gdata.linkage {
-            self.emit_linkage_decoration(id, &gdata.name, linkage);
+
+        for deco in gdata.decorations.iter() {
+            match deco {
+                Decoration::LinkageAttributes(name, linkage) => {
+                    self.emit_linkage_decoration(id, &name, *linkage);
+                }
+                _ => {
+                    // TODO other decorations
+                    warn!("unimplemented decoration {:?}", deco);
+                }
+            }
         }
+
         self.builder.name(id, &gdata.name);
         self.global_map.insert(g, id);
         id
@@ -446,8 +461,10 @@ pub fn write_spirv(module: &Module) -> Vec<u32> {
         global_map: GlobalMap::with_capacity(module.globals.len()),
     };
 
-    for (g, _) in module.globals.iter() {
-        ctxt.emit_global(g);
+    for (g, gdata) in module.globals.iter() {
+        if !gdata.removed {
+            ctxt.emit_global(g);
+        }
     }
 
     for (f, _) in module.functions.iter() {

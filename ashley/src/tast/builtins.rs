@@ -2,11 +2,10 @@
 use crate::{
     builtins::{pseudo_type_to_concrete_type, ImageClass, PseudoType},
     tast::{
-        def::{DefKind, FunctionDef},
+        def::{DefKind, FunctionDef, FunctionParam},
         Def, FunctionType, TypeCheckItemCtxt, Visibility,
     },
 };
-use crate::tast::def::FunctionParam;
 
 impl TypeCheckItemCtxt<'_, '_> {
     pub(crate) fn define_builtin_functions(&mut self) {
@@ -31,15 +30,18 @@ impl TypeCheckItemCtxt<'_, '_> {
                             .collect();
                         let return_type =
                             pseudo_type_to_concrete_type(sig.result_type, &self.sess.tyctxt.prim_tys, vec_len, *ic);
-                        let parameters: Vec<FunctionParam> = arg_types.iter().map(|arg| FunctionParam {
-                            ast: None,
-                            ty: arg.clone(),
-                            name: "".to_string(),
-                        }).collect();
+                        let parameters: Vec<FunctionParam> = arg_types
+                            .iter()
+                            .map(|arg| FunctionParam {
+                                ast: None,
+                                ty: arg.clone(),
+                                name: "".to_string(),
+                            })
+                            .collect();
                         let function_type = self.sess.tyctxt.ty(FunctionType { arg_types, return_type });
 
                         self.module.defs.push(Def {
-                            package: None,
+                            //package: None,
                             location: None,
                             builtin: true,
                             // there's an entry named `r#mod` in the builtin signatures because it clashes with the rust keyword, so we need to trim the `r#` prefix

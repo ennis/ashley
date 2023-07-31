@@ -8,18 +8,10 @@ use crate::{
         Def, DefId, FunctionType, IdentExt, TypeCheckItemCtxt, TypeKind, Visibility,
     },
 };
-use crate::tast::ty::convert_type;
-
-enum Item {
-    GlobalVariable(GlobalDef),
-    Function(FunctionDef),
-    StructDef(StructDef),
-}
 
 impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
     pub(super) fn typecheck_module(&mut self, module: &ast::Module) {
-        let mut scope = Scope::new();
-        self.scopes.push(scope);
+        self.scopes.push(Scope::new());
         for item in module.items() {
             self.typecheck_item(&item);
         }
@@ -69,7 +61,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         let linkage = None;
 
         let def = Def {
-            package: None,
+            //package: None,
             location: Some(global.source_location()),
             builtin: false,
             name: name.clone(),
@@ -82,7 +74,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             }),
         };
 
-        let def_id: DefId = self.module.defs.push(def).into();
+        let def_id = DefId::new(self.package, self.module.defs.push(def));
         // TODO check for duplicate definitions
         self.scopes.last_mut().unwrap().add(name, Res::Global(def_id));
         Some(def_id)
@@ -154,7 +146,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         };
 
         let def = Def {
-            package: None,
+            //package: None,
             location: Some(fn_def.source_location()),
             builtin: false,
             name: name.clone(),
@@ -169,7 +161,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             }),
         };
         // TODO: check for duplicate definitions
-        let def_id: DefId = self.module.defs.push(def).into();
+        let def_id = DefId::new(self.package, self.module.defs.push(def));
         self.scopes.last_mut().unwrap().add_function_overload(name, def_id);
         Some(def_id)
     }
@@ -184,9 +176,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         for field in struct_def.fields() {
             let ty = field
                 .ty()
-                .map(|ty| {
-                    self.convert_type(ty.clone())
-                })
+                .map(|ty| self.convert_type(ty.clone()))
                 .unwrap_or_else(|| self.sess.tyctxt.error.clone());
             fields.push((field.ident().to_string_opt(), ty));
         }
@@ -195,12 +185,12 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         let next_def_id = self.module.defs.next_id();
         let ty = self.sess.tyctxt.ty(TypeKind::Struct {
             name: name.clone(),
-            def: Some(DefId::from(next_def_id)),
+            def: Some(DefId::new(self.package, next_def_id)),
             fields,
         });
 
         let def_id = self.module.defs.push(Def {
-            package: None,
+            //package: None,
             location: Some(struct_def.source_location()),
             builtin: false,
             name,
@@ -211,6 +201,6 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             }),
         });
         assert_eq!(def_id, next_def_id);
-        def_id.into()
+        DefId::new(self.package, def_id)
     }
 }

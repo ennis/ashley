@@ -1,20 +1,19 @@
 extern crate self as ashley;
+#[macro_use]
+extern crate tracing;
 
 pub mod builtins;
 pub mod diagnostic;
 pub mod hir;
-pub mod package;
+mod session;
 pub mod syntax;
 pub mod tast;
-mod utils;
-mod session;
+pub mod utils;
 
-pub use session::Session;
+pub use session::{DefDebug, FileSystemPackageResolver, QueryError, Session};
 
 // re-export codespan_reporting and termcolor so that it's easier to set up a session
-pub use codespan_reporting;
-pub use codespan_reporting::term::termcolor;
-
+pub use codespan_reporting::{self, term::termcolor};
 
 // The main entry point for the compiler.
 //pub fn compile()

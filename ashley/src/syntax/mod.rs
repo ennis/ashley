@@ -6,7 +6,7 @@ mod syntax_kind;
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{
-    diagnostic::{AsSourceLocation, Diagnostics, SourceId, SourceLocation},
+    diagnostic::{AsSourceLocation, SourceId, SourceLocation},
     session::Session,
     syntax::{ast::AstNode, parse::parse_raw},
 };
@@ -70,7 +70,8 @@ mod tests {
     fn parse_source_text(text: &str) -> SyntaxNode {
         let mut sess = Session::new();
         let (package, _) = sess.get_or_create_package("test");
-        sess.parse(package, "test", text).module.syntax().clone()
+        let package = sess.create_source_package("test", "test", text);
+        sess.get_ast(package).module.syntax().clone()
     }
 
     fn expr(expr: &str) -> SyntaxNode {

@@ -308,10 +308,10 @@ impl Ident {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Radix {
-    Binary,
-    Octal,
-    Decimal,
-    Hexadecimal,
+    Binary = 2,
+    Octal = 8,
+    Decimal = 10,
+    Hexadecimal = 16,
 }
 
 impl Radix {
@@ -356,6 +356,8 @@ impl IntNumber {
 
     pub fn value(&self) -> Result<i64, ParseIntError> {
         let (_, text, _) = self.split_into_parts();
+        dbg!(text);
+        dbg!(self.radix());
         i64::from_str_radix(&text.replace('_', ""), self.radix() as u32)
     }
 
@@ -521,6 +523,8 @@ impl Qualifier {
 
     pub fn qualifier(&self) -> Option<tast::Qualifier> {
         match self.token().kind() {
+            SyntaxKind::BUFFER_KW => Some(tast::Qualifier::Buffer),
+            SyntaxKind::SHARED_KW => Some(tast::Qualifier::Shared),
             SyntaxKind::UNIFORM_KW => Some(tast::Qualifier::Uniform),
             SyntaxKind::IN_KW => Some(tast::Qualifier::In),
             SyntaxKind::OUT_KW => Some(tast::Qualifier::Out),
@@ -571,8 +575,8 @@ mod tests {
 
     fn parse_module(text: &str) -> Module {
         let mut session = Session::new();
-        let (package, _) = session.get_or_create_package(PackageName::new("<input>"));
-        session.parse(package, "<input>", text).module
+        let package = session.create_source_package(PackageName::new("<input>"), "<input>", text);
+        session.get_ast(package).module
     }
 
     #[test]

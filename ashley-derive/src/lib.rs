@@ -4,10 +4,7 @@ extern crate proc_macro;
 use proc_macro2::Span;
 use quote::{ToTokens, TokenStreamExt};
 
-mod arena_any;
-//mod constraints;
-
-use crate::arena_any::derive_arena_any_impl;
+mod hir_type;
 
 //--------------------------------------------------------------------------------------------------
 struct CrateName;
@@ -19,12 +16,7 @@ impl ToTokens for CrateName {
     }
 }
 
-#[proc_macro_derive(ArenaAny)]
-pub fn derive_arena_any(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    derive_arena_any_impl(input)
+#[proc_macro_derive(HirType)]
+pub fn hir_type_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    hir_type::derive(input).into()
 }
-
-/*#[proc_macro]
-pub fn operation_constraint_match_body(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    operation_constraint_match_body_impl(input)
-}*/

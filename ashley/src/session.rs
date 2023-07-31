@@ -1,23 +1,28 @@
 //! Compilation cache
 use crate::{
-    diagnostic::{Diagnostics, SourceFileProvider, SourceId},
+    diagnostic::{Diagnostics, SourceFileProvider},
     hir, syntax,
     syntax::ast,
     tast,
-    tast::TypeCtxt,
+    tast::{typecheck_body, typecheck_items, Def, DefId, LocalDefId, TypeCtxt},
     termcolor,
-    utils::{Id, TypedIndexMap},
+    utils::{Id, TypedIndexMap, TypedVecMap},
 };
+use ashley::tast::lower_to_hir;
+use codespan_reporting::term;
+use std::{borrow::Cow, collections::HashSet, fmt, fs, path::PathBuf, sync::Arc};
 
-use crate::termcolor::WriteColor;
-use codespan_reporting::{
-    term,
-    term::termcolor::{ColorChoice, StandardStream},
-};
-use indexmap::IndexMap;
-use smallvec::SmallVec;
-use std::{borrow::Cow, collections::HashMap, fmt, fs, path::PathBuf, sync::Arc};
-use thiserror::Error;
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueryError {
+    #[error("package has no source code attached")]
+    NoSource,
+    #[error("requested definition was not in cache")]
+    NotInCache,
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Arguments of a package name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -121,7 +126,7 @@ impl From<String> for PackageName<'_> {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 #[error("package resolution error")]
 pub struct PackageResolutionError(#[from] anyhow::Error);
 
@@ -130,7 +135,7 @@ pub struct PackageResolutionError(#[from] anyhow::Error);
 /// The resolver is responsible for looking up the package name in the filesystem, or other sources
 /// (it could be a procedurally generated package).
 pub trait PackageResolver {
-    /// Resolves the package by name and imports its definitions into the module.
+    /// Resolves the package by name.
     fn resolve(&self, cache: &mut Session, name: &PackageName) -> Result<PackageId, PackageResolutionError>;
 }
 
@@ -165,11 +170,9 @@ impl PackageResolver for FileSystemPackageResolver {
             full_path.push(&path);
             if full_path.exists() {
                 let source_path = full_path.to_string_lossy().into_owned();
-
                 let source_text =
                     fs::read_to_string(&full_path).map_err(|e| PackageResolutionError(anyhow::Error::new(e)))?;
-                let (package, _) = session.get_or_create_package(name.clone());
-                session.parse(package, &source_path, source_text.as_str());
+                let package = session.create_source_package(name.clone(), &source_path, source_text.as_str());
                 return Ok(package);
             }
         }
@@ -198,19 +201,59 @@ pub struct PackageCacheEntry {
     pub(crate) ast: Option<ast::Root>,
     pub(crate) status: PackageStatus,
     pub(crate) module: Option<tast::Module>,
-    pub(crate) bodies: Option<Vec<tast::TypedBody>>,
-    pub(crate) hir: Option<hir::Module>,
+    pub(crate) bodies: TypedVecMap<LocalDefId, tast::TypedBody>,
+    //pub(crate) hir: Option<hir::Module>,
 }
 
 pub type PackageId = Id<PackageCacheEntry>;
 
+pub struct DefDebug<'a>(DefId, &'a Def);
+
+impl<'a> fmt::Debug for DefDebug<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "DefId({:04x}:{:04x} `{}`)",
+            self.0.package.0, self.0.local_def.0, self.1.name
+        )
+    }
+}
+
+pub struct Pkgs {
+    packages: TypedIndexMap<PackageName<'static>, PackageCacheEntry>,
+}
+
+impl Pkgs {
+    /// Resolves a definition by ID.
+    pub fn def(&self, id: DefId) -> &Def {
+        if let Some(ref tast) = self.packages[id.package].module {
+            tast.defs.get(id.local_def).expect("invalid DefId")
+        } else {
+            todo!("typecheck module")
+        }
+    }
+
+    /// Returns a debug proxy for the definition.
+    pub fn debug_def(&self, id: DefId) -> DefDebug {
+        DefDebug(id, self.def(id))
+    }
+
+    /// Returns the typed ast for the specified package.
+    pub fn module(&self, id: PackageId) -> Option<&tast::Module> {
+        self.packages[id].module.as_ref()
+    }
+}
+
 /// Compilation session.
 pub struct Session<'a> {
+    /// Diagnostics output
     pub diag: Diagnostics<'a>,
+    /// Types
     pub tyctxt: TypeCtxt,
+    /// Packages & associated modules and definitions.
+    pub pkgs: Pkgs,
     pub(crate) source_files: SourceFileProvider,
     resolver: Arc<dyn PackageResolver>,
-    entries: TypedIndexMap<PackageName<'static>, PackageCacheEntry>,
 }
 
 impl<'a> Session<'a> {
@@ -227,7 +270,9 @@ impl<'a> Session<'a> {
             tyctxt: TypeCtxt::new(),
             source_files,
             resolver: Arc::new(DummyPackageResolver),
-            entries: TypedIndexMap::new(),
+            pkgs: Pkgs {
+                packages: TypedIndexMap::new(),
+            },
         }
     }
 
@@ -237,31 +282,34 @@ impl<'a> Session<'a> {
         self
     }
 
-    /// Sets the diagnostics output.
-    pub fn with_diagnostic_output(mut self, writer: impl WriteColor + 'a) -> Session<'a> {
-        self.diag = Diagnostics::new(self.source_files.clone(), writer, term::Config::default());
+    /*/// Sets the diagnostics output.
+    pub fn with_diagnostic_output(mut self, diag: impl WriteColor + 'a) -> Session<'a> {
+        self.diag = diag;
         self
-    }
+    }*/
 
     /// Gets the package with the given name, or creates it if it doesn't exist.
-    pub fn get_or_create_package<'b>(&mut self, name: impl Into<PackageName<'b>>) -> (PackageId, bool) {
+    pub(crate) fn get_or_create_package<'b>(&mut self, name: impl Into<PackageName<'b>>) -> (PackageId, bool) {
         let name = name.into();
-        if let Some((id, _, _)) = self.entries.get_full(&name) {
+        if let Some((id, _, _)) = self.pkgs.packages.get_full(&name) {
             return (id, false);
         }
         let name = name.into_static();
-        let (id, _) = self.entries.insert_full(
+        let (id, _) = self.pkgs.packages.insert_full(
             name,
             PackageCacheEntry {
                 ast: None,
                 status: PackageStatus::Unparsed,
                 module: None,
-                bodies: None,
-                hir: None,
+                bodies: TypedVecMap::new(),
+                //hir: None,
             },
         );
         (id, true)
     }
+
+    //----------------------------------------------------------------------------------------------
+    // QUERIES
 
     /// Resolves the package with the given name.
     pub fn resolve_package(&mut self, name: &PackageName) -> Result<PackageId, PackageResolutionError> {
@@ -269,33 +317,149 @@ impl<'a> Session<'a> {
         resolver.resolve(self, name)
     }
 
-    pub fn package(&mut self, id: PackageId) -> &PackageCacheEntry {
-        &self.entries[id]
+    /// Returns all definitions in the specified package.
+    ///
+    /// May trigger type-checking and resolution of definitions (but not bodies) if necessary.
+    pub fn definitions(&mut self, id: PackageId) -> Result<Vec<LocalDefId>, QueryError> {
+        Ok(self.get_module(id)?.definitions().map(|(id, _)| id).collect())
     }
 
-    pub fn package_mut(&mut self, id: PackageId) -> &mut PackageCacheEntry {
-        &mut self.entries[id]
+    /// Returns the packages directly imported by the specified package.
+    pub fn imports(&mut self, id: PackageId) -> Result<Vec<PackageId>, QueryError> {
+        Ok(self.get_module(id)?.imported_packages.clone())
     }
 
-    pub fn parse(
-        &mut self,
-        package_id: PackageId,
-        file_name: &str,
-        source: &str,
-    ) -> ast::Root {
-        if let Some(ref ast) = self.entries[package_id].ast {
-            return ast.clone();
+    /// Returns the transitive list of dependencies of the specified package.
+    pub fn dependencies(&mut self, id: PackageId) -> Result<Vec<PackageId>, QueryError> {
+        let mut deps = HashSet::new();
+        let mut visit = vec![id];
+        while let Some(package) = visit.pop() {
+            let module = self.get_module(package)?;
+            for import in module.imported_packages.iter() {
+                if deps.insert(*import) {
+                    visit.push(*import);
+                }
+            }
+        }
+        Ok(deps.into_iter().collect())
+    }
+
+    /// Returns the AST of the specified package.
+    ///
+    /// Panics if the id doesn't refer to a source package.
+    pub fn get_ast(&self, id: PackageId) -> Result<ast::Root, QueryError> {
+        self.pkgs.packages[id].ast.clone().ok_or(QueryError::NoSource)
+    }
+
+    /// Returns the typed AST module for the given package.
+    ///
+    /// May trigger type-checking and resolution of definitions (but not bodies) if necessary.
+    /// The module may have errors.
+    pub fn get_module(&mut self, package: PackageId) -> Result<&tast::Module, QueryError> {
+        if self.pkgs.packages[package].module.is_none() {
+            let ast = self.get_ast(package)?;
+            let module = typecheck_items(self, package, ast);
+            let p = &mut self.pkgs.packages[package];
+            p.module = Some(module);
         }
 
-        assert!(matches!(self.entries[package_id].status, PackageStatus::Unparsed));
-        self.entries[package_id].status = PackageStatus::Parsing;
+        Ok(self.pkgs.packages[package].module.as_ref().unwrap())
+    }
 
+    /// Returns an already computed type-checked module.
+    pub fn get_module_cached(&self, package: PackageId) -> Result<&tast::Module, QueryError> {
+        self.pkgs.packages[package]
+            .module
+            .as_ref()
+            .ok_or(QueryError::NotInCache)
+    }
+
+    fn typecheck_bodies_inner(&mut self, package: PackageId) -> Result<(), QueryError> {
+        let defs = self.definitions(package)?;
+        for def in defs {
+            let tbody = typecheck_body(self, DefId::new(package, def))?;
+            self.pkgs.packages[package].bodies.insert(def, tbody);
+        }
+        Ok(())
+    }
+
+    /// Type-checks all bodies in the given package and their dependencies.
+    pub fn typecheck_bodies(&mut self, package: PackageId) -> Result<(), QueryError> {
+        let dependencies = self.dependencies(package)?;
+        for dep in dependencies {
+            self.typecheck_bodies_inner(dep)?;
+        }
+        self.typecheck_bodies_inner(package)?;
+        Ok(())
+    }
+
+    /// Type-checks the body of the specified definition.
+    pub fn get_typed_body(&mut self, def: DefId) -> Result<&tast::TypedBody, QueryError> {
+        // ensure that the typed AST is built
+        let _ = self.get_module(def.package);
+        if self.pkgs.packages[def.package].bodies.get(def.local_def).is_none() {
+            // typecheck body
+            let typechecked = typecheck_body(self, def)?;
+            self.pkgs.packages[def.package]
+                .bodies
+                .insert(def.local_def, typechecked);
+        }
+
+        // body must be there otherwise we'd have returned early due to an error condition
+        Ok(self.pkgs.packages[def.package].bodies.get(def.local_def).unwrap())
+    }
+
+    pub fn get_typed_body_cached(&self, def: DefId) -> Result<&tast::TypedBody, QueryError> {
+        self.pkgs.packages[def.package]
+            .bodies
+            .get(def.local_def)
+            .ok_or(QueryError::NotInCache)
+    }
+
+    /// Compiles the package to HIR (in-memory SPIR-V).
+    pub fn compile_to_hir(&mut self, package: PackageId) -> Result<hir::Module, QueryError> {
+        lower_to_hir(self, package)
+    }
+
+    /// Compiles the package and its dependencies to a standalone SPIR-V module.
+    ///
+    /// This includes all dependencies into the module.
+    pub fn compile_to_spirv(&mut self, package: PackageId) -> Result<Vec<u32>, QueryError> {
+        let hir = lower_to_hir(self, package)?;
+        let spv_bytecode = hir::transform::write_spirv(&hir);
+        Ok(spv_bytecode)
+    }
+
+    //----------------------------------------------------------------------------------------------
+    // Provider entry points
+
+    /// Provides a package as a source file.
+    ///
+    /// # Arguments
+    /// * package package name
+    /// * file_name identifier for the associated source file, usually a path
+    /// * source source text
+    pub fn create_source_package<'b>(
+        &mut self,
+        package_name: impl Into<PackageName<'b>>,
+        file_name: &str,
+        source: &str,
+    ) -> PackageId {
+        // FIXME: if called again, should invalidate stuff that changed
+        let (package_id, created) = self.get_or_create_package(package_name);
+        assert!(created);
+        assert!(matches!(self.pkgs.packages[package_id].status, PackageStatus::Unparsed));
+        self.pkgs.packages[package_id].status = PackageStatus::Parsing;
         let source_id = self.source_files.register_source(file_name, source);
         let root = syntax::parse(self, source, source_id);
+        self.pkgs.packages[package_id].ast = Some(root.clone());
+        self.pkgs.packages[package_id].status = PackageStatus::Parsed;
+        package_id
+    }
 
-        self.entries[package_id].ast = Some(root.clone());
-        self.entries[package_id].status = PackageStatus::Parsed;
-        root
+    /// Provides a package as a set of definitions.
+    pub fn create_def_package(&mut self, _package: PackageName) -> PackageId {
+        todo!()
     }
 
     /*pub fn definitions(&mut self, package_id: PackageId) -> &tast::Module {

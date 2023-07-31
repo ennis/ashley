@@ -1,17 +1,17 @@
 use crate::hir::{constant::ConstantData, Constant, Function, FunctionData, Module, Operand, Type, TypeData};
 
-struct LinkInput<'a> {
+/*struct LinkInput<'a> {
     module: &'a Module,
     // Maps: ID in src module -> ID in dst module
     constant_map: Vec<Constant>,
     type_map: Vec<Type>,
     function_map: Vec<FunctionData>,
-}
+}*/
 
 // Replaces all uses of a function, constant, type or global in a function body with another.
 //fn replace_uses_in_module(module: &mut Module)
 
-/// Replaces all uses of a function, constant, type or global in a function body with another.
+/*/// Replaces all uses of a function, constant, type or global in a function body with another.
 fn replace_uses_in_function(module: &mut Module, function: Function, to_replace: Operand, replace_with: Operand) {
     for (_, block) in module.functions[function].blocks.iter_mut() {
         for inst in block.instructions.iter_mut() {
@@ -22,9 +22,9 @@ fn replace_uses_in_function(module: &mut Module, function: Function, to_replace:
             }
         }
     }
-}
+}*/
 
-fn merge_constant(dst: &mut Module, mut cdata: ConstantData, map: &[usize]) -> Constant {
+fn merge_constant(dst: &mut Module, cdata: ConstantData, _map: &[usize]) -> Constant {
     // TODO for constants with components, remap components
     /*match cdata {
         ConstantImpl::F64(_) => {}
@@ -50,7 +50,9 @@ fn merge_type(dst: &mut Module, mut tydata: TypeData<'static>, map: &[usize]) ->
                 remap(&mut f.ty);
             }
         }
-        TypeData::Pointer { ref mut pointee_type, .. } => {
+        TypeData::Pointer {
+            ref mut pointee_type, ..
+        } => {
             remap(pointee_type);
         }
         TypeData::Function(ref mut function_type) => {
@@ -98,13 +100,9 @@ fn merge_function(
     dst.functions.alloc(fdata)
 }
 
-
-
-
 /// Module linker.
 ///
 /// It links functions and constants according to the SPIR-V linkage attributes.
-///
 pub fn link_module_pipeline(modules: &[Module]) -> Module {
     let mut output_module = Module::new();
 
@@ -122,8 +120,14 @@ pub fn link_module_pipeline(modules: &[Module]) -> Module {
             type_map[ty.index()] = merge_type(&mut output_module, tydata.clone(), &type_map).index();
         }
         for (func, funcdata) in module.functions.iter() {
-            function_map[func.index()] =
-                merge_function(&mut output_module, funcdata.clone(), &constant_map, &type_map, &function_map).index();
+            function_map[func.index()] = merge_function(
+                &mut output_module,
+                funcdata.clone(),
+                &constant_map,
+                &type_map,
+                &function_map,
+            )
+            .index();
         }
     }
 

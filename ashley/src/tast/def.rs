@@ -1,12 +1,5 @@
+use crate::{builtins::BuiltinSignature, diagnostic::SourceLocation, syntax::ast, tast::ty::Type};
 use std::fmt;
-use std::fmt::Formatter;
-use crate::{
-    builtins::BuiltinSignature,
-    diagnostic::SourceLocation,
-    syntax,
-    syntax::{ast, SyntaxKind},
-    tast::{ty::Type, PackageImportId},
-};
 
 /// Describes the kind of a global program variable.
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -19,7 +12,7 @@ pub enum Qualifier {
     Out,
 }
 
-impl Qualifier {
+/*impl Qualifier {
     fn from_token(token: &syntax::SyntaxToken) -> Option<Qualifier> {
         match token.kind() {
             SyntaxKind::UNIFORM_KW => Some(Qualifier::Uniform),
@@ -31,7 +24,7 @@ impl Qualifier {
             _ => None,
         }
     }
-}
+}*/
 
 /// display impl for qualifier
 impl fmt::Display for Qualifier {
@@ -95,10 +88,10 @@ pub enum Visibility {
 
 #[derive(Debug)]
 pub struct Def {
-    /// The package containing the definition.
-    ///
-    /// `None` if defined in the current package.
-    pub package: Option<PackageImportId>,
+    // The package containing the definition.
+    //
+    // `None` if defined in the current package.
+    //pub package: Option<PackageImportId>,
     /// Source location, if available.
     pub location: Option<SourceLocation>,
     pub builtin: bool,
@@ -139,7 +132,7 @@ impl Def {
                     DefKind::Function(ref func) => {
                         let func_ty = func.function_type.as_function().unwrap();
                         write!(f, "{} {}(", func_ty.return_type, self.0.name)?;
-                        for (i,arg) in func_ty.arg_types.iter().enumerate() {
+                        for (i, arg) in func_ty.arg_types.iter().enumerate() {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }

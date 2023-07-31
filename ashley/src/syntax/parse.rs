@@ -1,5 +1,5 @@
 use crate::{
-    diagnostic::{Diagnostics, SourceId, SourceLocation},
+    diagnostic::{SourceId, SourceLocation},
     syntax::{
         syntax_kind::{Lexer, SyntaxKind::*},
         SyntaxKind, SyntaxNode,
@@ -190,7 +190,7 @@ pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> 
         types.insert(ty.to_string());
     }
     sess.diag.set_current_source(source_id);
-    let mut parser = Parser {
+    let parser = Parser {
         sess,
         source_id,
         text,
@@ -368,9 +368,9 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         &self.text[self.lookahead.front().clone().unwrap().clone().1]
     }
 
-    fn register_type_name(&mut self, name: &str) {
+    /*fn register_type_name(&mut self, name: &str) {
         self.types.insert(name.to_string());
-    }
+    }*/
 
     //--------------------------------------------------------------------
     fn expect_ident(&mut self, ident_kind: &str) -> bool {
@@ -417,7 +417,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         }
     }
 
-    fn expect_any(&mut self, kinds: &[SyntaxKind]) -> bool {
+    /*fn expect_any(&mut self, kinds: &[SyntaxKind]) -> bool {
         if let Some(kind) = self.next() {
             if kinds.contains(&kind) {
                 self.eat();
@@ -429,7 +429,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         let msg = format!("expected one of {kinds:?}");
         self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
         false
-    }
+    }*/
 
     //
     // --- Nodes ---
@@ -828,13 +828,13 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         }
     }
 
-    fn parse_tuple_type(&mut self) {
+    /*fn parse_tuple_type(&mut self) {
         self.start_node(TUPLE_TYPE);
         self.expect(T!['(']);
         self.parse_separated_list(T![,], T![')'], true, true, Self::parse_type);
         self.expect(T![')']);
         self.finish_node();
-    }
+    }*/
 
     /*/// Parses a closure type like `fn(vec2, mat3) -> float`
     fn parse_closure_type(&mut self) {
@@ -953,6 +953,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             Some(CONTINUE_KW) => self.parse_continue_stmt(),
             Some(DISCARD_KW) => self.parse_discard_stmt(),
             Some(WHILE_KW) => self.parse_while_stmt(),
+            Some(FOR_KW) => self.parse_for_stmt(),
             Some(IDENT) => {
                 if self.next_is_type() {
                     // FIXME: this doesn't work with constructors, lol
@@ -1020,10 +1021,10 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.expect(T!['(']);
         self.start_node(CONDITION);
         self.parse_expr();
-        self.finish_node(); // CONDITION
+        self.finish_node(); // finish CONDITION
         self.expect(T![')']);
         self.parse_stmt();
-        self.finish_node(); // WHILE_STMT
+        self.finish_node(); // finish WHILE_STMT
     }
 
     fn parse_for_stmt(&mut self) {
@@ -1036,18 +1037,18 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         } else {
             self.parse_expr_stmt();
         }
-        self.finish_node(); // FOR_INIT
+        self.finish_node(); // finish FOR_INIT
         self.start_node(CONDITION);
         if self.next() != Some(T![;]) {
             self.parse_expr();
         }
-        self.finish_node(); // CONDITION
+        self.finish_node(); // finish CONDITION
         if self.next() != Some(T![')']) {
             self.parse_expr();
         }
         self.expect(T![')']);
         self.parse_stmt();
-        self.finish_node(); // FOR_STMT
+        self.finish_node(); // finish FOR_STMT
     }
 
     fn parse_if_stmt(&mut self) {
@@ -1243,9 +1244,9 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             if op == T![?] {
                 // ternary
                 self.start_node_at(cp, TERNARY_EXPR);
-                let true_alt = self.parse_expr_bp(0);
+                let _true_alt = self.parse_expr_bp(0);
                 self.expect(T![:]);
-                let false_alt = self.parse_expr_bp(r_bp);
+                let _false_alt = self.parse_expr_bp(r_bp);
                 self.finish_node(); // TERNARY_EXPR
                 continue;
             } else {

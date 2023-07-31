@@ -1,6 +1,6 @@
 //! Overload resolution.
 use crate::{
-    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, PrimitiveTypes, ImageClass, PseudoType},
+    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, ImageClass, PrimitiveTypes, PseudoType},
     tast::{DefId, ScalarType, Type, TypeCheckBodyCtxt, TypeKind},
 };
 use smallvec::SmallVec;
@@ -205,7 +205,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
     ) -> Result<OverloadCandidate, OverloadResolutionError> {
         let mut candidates: Vec<OverloadCandidate> = Vec::new();
         for (i, overload) in overloads.iter().enumerate() {
-            let func = self.module.def(*overload).as_function().unwrap();
+            let func = self.sess.pkgs.def(*overload).as_function().unwrap();
             let fty = func.function_type.as_function().unwrap();
             if fty.arg_types.len() != args.len() {
                 continue;

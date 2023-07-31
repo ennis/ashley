@@ -1,15 +1,21 @@
 //! Lowering to HIR
-use crate::{builtins::{BuiltinSignature, Constructor}, diagnostic::Diagnostics, hir, hir::{FunctionData, GlobalVariableData, IdRef}, Session, tast::{
-    consteval::ConstantValue,
-    def::{FunctionDef, GlobalDef},
-    expr::ConversionKind,
-    stmt::Stmt,
-    swizzle::ComponentIndices,
-    Block, BlockId, Def, ExprId, LocalDefId, LocalVar, LocalVarId, Module, StmtId, Type, TypeCtxt, TypedBody,
-}};
-use ashley::tast::{def::DefKind, expr::ExprKind, stmt::StmtKind, DefId, Qualifier, TypeKind};
+use crate::{
+    builtins::{BuiltinSignature, Constructor},
+    hir,
+    hir::{FunctionData, IdRef},
+    session::PackageId,
+    syntax::ast::AstNode,
+    tast::{
+        consteval::ConstantValue,
+        def::{DefKind, FunctionDef, GlobalDef},
+        expr::{ConversionKind, ExprKind},
+        stmt::StmtKind,
+        swizzle::ComponentIndices,
+        BlockId, Def, DefId, ExprId, LocalVarId, Module, Qualifier, StmtId, TypedBody,
+    },
+    QueryError, Session,
+};
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
-use crate::tast::typecheck_body;
 
 enum HirDef {
     Variable(hir::GlobalVariable),
@@ -18,7 +24,7 @@ enum HirDef {
 }
 
 struct LowerCtxt<'a, 'diag> {
-    sess: &'a mut Session<'diag>,
+    sess: &'a Session<'diag>,
     module: &'a Module,
     def_map: HashMap<DefId, HirDef>,
     local_map: HashMap<LocalVarId, hir::Local>,
@@ -41,25 +47,12 @@ struct Place {
 }
 
 impl<'a, 'diag> LowerCtxt<'a, 'diag> {
-    fn lower_module(&mut self, hir: &mut hir::Module) {
-        // lower package imports first since they may be referred to by other definitions
-        for (import_id, package) in self.module.packages.iter_full() {
-            for (local_def, def) in package.defs.iter_full() {
-                let def_id = DefId {
-                    package: Some(import_id),
-                    local_def,
-                };
-                if def.builtin {
-                    continue;
-                }
-                self.lower_def(hir, def, def_id);
-            }
-        }
+    fn lower_module(&mut self, package_id: PackageId, hir: &mut hir::Module) {
         for (def_id, def) in self.module.definitions() {
             if def.builtin {
                 continue;
             }
-            self.lower_def(hir, def, DefId::from(def_id));
+            self.lower_def(hir, def, DefId::new(package_id, def_id));
         }
     }
 
@@ -84,7 +77,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             crate::tast::TypeKind::Struct {
                 ref name,
                 ref fields,
-                def,
+                def: _,
             } => hir::TypeData::Struct(hir::types::StructType {
                 name: Some(Cow::Owned(name.clone())),
                 fields: Cow::Owned(
@@ -93,6 +86,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                         .map(|f| hir::types::Field {
                             ty: self.convert_type(hir, &f.1),
                             name: None,
+                            offset: None,
                         })
                         .collect(),
                 ),
@@ -148,11 +142,18 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             None => spirv::StorageClass::Private,
         };
         let ty = self.convert_type(hir, &global_def.ty);
+        let decorations: Vec<_> = global_def
+            .linkage
+            .map(|linkage| rspirv::sr::Decoration::LinkageAttributes(def.name.clone(), linkage))
+            .into_iter()
+            .collect();
         let id = hir.define_global_variable(hir::GlobalVariableData {
             name: def.name.clone(),
             ty,
             storage_class,
-            linkage: global_def.linkage,
+            source_location: def.location,
+            decorations,
+            removed: false,
         });
         self.def_map.insert(def_id, HirDef::Variable(id));
         id
@@ -201,7 +202,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         body: &TypedBody,
         lhs: ExprId,
         rhs: ExprId,
-        result_type: hir::Type,
+        _result_type: hir::Type,
     ) {
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
         let lhs = self.lower_place_expr(fb, body, lhs);
@@ -216,7 +217,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         sig: &BuiltinSignature,
         lhs: ExprId,
         rhs: ExprId,
-        result_type: hir::Type,
+        _result_type: hir::Type,
     ) {
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
         let lhs = self.lower_place_expr(fb, body, lhs);
@@ -292,7 +293,12 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         args: &[ExprId],
         result_type: hir::Type,
     ) -> Option<hir::IdRef> {
-        let func = self.module.def(function_id).as_function().expect("expected function");
+        let func = self
+            .sess
+            .pkgs
+            .def(function_id)
+            .as_function()
+            .expect("expected function");
         let mut arg_ids = Vec::with_capacity(args.len());
         let mut arg_types = Vec::with_capacity(args.len());
         for &arg in args {
@@ -370,30 +376,35 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         result_type: hir::Type,
     ) -> hir::IdRef {
         let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
-        fb.emit_composite_extract(result_type, expr.id, components).into()
+        if components.len() == 1 {
+            // extracting one component (`.x`)
+            fb.emit_composite_extract(result_type, expr.id, components).into()
+        } else {
+            // shuffle syntax (`.xxx`)
+            fb.emit_vector_shuffle(result_type, expr.id, expr.id, components).into()
+        }
     }
 
     fn lower_expr(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, expr_id: ExprId) -> Option<TypedIdRef> {
         let expr = &body.exprs[expr_id];
-        //eprintln!("lowering expr {:?}", expr);
         let ty = self.convert_type(fb.module, &expr.ty);
         let id = match expr.kind {
             ExprKind::Binary {
                 lhs,
                 rhs,
-                op,
+                op: _,
                 signature,
             } => self.lower_bin_expr(fb, body, &signature, lhs, rhs, ty),
             ExprKind::BinaryAssign {
                 lhs,
                 rhs,
-                op,
+                op: _,
                 signature,
             } => {
                 self.lower_bin_assign_expr(fb, body, &signature, lhs, rhs, ty);
                 return None;
             }
-            ExprKind::Unary { expr, signature, op } => self.lower_unary_expr(fb, body, &signature, expr, ty),
+            ExprKind::Unary { expr, signature, op: _ } => self.lower_unary_expr(fb, body, &signature, expr, ty),
             ExprKind::Assign { lhs, rhs } => {
                 self.lower_assign_expr(fb, body, lhs, rhs, ty);
                 return None;
@@ -542,55 +553,64 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             .collect();
         let arg_types: Vec<_> = params.iter().map(|param| param.ty).collect();
 
-        let return_type = self.convert_type(
-            hir,
-            &function_def
-                .function_type
-                .as_function()
-                .expect("expected function type")
-                .return_type,
-        );
+        let return_type = function_def
+            .function_type
+            .as_function()
+            .expect("expected function type")
+            .return_type
+            .clone();
+        let hir_return_type = self.convert_type(hir, &return_type);
 
         // create function type
         let func_type = hir.define_type(hir::TypeData::Function(hir::types::FunctionType {
             arg_types: Cow::Owned(arg_types),
-            return_type,
+            return_type: hir_return_type,
         }));
 
         let ast = function_def.ast.clone().expect("expected function ast");
 
         // if there's a block, then it's a function definition, otherwise it's just a declaration
         let func_data = if let Some(_) = ast.block() {
-            // typecheck the function body
-            {
-                let typed_body = typecheck_body(self.sess, self.module, def_id.local_def);
-                if typed_body.has_errors() {
-                    // emit a dummy body so that lowering can continue
-                    FunctionData::new_declaration(
-                        def.name.clone(),
-                        func_type,
-                        params,
-                        function_def.linkage,
-                        spirv::FunctionControl::NONE,
-                    )
-                } else {
-                    let (mut func_data, entry_block_id) = hir::FunctionData::new(
-                        def.name.clone(),
-                        func_type,
-                        params,
-                        function_def.linkage,
-                        spirv::FunctionControl::NONE,
-                    );
-                    let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
-                    let entry_block = typed_body.entry_block.expect("function has no entry block");
-                    self.lower_block(&mut builder, &typed_body, entry_block);
+            // get the typechecked body
+            let typed_body = self
+                .sess
+                .get_typed_body_cached(def_id)
+                .expect("function should have a type-checked body");
+            if typed_body.has_errors() {
+                // emit a dummy body so that lowering can continue
+                FunctionData::new_declaration(
+                    def.name.clone(),
+                    func_type,
+                    params,
+                    function_def.linkage,
+                    spirv::FunctionControl::NONE,
+                )
+            } else {
+                let (mut func_data, entry_block_id) = hir::FunctionData::new(
+                    def.name.clone(),
+                    func_type,
+                    params,
+                    function_def.linkage,
+                    spirv::FunctionControl::NONE,
+                );
+                let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
+                let entry_block = typed_body.entry_block.expect("function has no entry block");
+                self.lower_block(&mut builder, &typed_body, entry_block);
 
-                    if !builder.is_block_terminated() {
-                        // TODO check for return type
+                if !builder.is_block_terminated() {
+                    // Insert OpReturn if the function returns void & the current block is not terminated
+                    // (a return statement is not necessary if the function returns void).
+                    // If the function is non-void, we assume that this block is unreachable.
+                    // FIXME: emit warning if this is not the case
+                    if return_type.is_unit() {
                         builder.ret()
+                    } else {
+                        warn!("no return statement in exiting block");
+                        let und = builder.emit_undef(hir_return_type);
+                        builder.ret_value(und.into());
                     }
-                    func_data
                 }
+                func_data
             }
         } else {
             // only a declaration
@@ -609,6 +629,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
     }
 
     fn lower_def(&mut self, hir: &mut hir::Module, def: &Def, def_id: DefId) {
+        //trace!("lowering def")
         match def.kind {
             DefKind::Function(ref function) => {
                 self.lower_function(hir, def_id, def, function);
@@ -616,22 +637,39 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             DefKind::Global(ref global) => {
                 self.lower_global(hir, def_id, def, global);
             }
-            DefKind::Struct(ref struct_def) => {
+            DefKind::Struct(ref _struct_def) => {
                 todo!("struct lowering")
             }
         }
     }
 }
 
-pub fn lower_to_hir(sess: &mut Session, module: Module) -> hir::Module {
-    // TODO reuse typechecked bodies?
+pub fn lower_to_hir(sess: &mut Session, package: PackageId) -> Result<hir::Module, QueryError> {
+    // ensure module is created & typechecked
+    sess.typecheck_bodies(package)?;
+    let dependencies = sess.dependencies(package)?;
+    let mut hir = hir::Module::new();
+
+    // lower dependencies
+    for dep in dependencies {
+        let module = sess.pkgs.module(dep).unwrap();
+        let mut ctxt = LowerCtxt {
+            sess,
+            module,
+            def_map: Default::default(),
+            local_map: Default::default(),
+        };
+        ctxt.lower_module(dep, &mut hir);
+    }
+
+    // lower main module
+    let module = sess.pkgs.module(package).unwrap();
     let mut ctxt = LowerCtxt {
         sess,
-        module: &module,
+        module,
         def_map: Default::default(),
         local_map: Default::default(),
     };
-    let mut hir = hir::Module::new();
-    ctxt.lower_module(&mut hir);
-    hir
+    ctxt.lower_module(package, &mut hir);
+    Ok(hir)
 }

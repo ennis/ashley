@@ -2,14 +2,14 @@ use ashley::{
     hir,
     hir::{
         types::{Field, StructType},
-        Module, Type, TypeData,
+        Layout, Module, StructLayout, Type, TypeData,
     },
     utils::HirType,
 };
 
 #[repr(C)]
-#[derive(HirType, Copy, Clone)]
-//#[glsl_layout(std430)]
+#[derive(MemoryLayout, Copy, Clone)]
+#[layout(std430)]
 struct TestLayout {
     a: [i32; 3],
     b: f32,
@@ -49,7 +49,12 @@ fn test_vertex_layout() {
                     offset: Some(16),
                 },
             ]
-            .into()
+            .into(),
+            layout: Some(StructLayout {
+                offsets: vec![0, 12, 16],
+                layouts: vec![Layout::new()]
+            }),
+            block: false,
         })
     )
 }

@@ -40,6 +40,8 @@ pub enum ConversionKind {
     FloatConvert,
     FloatToSignedInt,
     FloatToUnsignedInt,
+    /// Different layouts (e.g. different array stride or matrix stride or order)
+    Layout,
 }
 
 /*#[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,7 +233,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     .emit();
                 self.error_expr()
             }
-            TypeKind::Array(_, _) => {
+            TypeKind::Array { .. } => {
                 todo!("array constructors")
             }
             _ => {
@@ -278,7 +280,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let index = self.typecheck_expr(&index_expr);
 
         let ty = match array.ty.deref() {
-            TypeKind::Array(elem_ty, _) | TypeKind::RuntimeArray(elem_ty) => elem_ty.clone(),
+            TypeKind::Array { element_type, .. } | TypeKind::RuntimeArray { element_type, .. } => element_type.clone(),
             _ => {
                 self.sess
                     .diag
@@ -514,9 +516,9 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
         let Some(field_name) = field_expr.field() else { return self.error_expr() };
         match base.ty.deref() {
-            TypeKind::Struct { name, fields, def: _ } => {
-                if let Some(field_index) = fields.iter().position(|field| field.0 == field_name.text()) {
-                    let ty = fields[field_index].1.clone();
+            TypeKind::Struct { name, fields, .. } => {
+                if let Some(field_index) = fields.iter().position(|field| field.name == field_name.text()) {
+                    let ty = fields[field_index].ty.clone();
                     // base expression is not a place
                     Expr {
                         syntax: Some(field_expr.syntax().clone()),
@@ -693,13 +695,26 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     component_type: tsrc,
                     rows: r1,
                     columns: c1,
+                    stride: _,
                 },
                 TK::Matrix {
                     component_type: tdst,
                     rows: r2,
                     columns: c2,
+                    stride: _,
                 },
             ) if r1 == r2 && c1 == c2 => match (tsrc, tdst) {
+                (ST::Float, ST::Float) | (ST::Double, ST::Double) => {
+                    // the component type is the same, but the stride may be different
+                    Expr {
+                        syntax: value.syntax.clone(),
+                        kind: EK::ImplicitConversion {
+                            expr: self.add_expr(value),
+                            kind: ICK::Layout,
+                        },
+                        ty: ty.clone(),
+                    }
+                }
                 (ST::Float, ST::Double) => Expr {
                     syntax: value.syntax.clone(),
                     kind: EK::ImplicitConversion {
@@ -708,6 +723,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     },
                     ty: ty.clone(),
                 },
+
                 _ => {
                     // TODO better error message
                     if let Some(loc) = loc {

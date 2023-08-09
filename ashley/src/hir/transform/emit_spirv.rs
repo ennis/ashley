@@ -1,17 +1,18 @@
 use crate::{
     hir::{
         types::{ImageSampling, ImageType, ScalarType},
-        Block, Constant, ConstantData, ExtInstSet, Function, GlobalVariable, IdRef, Local, Module, Operand,
+        Block, Constant, ConstantData, Decoration, ExtInstSet, Function, GlobalVariable, IdRef, Local, Module, Operand,
         TerminatingInstruction, Type, TypeData, Value,
     },
     utils::IdMap,
 };
+use ashley::hir::types::InterpolationKind;
 use rspirv::{
     binary::Assemble,
+    dr,
     dr::InsertPoint,
     spirv,
     spirv::{AddressingModel, Capability, LinkageType, MemoryModel, Word},
-    sr::Decoration,
 };
 use spirv::StorageClass;
 use tracing::error;
@@ -139,19 +140,29 @@ impl<'a> Ctxt<'a> {
                 component_type,
                 columns,
                 rows,
+                stride: _, // stride decoration is put on struct members for some reason, unlike ArrayStride
             } => {
                 let component_type = self.emit_scalar_type(component_type);
                 let column_type = self.builder.type_vector(component_type, rows as u32);
                 self.builder.type_matrix(column_type, columns as u32)
             }
-            TypeData::Array(elem_ty, len) => {
+            TypeData::Array {
+                element_type,
+                size,
+                stride,
+            } => {
                 let ty_u32 = self.builder.type_int(32, 0);
-                let len = self.builder.constant_u32(ty_u32, len);
-                let elem_ty = self.emit_type_recursive(elem_ty);
-                self.builder.type_array(elem_ty, len)
+                let size = self.builder.constant_u32(ty_u32, size);
+                let elem_ty = self.emit_type_recursive(element_type);
+                let id = self.builder.type_array(elem_ty, size);
+                if let Some(stride) = stride {
+                    self.builder
+                        .decorate(id, spirv::Decoration::ArrayStride, [dr::Operand::LiteralInt32(stride)]);
+                }
+                id
             }
-            TypeData::RuntimeArray(elem_ty) => {
-                let elem_ty = self.emit_type_recursive(elem_ty);
+            TypeData::RuntimeArray { element_type, stride } => {
+                let elem_ty = self.emit_type_recursive(element_type);
                 self.builder.type_runtime_array(elem_ty)
             }
             TypeData::Struct(ref struct_ty) => {
@@ -164,6 +175,55 @@ impl<'a> Ctxt<'a> {
                 if let Some(ref name) = struct_ty.name {
                     self.builder.name(id, name.to_string());
                 }
+
+                // emit member decorations
+                for (i, field) in struct_ty.fields.iter().enumerate() {
+                    match self.module.types[field.ty] {
+                        TypeData::Matrix {
+                            rows: _,
+                            columns: _,
+                            component_type: _,
+                            stride,
+                        } => {
+                            // matrix stride
+                            self.builder.member_decorate(
+                                id,
+                                i as u32,
+                                spirv::Decoration::MatrixStride,
+                                [dr::Operand::LiteralInt32(stride)],
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+
+                // field offsets
+                if let Some(ref layout) = struct_ty.layout {
+                    for (i, offset) in layout.offsets.iter().enumerate() {
+                        self.builder.member_decorate(
+                            id,
+                            i as u32,
+                            spirv::Decoration::Offset,
+                            [dr::Operand::LiteralInt32(*offset)],
+                        );
+                    }
+                }
+
+                // emit block decoration
+                if struct_ty.block {
+                    self.builder.decorate(id, spirv::Decoration::Block, []);
+                }
+
+                // emit field decorations
+                /*for (i, f) in struct_ty.fields.iter() {
+                    if let Some(ref interpolation) = f.interpolation {
+                        match interpolation.kind {
+                            InterpolationKind::Flat => self.builder.member_decorate(id),
+                            InterpolationKind::NoPerspective => {}
+                            InterpolationKind::Smooth => {}
+                        }
+                    }
+                }*/
                 id
             }
             TypeData::SampledImage(img_ty) => {
@@ -344,6 +404,8 @@ impl<'a> Ctxt<'a> {
         function_id
     }
 
+    fn emit_decoration(&mut self, deco: &Decoration) {}
+
     fn emit_global(&mut self, g: GlobalVariable) -> Word {
         if let Some(word) = self.global_map.get(g) {
             return *word;
@@ -362,6 +424,15 @@ impl<'a> Ctxt<'a> {
             match deco {
                 Decoration::LinkageAttributes(name, linkage) => {
                     self.emit_linkage_decoration(id, &name, *linkage);
+                }
+                //Decoration::Block => self.builder.decorate(id, spirv::Decoration::Block, []),
+                Decoration::DescriptorSet(set) => {
+                    self.builder
+                        .decorate(id, spirv::Decoration::DescriptorSet, [dr::Operand::LiteralInt32(*set)])
+                }
+                Decoration::Binding(binding) => {
+                    self.builder
+                        .decorate(id, spirv::Decoration::Binding, [dr::Operand::LiteralInt32(*binding)])
                 }
                 _ => {
                     // TODO other decorations

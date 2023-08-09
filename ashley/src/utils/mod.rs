@@ -1,14 +1,26 @@
 use id_arena::ArenaBehavior;
 use std::{fmt, marker::PhantomData, ops::Index};
 
-mod field_layout;
 pub mod interner;
+mod memory_layout;
 mod typed_vec;
 
-pub use ashley_derive::HirType;
-pub use field_layout::HirType;
+pub use ashley_derive::MemoryLayout;
+pub use memory_layout::{MemoryLayout, Std140Float, Std140IVec4, Std140Int, Std140Vec4};
 //pub(crate) use interner::UniqueArena;
 pub(crate) use typed_vec::{Id, TypedIndexMap, TypedIndexSet, TypedVec, TypedVecMap};
+
+///
+pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
+    if multiple == 0 {
+        return value;
+    }
+    let remainder = value % multiple;
+    if remainder == 0 {
+        return value;
+    }
+    value + multiple - remainder
+}
 
 /// Defines arena ID types.
 macro_rules! id_types {

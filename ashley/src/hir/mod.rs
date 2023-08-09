@@ -2,6 +2,7 @@ mod builder;
 mod constant;
 //mod list;
 //pub mod print;
+mod decoration;
 mod layout;
 pub mod transform;
 pub mod types;
@@ -22,8 +23,9 @@ use std::{collections::HashSet, fmt, hash::Hash, num::NonZeroU32};
 pub use self::{
     builder::FunctionBuilder,
     constant::ConstantData,
-    layout::{ArrayLayout, InnerLayout, Layout, LayoutError, StructLayout},
-    types::{TypeData, TypeDataDebug},
+    decoration::Decoration,
+    layout::{ArrayLayout, InnerLayout, Layout, StructLayout},
+    types::{Builtin, Interpolation, InterpolationKind, InterpolationSampling, TypeData, TypeDataDebug},
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -536,9 +538,10 @@ pub struct GlobalVariableData {
     /// Optional source location.
     pub source_location: Option<SourceLocation>,
     /// SPIR-V variable decorations.
-    pub decorations: Vec<rspirv::sr::Decoration>,
+    pub decorations: Vec<Decoration>,
     /// Whether the global variable has been explicitly removed.
     pub removed: bool,
+    pub linkage: Option<LinkageType>,
 }
 
 pub enum ProgramKind {
@@ -658,6 +661,11 @@ impl Module {
         &self.types[ty]
     }
 
+    /*/// Returns the size and alignment of the specified type.
+    pub fn type_layout(&self, ty: Type) -> &Layout {
+        Layout::std140()
+    }*/
+
     /// Returns a proxy for debug-printing a type.
     pub fn debug_type(&self, ty: Type) -> TypeDataDebug {
         TypeDataDebug(self, self.type_data(ty))
@@ -686,6 +694,11 @@ impl Module {
     /// Defines and returns the int type.
     pub fn ty_int(&mut self) -> Type {
         self.define_type(TypeData::Scalar(ScalarType::Int))
+    }
+
+    /// Defines and returns the int type.
+    pub fn ty_uint(&mut self) -> Type {
+        self.define_type(TypeData::Scalar(ScalarType::UnsignedInt))
     }
 
     /// Defines and returns the vec2 type.
@@ -727,10 +740,10 @@ impl Module {
         self.globals.alloc(v)
     }
 
-    /// Computes the layout of a type (size and alignment) according to std140 rules.
+    /*/// Computes the layout of a type (size and alignment) according to std140 rules.
     pub fn std140_layout(&self, ty: Type) -> Result<Layout, LayoutError> {
         layout::std140_layout(self, self.type_data(ty))
-    }
+    }*/
 
     /// Returns a pointer type.
     pub fn pointer_type(&mut self, pointee_type: Type, storage_class: spirv::StorageClass) -> Type {

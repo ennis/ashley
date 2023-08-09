@@ -1,11 +1,10 @@
 uniform float time;
-uniform int[3] resolution;
-
-uniform float dummy;
+uniform uint width;
+uniform uint height;
 
 in vec2 uv;
 out vec4 color;
 
 void main() {
-    color = vec4(dummy + 0.5 + 0.5 * cos(time + uv.xyx + vec3(0.0,2.0,4.0)), 1.0);
+    color = vec4(time + 0.5 + 0.5 * cos(time + uv.xyx + vec3(0.0,2.0,4.0)), 1.0);
 }

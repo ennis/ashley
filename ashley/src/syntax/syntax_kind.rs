@@ -103,6 +103,8 @@ pub enum SyntaxKind {
     PIPEEQ,
     #[token("->")]
     THIN_ARROW,
+    #[token("@")]
+    AT,
 
     #[token("const")]
     CONST_KW,
@@ -146,6 +148,12 @@ pub enum SyntaxKind {
     STRUCT_KW,
     #[token("as")]
     AS_KW,
+    #[token("stride")]
+    STRIDE_KW,
+    #[token("row_major")]
+    ROW_MAJOR_KW,
+    #[token("column_major")]
+    COLUMN_MAJOR_KW,
 
     #[regex(r#"[a-zA-Z_][a-zA-Z0-9_]*"#)]
     IDENT,
@@ -174,10 +182,16 @@ pub enum SyntaxKind {
     //
     // Nodes
     //
+    ATTRIBUTE,
+    ATTR_ARGS,
+    ATTR_LITERAL,
+    ATTR_NESTED,
+    ATTR_IDENT,
+    ATTR_KEY_VALUE,
     IMPORT_DECL,
     IMPORT_PARAM_LIST,
     IMPORT_ALIAS,
-    VISIBILTITY,
+    VISIBILITY,
     QUALIFIER,
     LINKAGE,
     FN_DEF,
@@ -206,6 +220,9 @@ pub enum SyntaxKind {
     CALL_EXPR,
     CONSTRUCTOR,
     TYPE_REF,
+    STRIDE_QUALIFIER,
+    ROW_MAJOR_QUALIFIER,
+    COLUMN_MAJOR_QUALIFIER,
     TUPLE_TYPE,
     ARRAY_TYPE,
     CLOSURE_TYPE,
@@ -224,7 +241,7 @@ pub enum SyntaxKind {
     RETURN_STMT,
     BLOCK_STMT,
     #[regex("[ \t\r\n]*")]
-    WHITESPACE, // whitespaces is explicit
+    WHITESPACE, // whitespace is explicit
     ERROR, // as well as errors
     MODULE,
     ROOT,

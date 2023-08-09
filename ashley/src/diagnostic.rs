@@ -147,6 +147,7 @@ impl SourceLocation {
     }
 }
 
+/// FIXME: replace by `From<X> for SourceLocation`?
 pub trait AsSourceLocation {
     fn source_location(&self) -> SourceLocation;
 }
@@ -292,6 +293,7 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
     }
 
     /// Sets the primary label of the diagnostic.
+
     pub fn location<L: AsSourceLocation>(self, loc: L) -> DiagnosticBuilder<'a, 'b> {
         self.label(loc, LabelStyle::Primary, "")
     }
@@ -302,9 +304,9 @@ impl<'a, 'b> DiagnosticBuilder<'a, 'b> {
     }
 
     /// Sets the primary label of the diagnostic, only if `loc` is not `None`.
-    pub fn primary_label_opt(
+    pub fn primary_label_opt<L: AsSourceLocation>(
         self,
-        loc: Option<SourceLocation>,
+        loc: Option<L>,
         message: impl Into<String>,
     ) -> DiagnosticBuilder<'a, 'b> {
         if let Some(loc) = loc {

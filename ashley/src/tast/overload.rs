@@ -97,13 +97,16 @@ pub(crate) fn check_signature(
                     component_type: targ,
                     rows: r1,
                     columns: c1,
+                    stride: stride1,
                 },
                 TK::Matrix {
                     component_type: tsig,
                     rows: r2,
                     columns: c2,
+                    stride: stride2,
                 },
             ) if r1 == r2 && c1 == c2 => match (targ, tsig) {
+                (a, b) if a == b => 0, // same component type, number of columns and rows, but different layout (stride): treat as rank 0 (same as no conversion necessary)
                 (ScalarType::Float, ScalarType::Double) => 1,
                 _ => {
                     break;

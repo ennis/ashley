@@ -255,7 +255,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         }
     }
 
-    fn checkpoint(&mut self) -> Checkpoint {
+    fn checkpoint(&self) -> Checkpoint {
         self.b.checkpoint()
     }
 
@@ -435,13 +435,13 @@ impl<'a, 'diag> Parser<'a, 'diag> {
     // --- Nodes ---
     //
 
-    fn parse_function_or_variable(&mut self) {
+    fn parse_function_or_variable(&mut self, start: Option<Checkpoint>) {
         //eprintln!("parse_function_or_variable");
-        let cp = self.checkpoint();
+        let start = start.unwrap_or(self.checkpoint());
 
         // parse visibility
         if self.next() == Some(PUBLIC_KW) {
-            self.start_node(VISIBILTITY);
+            self.start_node(VISIBILITY);
             self.eat();
             self.finish_node(); // VISIBILTITY
         }
@@ -472,7 +472,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         match self.next() {
             Some(T!['(']) => {
                 // function
-                self.start_node_at(cp, FN_DEF);
+                self.start_node_at(start, FN_DEF);
                 self.parse_fn_param_list();
 
                 match self.next() {
@@ -497,7 +497,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             }
             _ => {
                 // variable declaration
-                self.start_node_at(cp, GLOBAL);
+                self.start_node_at(start, GLOBAL);
                 if self.next() == Some(EQ) {
                     self.start_node(INITIALIZER);
                     self.eat();
@@ -510,27 +510,105 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         }
     }
 
+    fn parse_attribute_item(&mut self) {
+        //let start = self.checkpoint();
+        match self.next() {
+            Some(INT_NUMBER | STRING | FLOAT_NUMBER) => {
+                self.start_node(ATTR_LITERAL);
+                self.parse_lit_expr();
+                self.finish_node(); // ATTR_LITERAL
+            }
+            Some(IDENT) => {
+                match self.lookahead(1) {
+                    Some(T!['(']) => {
+                        // sub-attribute (without '@')
+                        self.start_node(ATTR_NESTED);
+                        self.eat(); // ident
+                        self.start_node(ATTR_ARGS);
+                        self.eat(); // '('
+                        self.parse_separated_list(T![,], T![')'], false, false, Self::parse_attribute_item);
+                        self.expect(T![')']);
+                        self.finish_node(); // ATTR_ARGS
+                        self.finish_node(); // ATTR_NESTED
+                    }
+                    Some(T![=]) => {
+                        // key-value pair
+                        self.start_node(ATTR_KEY_VALUE);
+                        self.eat();
+                        self.eat();
+                        self.parse_atom();
+                        self.finish_node(); // ATTR_KEY_VALUE
+                    }
+                    _ => {
+                        // assume this is an ident
+                        self.start_node(ATTR_IDENT);
+                        self.eat();
+                        self.finish_node();
+                    }
+                }
+            }
+            _ => {
+                // assume expression?
+                let span = self.span();
+                self.sess
+                    .diag
+                    .error("expected literal or ident")
+                    .primary_label_opt(span, "")
+                    .emit();
+            }
+        }
+    }
+
+    fn parse_attribute(&mut self) {
+        // @attribute
+        // @attribute(ident)
+        // @attribute(key=value, key2=value2)
+        // @attribute(<literal>)
+        // @attribute(sub_attribute(...))
+        self.start_node(ATTRIBUTE);
+        self.expect(T![@]);
+        self.expect_ident("attribute name");
+        if self.next() == Some(T!['(']) {
+            self.start_node(ATTR_ARGS);
+            self.eat();
+            self.parse_separated_list(T![,], T![')'], false, false, Self::parse_attribute_item);
+            self.expect(T![')']);
+            self.finish_node(); // ATTR_ARGS
+        }
+        self.finish_node();
+    }
+
     fn parse_items(&mut self) {
         let mut progress = Progress::default();
+        let mut decl_start: Option<Checkpoint> = None;
         loop {
             match self.next_ensure_progress(&mut progress) {
                 Some(IMPORT_KW) => {
-                    self.parse_import_declaration();
+                    self.parse_import_declaration(decl_start);
+                    decl_start = None;
                 }
-                Some(PUBLIC_KW) => match self.lookahead(1) {
-                    Some(STRUCT_KW) => {
-                        self.parse_struct_def();
+                Some(PUBLIC_KW) => {
+                    match self.lookahead(1) {
+                        Some(STRUCT_KW) => {
+                            self.parse_struct_def(decl_start);
+                        }
+                        _ => {
+                            self.parse_function_or_variable(decl_start);
+                        }
                     }
-                    _ => {
-                        self.parse_function_or_variable();
-                    }
-                },
+                    decl_start = None;
+                }
                 Some(STRUCT_KW) => {
-                    self.parse_struct_def();
+                    self.parse_struct_def(decl_start);
+                }
+                Some(AT) => {
+                    // attribute syntax like `@location(0)`
+                    decl_start.get_or_insert(self.checkpoint());
+                    self.parse_attributes();
                 }
                 None => break,
                 _ => {
-                    self.parse_function_or_variable();
+                    self.parse_function_or_variable(decl_start);
                 }
             }
         }
@@ -554,8 +632,12 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         }
     }
 
-    fn parse_import_declaration(&mut self) {
-        self.start_node(IMPORT_DECL);
+    fn parse_import_declaration(&mut self, start: Option<Checkpoint>) {
+        if let Some(start) = start {
+            self.start_node_at(start, IMPORT_DECL);
+        } else {
+            self.start_node(IMPORT_DECL);
+        }
         self.expect(IMPORT_KW);
         self.expect_ident("package name");
         if let Some(T!['(']) = self.next() {
@@ -576,17 +658,19 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.finish_node(); // IMPORT_DECL
     }
 
-    fn parse_struct_def(&mut self) {
+    fn parse_struct_def(&mut self, start: Option<Checkpoint>) {
         //eprintln!("parse_struct_def");
+
+        let start = start.unwrap_or(self.checkpoint());
 
         // parse visibility
         if self.next() == Some(PUBLIC_KW) {
-            self.start_node(VISIBILTITY);
+            self.start_node(VISIBILITY);
             self.eat();
-            self.finish_node(); // VISIBILTITY
+            self.finish_node(); // VISIBILITY
         }
 
-        self.start_node(STRUCT_DEF);
+        self.start_node_at(start, STRUCT_DEF);
         self.expect(STRUCT_KW);
         self.expect_new_type_name("struct name");
         self.expect(T!['{']);
@@ -603,8 +687,15 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.finish_node(); // STRUCT_DEF
     }
 
+    fn parse_attributes(&mut self) {
+        while self.next() == Some(T![@]) {
+            self.parse_attribute();
+        }
+    }
+
     fn parse_struct_field(&mut self) {
         self.start_node(STRUCT_FIELD);
+        self.parse_attributes();
         self.parse_type();
         self.expect_ident("field name");
         self.expect(T![;]);
@@ -656,6 +747,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             return;
         }
 
+        // TODO: use parse_separated_list?
         let mut progress = Progress::default();
         loop {
             match self.next_ensure_progress(&mut progress) {
@@ -697,6 +789,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
 
     fn parse_fn_parameter(&mut self) {
         self.start_node(FN_PARAM);
+        self.parse_attributes();
         self.parse_type();
         self.expect_ident("argument name");
         self.finish_node();
@@ -737,14 +830,30 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 let cp = self.checkpoint();
                 self.start_node(TYPE_REF);
                 self.eat();
+                match self.next() {
+                    Some(ROW_MAJOR_KW | COLUMN_MAJOR_KW) => {
+                        // row_major or column_major qualifier on matrix type
+                        self.eat()
+                    }
+                    _ => {}
+                }
                 self.finish_node();
-                while self.lookahead(0) == Some(T!['[']) {
+                while self.next() == Some(T!['[']) {
                     self.start_node_at(cp, ARRAY_TYPE);
                     self.eat();
                     if self.next() != Some(T![']']) {
                         self.parse_expr();
                     }
                     self.expect(T![']']);
+                    if self.next() == Some(STRIDE_KW) {
+                        // stride(N) qualifier
+                        self.start_node(STRIDE_QUALIFIER);
+                        self.eat();
+                        self.expect(T!['(']);
+                        self.expect(INT_NUMBER);
+                        self.expect(T![')']);
+                        self.finish_node();
+                    }
                     self.finish_node(); // ARRAY_TYPE
                 }
             }
@@ -873,6 +982,25 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.finish_node();
     }
 
+    fn parse_lit_expr(&mut self) {
+        match self.next() {
+            Some(INT_NUMBER | FLOAT_NUMBER | STRING | TRUE_KW | FALSE_KW) => {
+                self.start_node(LIT_EXPR);
+                self.eat();
+                self.finish_node();
+            }
+            _ => {
+                let span = self.span();
+                self.sess
+                    .diag
+                    .error("expected boolean, integer, float or string literal")
+                    .primary_label_opt(span, "")
+                    .emit();
+                self.eat();
+            }
+        }
+    }
+
     /// Parses an operand to a binary expression.
     fn parse_atom(&mut self) {
         match self.next() {
@@ -882,6 +1010,11 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 self.finish_node();
             }
             Some(FLOAT_NUMBER) => {
+                self.start_node(LIT_EXPR);
+                self.eat();
+                self.finish_node();
+            }
+            Some(STRING) => {
                 self.start_node(LIT_EXPR);
                 self.eat();
                 self.finish_node();

@@ -210,16 +210,36 @@ impl_ast_token!(FloatNumber<FLOAT_NUMBER>);
 impl_ast_token!(Else<ELSE_KW>);
 impl_ast_token!(Eq<EQ>);
 
+impl_ast_variant_node!(TypeQualifier, [
+    STRIDE_QUALIFIER => StrideQualifier,
+    ROW_MAJOR_QUALIFIER => RowMajorQualifier,
+    COLUMN_MAJOR_QUALIFIER => ColumnMajorQualifier
+]);
+
+impl_ast_variant_node!(AttrItem, [
+    ATTR_IDENT => AttrIdent,
+    ATTR_NESTED => AttrNested,
+    ATTR_LITERAL => AttrLiteral,
+    ATTR_KEY_VALUE => AttrKeyValue
+]);
+impl_ast_node!(Attribute   <ATTRIBUTE>      [token name: Ident, nodes args: AttrItem]);
+impl_ast_node!(AttrIdent   <ATTR_IDENT>     [token ident: Ident]);
+impl_ast_node!(AttrLiteral <ATTR_LITERAL>   [node expr: LitExpr]);
+impl_ast_node!(AttrKeyValue <ATTR_KEY_VALUE> [token key: Ident, node value: Expr]);
+impl_ast_node!(AttrNested  <ATTR_NESTED>  [token ident: Ident, nodes args: AttrItem]);
 impl_ast_node!(Module      <MODULE>       [nodes items: Item]);
 impl_ast_node!(ImportDecl  <IMPORT_DECL>  [token package_name: Ident]);
 impl_ast_node!(ImportParamList <IMPORT_PARAM_LIST>  []);
 impl_ast_node!(ImportAlias <IMPORT_ALIAS> [token alias: Ident]);
-impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident]);
+impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident, nodes qualifiers: TypeQualifier]);
 impl_ast_node!(TupleType   <TUPLE_TYPE>   [nodes fields: Type]);
-impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node element_type: Type, node length: Expr]);
+impl_ast_node!(StrideQualifier   <STRIDE_QUALIFIER>   [token stride: IntNumber]);
+impl_ast_node!(RowMajorQualifier   <ROW_MAJOR_QUALIFIER>   []);
+impl_ast_node!(ColumnMajorQualifier   <COLUMN_MAJOR_QUALIFIER>   []);
+impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node element_type: Type, node length: Expr, nodes qualifiers: TypeQualifier]);
 impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node return_type: Type]);
 impl_ast_node!(StructDef   <STRUCT_DEF>   [node visibility: Visibility, token ident: Ident, nodes fields: StructField]);
-impl_ast_node!(StructField <STRUCT_FIELD> [token ident: Ident, node ty: Type]);
+impl_ast_node!(StructField <STRUCT_FIELD> [nodes attrs: Attribute, token ident: Ident, node ty: Type]);
 impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
 impl_ast_node!(FnParam     <FN_PARAM>     [token ident: Ident, node ty: Type]);
 impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
@@ -266,9 +286,9 @@ impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
 impl_ast_node!(ConstructorExpr <CONSTRUCTOR>  [node ty: Type, node args: ArgList]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Qualifier     <QUALIFIER>   []);
-impl_ast_node!(Visibility    <VISIBILTITY>   []);
+impl_ast_node!(Visibility    <VISIBILITY>   []);
 impl_ast_node!(Linkage        <LINKAGE>      []);
-impl_ast_node!(Global        <GLOBAL>      [token name: Ident, node visibility: Visibility, node extern_: Linkage, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(Global        <GLOBAL>      [nodes attrs: Attribute, token name: Ident, node visibility: Visibility, node extern_: Linkage, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
 impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType, ARRAY_TYPE => ArrayType, CLOSURE_TYPE => ClosureType ]);
@@ -356,8 +376,6 @@ impl IntNumber {
 
     pub fn value(&self) -> Result<i64, ParseIntError> {
         let (_, text, _) = self.split_into_parts();
-        dbg!(text);
-        dbg!(self.radix());
         i64::from_str_radix(&text.replace('_', ""), self.radix() as u32)
     }
 

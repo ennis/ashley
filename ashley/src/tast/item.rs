@@ -1,13 +1,24 @@
 use crate::{
-    diagnostic::AsSourceLocation,
+    diagnostic::{AsSourceLocation, Diagnostics},
+    hir,
+    hir::{Interpolation, Layout},
     syntax::ast,
     tast,
     tast::{
+        attributes::{parse_attributes, AttributeTarget, KnownAttribute},
         def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef},
+        layout::{
+            std_struct_layout,
+            StdLayoutRules::{Std140, Std430},
+        },
         scope::{Res, Scope},
-        Def, DefId, FunctionType, IdentExt, TypeCheckItemCtxt, TypeKind, Visibility,
+        ty::{Qualifiers, StructField},
+        Def, DefId, FunctionType, IdentExt, Type, TypeCheckItemCtxt, TypeKind, Visibility,
     },
+    utils::round_up,
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
     pub(super) fn typecheck_module(&mut self, module: &ast::Module) {
@@ -178,8 +189,35 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
                 .ty()
                 .map(|ty| self.convert_type(ty.clone()))
                 .unwrap_or_else(|| self.sess.tyctxt.error.clone());
-            fields.push((field.ident().to_string_opt(), ty));
+
+            let (attrs, extra_attrs) = parse_attributes(field.attrs(), AttributeTarget::MEMBER, &mut self.sess.diag);
+            let qualifiers = Qualifiers::from_attributes(&attrs, Some(field.source_location()), &mut self.sess.diag);
+
+            if !extra_attrs.is_empty() {
+                self.sess
+                    .diag
+                    .error("unrecognized attribute(s) on field")
+                    .primary_label(&field, "")
+                    .emit();
+            }
+
+            fields.push(StructField {
+                name: field.ident().to_string_opt(),
+                ty,
+                qualifiers,
+            });
         }
+
+        // compute field offsets
+        let offsets = match std_struct_layout(
+            &fields,
+            // TODO attributes for std layouts
+            Std430,
+            &mut self.sess.diag,
+        ) {
+            Ok((_layout, offsets)) => Some(offsets),
+            Err(_err) => None, // error already reported by std_struct_layout
+        };
 
         // define the type before the struct (there's a circular reference)
         let next_def_id = self.module.defs.next_id();
@@ -187,6 +225,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             name: name.clone(),
             def: Some(DefId::new(self.package, next_def_id)),
             fields,
+            offsets,
         });
 
         let def_id = self.module.defs.push(Def {

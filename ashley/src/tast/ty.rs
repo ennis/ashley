@@ -1,6 +1,7 @@
 use crate::{
+    diagnostic::SourceLocation,
     hir,
-    syntax::ast,
+    syntax::{ast, ast::TypeQualifier, SyntaxNode},
     tast::{
         consteval::{try_evaluate_constant_expression, ConstantValue},
         def::DefKind,
@@ -9,16 +10,28 @@ use crate::{
     },
     Session,
 };
+use ashley::tast::layout::LayoutError;
 use spirv::Dim;
 use std::{
+    collections::HashSet,
     fmt,
     fmt::Display,
     hash::{Hash, Hasher},
+    num::{ParseIntError, TryFromIntError},
     ops::Deref,
     ptr,
     sync::Arc,
 };
 
+use crate::{
+    diagnostic::{AsSourceLocation, Diagnostics},
+    hir::{Builtin, Interpolation},
+    tast::{
+        attributes::{KnownAttribute, KnownAttributeKind},
+        layout::{std_array_stride, StdLayoutRules::Std430},
+    },
+    utils::round_up,
+};
 pub use hir::types::{ImageSampling, ImageType};
 
 pub type ScalarType = hir::types::ScalarType;
@@ -125,6 +138,135 @@ pub struct FunctionType {
     pub arg_types: Vec<Type>,
 }
 
+/// User-provided struct layout
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ExplicitStructLayout {
+    /// Field offsets
+    pub offsets: Vec<u32>,
+}
+
+/// Qualifiers on struct fields or variables.
+#[derive(Default, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct Qualifiers {
+    pub location: Option<u32>,
+    pub interpolation: Option<Interpolation>,
+    pub builtin: Option<Builtin>,
+    pub offset: Option<u32>,
+    pub align: Option<u32>,
+}
+
+impl Qualifiers {
+    pub(crate) fn from_attributes(
+        attrs: &[KnownAttribute],
+        srcloc: Option<SourceLocation>,
+        diag: &mut Diagnostics,
+    ) -> Qualifiers {
+        let mut location = None;
+        let mut interpolation = None;
+        let mut builtin = None;
+        let mut offset = None;
+        let mut align = None;
+        let mut specified_more_than_once = HashSet::new();
+        let mut specified_builtin_more_than_once = false;
+
+        // checks:
+        // - for each known attribute, verify that it's only specified once
+
+        for attr in attrs {
+            match attr.kind {
+                KnownAttributeKind::Interpolate { kind, sampling } => {
+                    if interpolation.is_some() {
+                        specified_more_than_once.insert("interpolate");
+                    }
+                    interpolation = Some(Interpolation {
+                        kind,
+                        sampling: sampling.unwrap_or_default(),
+                    });
+                }
+                KnownAttributeKind::Location(l) => {
+                    if location.is_some() {
+                        specified_more_than_once.insert("location");
+                    }
+                    location = Some(l);
+                }
+                KnownAttributeKind::Offset(o) => {
+                    if offset.is_some() {
+                        specified_more_than_once.insert("offset");
+                    }
+                    offset = Some(o);
+                }
+                KnownAttributeKind::Align(a) => {
+                    if align.is_some() {
+                        specified_more_than_once.insert("align");
+                    }
+                    align = Some(a);
+                }
+                KnownAttributeKind::Position => {
+                    if builtin.is_some() {
+                        specified_builtin_more_than_once = true;
+                    }
+                    builtin = Some(Builtin::Position);
+                }
+                KnownAttributeKind::PointSize => {
+                    if builtin.is_some() {
+                        specified_builtin_more_than_once = true;
+                    }
+                    builtin = Some(Builtin::PointSize);
+                }
+            }
+        }
+
+        for attr in specified_more_than_once {
+            // TODO more precise locations
+            diag.error(format!("attribute `{attr}` specified more than once"))
+                .primary_label_opt(srcloc, "")
+                .emit();
+        }
+
+        Qualifiers {
+            location,
+            interpolation,
+            builtin,
+            offset,
+            align,
+        }
+    }
+}
+
+/// Structure field
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct StructField {
+    /// Name of the field.
+    pub name: String,
+    /// Type of the field.
+    pub ty: Type,
+    pub qualifiers: Qualifiers,
+}
+
+impl StructField {
+    pub fn new(name: String, ty: Type) -> StructField {
+        StructField {
+            name,
+            ty,
+            qualifiers: Qualifiers {
+                location: None,
+                interpolation: None,
+                builtin: None,
+                offset: None,
+                align: None,
+            },
+        }
+    }
+}
+
+/*/// Row-major or column-major order for matrices.
+#[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MatrixOrder {
+    #[default]
+    ColumnMajor,
+    RowMajor,
+}*/
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TypeKind {
     /// Void (or unit) type.
@@ -138,17 +280,30 @@ pub enum TypeKind {
         component_type: ScalarType,
         columns: u8,
         rows: u8,
+        /// Matrix stride.
+        stride: u32,
     },
     /// Array type (element type + size).
-    Array(Type, u32),
+    Array {
+        element_type: Type,
+        size: u32,
+        /// Array stride. None if the element type is opaque.
+        stride: Option<u32>,
+    },
     /// Runtime array type. Array without a known length.
-    RuntimeArray(Type),
+    RuntimeArray {
+        element_type: Type,
+        /// Array stride. None if the element type is opaque.
+        stride: Option<u32>,
+    },
     /// Structure type (array of (offset, type) tuples).
     Struct {
         /// Name of the struct, only used for display purposes. Can be empty, or can be different from the name in the def.
         name: String,
-        fields: Vec<(String, Type)>,
+        fields: Vec<StructField>,
         def: Option<DefId>,
+        /// Field offsets
+        offsets: Option<Vec<u32>>,
     },
     /// Unsampled image type.
     Image(hir::types::ImageType),
@@ -186,15 +341,26 @@ impl fmt::Display for TypeKind {
                 component_type,
                 columns,
                 rows,
-            } => write!(f, "{}mat{}x{}", scalar_type_prefix(*component_type), columns, rows),
-            TypeKind::Array(ty, size) => write!(f, "{}[{}]", &ty.0, size),
-            TypeKind::RuntimeArray(ty) => write!(f, "{}[]", ty),
+                ..
+            } => {
+                write!(f, "{}mat{}x{}", scalar_type_prefix(*component_type), columns, rows,)
+            }
+            TypeKind::Array {
+                element_type,
+                size,
+                stride: _,
+            } => {
+                // TODO display layout
+                write!(f, "{}[{}]", &element_type.0, size)
+            }
+            TypeKind::RuntimeArray { element_type, .. } => write!(f, "{}[]", element_type),
             TypeKind::Struct { fields, name, .. } => {
+                // TODO display layout
                 if !name.is_empty() {
                     return write!(f, "{}", name);
                 } else {
                     write!(f, "struct {{ ")?;
-                    for (i, (name, ty)) in fields.iter().enumerate() {
+                    for (i, StructField { name, ty, .. }) in fields.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
@@ -208,7 +374,7 @@ impl fmt::Display for TypeKind {
                 pointee_type,
                 storage_class,
             } => {
-                // TODO: incomplete
+                // TODO: display storage class
                 write!(f, "ptr to {}", pointee_type)
             }
             TypeKind::Function(fty) => {
@@ -260,10 +426,12 @@ impl TypeKind {
                 component_type: _,
                 columns,
                 rows,
+                stride,
             } => TypeKind::Matrix {
                 component_type: scalar_type,
                 columns: *columns,
                 rows: *rows,
+                stride: *stride,
             },
             _ => self.clone(),
         }
@@ -288,6 +456,24 @@ impl TypeKind {
         matches!(self, TypeKind::Unit)
     }
 
+    pub fn is_struct(&self) -> bool {
+        matches!(self, TypeKind::Struct { .. })
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        match self {
+            TypeKind::Image(_)
+            | TypeKind::String
+            | TypeKind::Sampler
+            | TypeKind::SamplerShadow
+            | TypeKind::Unknown
+            | TypeKind::Error
+            | TypeKind::Function(_) => true,
+            TypeKind::Struct { fields, .. } => fields.iter().any(|f| f.ty.is_opaque()),
+            _ => false,
+        }
+    }
+
     pub fn num_components(&self) -> Option<u8> {
         match self {
             TypeKind::Scalar(_) => Some(1),
@@ -296,12 +482,6 @@ impl TypeKind {
             _ => None,
         }
     }
-}
-
-/// A type as it appears in the AST, and its resolved form.
-pub struct TypeSpec {
-    pub ast: ast::Type,
-    pub ty: Type,
 }
 
 /// Converts an AST type to a TAST type.
@@ -351,18 +531,82 @@ pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) 
                 ty: (),
             })))*/
         }
-        ast::Type::ArrayType(array_type) => {
+        ast::Type::ArrayType(ref array_type) => {
             let element_type = array_type
                 .element_type()
                 .map(|ty| convert_type(ty, sess, scopes))
                 .unwrap_or_else(|| sess.tyctxt.error.clone());
 
+            let mut stride = None;
+
+            // process type qualifiers
+            for qual in array_type.qualifiers() {
+                match qual {
+                    // TODO clean this up (rightward drift)
+                    TypeQualifier::StrideQualifier(ref q) => {
+                        if let Some(v) = q.stride() {
+                            match v.value() {
+                                Ok(v) => match u32::try_from(v) {
+                                    Ok(v) => stride = Some(v),
+                                    Err(err) => {
+                                        sess.diag.error(format!("invalid stride: {err}")).location(&qual).emit();
+                                    }
+                                },
+                                Err(err) => {
+                                    sess.diag.bug(format!("syntax error: {err}")).location(&qual).emit();
+                                }
+                            }
+                        } else {
+                            sess.diag.bug(format!("syntax error")).location(&qual).emit();
+                        }
+                    }
+                    TypeQualifier::RowMajorQualifier(_) => {
+                        sess.diag
+                            .warn(format!("unimplemented: row_major qualifier"))
+                            .location(&qual)
+                            .emit();
+                    }
+                    TypeQualifier::ColumnMajorQualifier(_) => {
+                        sess.diag
+                            .warn(format!("unimplemented: column_major qualifier"))
+                            .location(&qual)
+                            .emit();
+                    }
+                }
+            }
+
+            // compute stride
+            if !element_type.is_opaque() {
+                match std_array_stride(&element_type, stride, Std430, Some(ty.clone()), &mut sess.diag) {
+                    Ok(s) => {
+                        stride = Some(s);
+                    }
+                    Err(_err) => {
+                        // error already reported
+                        stride = None;
+                    }
+                }
+            }
+
             if let Some(expr) = array_type.length() {
-                if let Some(len) = try_evaluate_constant_expression(&expr, &mut sess.diag) {
-                    match len {
-                        ConstantValue::Int(len) => {
-                            let len = len as u32;
-                            sess.tyctxt.ty(TypeKind::Array(element_type, len))
+                if let Some(size) = try_evaluate_constant_expression(&expr, &mut sess.diag) {
+                    match size {
+                        ConstantValue::Int(size) => {
+                            // TODO validate array length
+                            match u32::try_from(size) {
+                                Ok(size) => sess.tyctxt.ty(TypeKind::Array {
+                                    element_type,
+                                    size,
+                                    stride,
+                                }),
+                                Err(err) => {
+                                    sess.diag
+                                        .error(format!("invalid array length: {err}"))
+                                        .location(expr)
+                                        .emit();
+                                    sess.tyctxt.error.clone()
+                                }
+                            }
                         }
                         ConstantValue::Float(_) => {
                             sess.diag.error("array length must be an integer").location(expr).emit();
@@ -383,7 +627,7 @@ pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) 
                 }
             } else {
                 // no length
-                sess.tyctxt.ty(TypeKind::RuntimeArray(element_type))
+                sess.tyctxt.ty(TypeKind::RuntimeArray { element_type, stride })
             }
         }
         ast::Type::ClosureType(_closure_type) => {

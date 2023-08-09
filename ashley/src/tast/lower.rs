@@ -1,21 +1,24 @@
 //! Lowering to HIR
 use crate::{
     builtins::{BuiltinSignature, Constructor},
+    diagnostic::{AsSourceLocation, Diagnostics, SourceLocation},
     hir,
-    hir::{FunctionData, IdRef},
+    hir::{FunctionData, IdRef, Layout, StructLayout},
     session::PackageId,
-    syntax::ast::AstNode,
+    syntax::{ast, ast::AstNode},
+    tast,
     tast::{
         consteval::ConstantValue,
         def::{DefKind, FunctionDef, GlobalDef},
         expr::{ConversionKind, ExprKind},
         stmt::StmtKind,
         swizzle::ComponentIndices,
-        BlockId, Def, DefId, ExprId, LocalVarId, Module, Qualifier, StmtId, TypedBody,
+        BlockId, Def, DefId, ExprId, LocalVarId, Module, Qualifier, StmtId, Type, TypeKind, TypedBody,
     },
+    utils::round_up,
     QueryError, Session,
 };
-use std::{borrow::Cow, collections::HashMap, ops::Deref};
+use std::{alloc::LayoutErr, borrow::Cow, collections::HashMap, ops::Deref};
 
 enum HirDef {
     Variable(hir::GlobalVariable),
@@ -66,31 +69,56 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 component_type,
                 columns,
                 rows,
+                stride,
             } => hir::TypeData::Matrix {
                 component_type,
                 columns,
                 rows,
+                stride,
             },
-            crate::tast::TypeKind::Array(ref element_type, size) => {
-                hir::TypeData::Array(self.convert_type(hir, element_type), size)
+            crate::tast::TypeKind::Array {
+                ref element_type,
+                size,
+                stride,
+            } => {
+                let element_type = self.convert_type(hir, element_type);
+                hir::TypeData::Array {
+                    element_type,
+                    size,
+                    stride,
+                }
             }
             crate::tast::TypeKind::Struct {
                 ref name,
                 ref fields,
                 def: _,
-            } => hir::TypeData::Struct(hir::types::StructType {
-                name: Some(Cow::Owned(name.clone())),
-                fields: Cow::Owned(
-                    fields
-                        .iter()
-                        .map(|f| hir::types::Field {
-                            ty: self.convert_type(hir, &f.1),
-                            name: None,
-                            offset: None,
-                        })
-                        .collect(),
-                ),
-            }),
+                ref offsets,
+            } => {
+                let fields: Vec<_> = fields
+                    .iter()
+                    .map(|f| hir::types::Field {
+                        ty: self.convert_type(hir, &f.ty),
+                        name: None,
+                        interpolation: None, // TODO
+                    })
+                    .collect();
+
+                let layout = if let Some(offsets) = offsets {
+                    Some(StructLayout {
+                        offsets: offsets.clone(),
+                        layouts: vec![],
+                    })
+                } else {
+                    None
+                };
+
+                hir::TypeData::Struct(hir::types::StructType {
+                    name: Some(Cow::Owned(name.clone())),
+                    fields: fields.into(),
+                    layout,
+                    block: false,
+                })
+            }
             crate::tast::TypeKind::Pointer {
                 ref pointee_type,
                 storage_class,
@@ -104,7 +132,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             }),
             crate::tast::TypeKind::Image(image_type) => hir::TypeData::Image(image_type),
             crate::tast::TypeKind::Sampler => hir::TypeData::Sampler,
-            crate::tast::TypeKind::RuntimeArray(_) => {
+            crate::tast::TypeKind::RuntimeArray { .. } => {
                 todo!("RuntimeArray")
             }
             crate::tast::TypeKind::SamplerShadow => {
@@ -142,17 +170,13 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             None => spirv::StorageClass::Private,
         };
         let ty = self.convert_type(hir, &global_def.ty);
-        let decorations: Vec<_> = global_def
-            .linkage
-            .map(|linkage| rspirv::sr::Decoration::LinkageAttributes(def.name.clone(), linkage))
-            .into_iter()
-            .collect();
         let id = hir.define_global_variable(hir::GlobalVariableData {
             name: def.name.clone(),
             ty,
             storage_class,
             source_location: def.location,
-            decorations,
+            linkage: global_def.linkage,
+            decorations: vec![],
             removed: false,
         });
         self.def_map.insert(def_id, HirDef::Variable(id));
@@ -337,6 +361,9 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             ConversionKind::FloatConvert => fb.emit_f_convert(result_type, expr.id),
             ConversionKind::FloatToSignedInt => fb.emit_convert_f_to_s(result_type, expr.id),
             ConversionKind::FloatToUnsignedInt => fb.emit_convert_f_to_u(result_type, expr.id),
+            ConversionKind::Layout => {
+                todo!("layout conversion")
+            }
         };
 
         val.into()

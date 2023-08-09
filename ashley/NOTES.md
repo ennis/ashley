@@ -1466,3 +1466,133 @@ TODO:
 
 Suggestion: one of the goals is to abstract the strategy used to pass uniforms (or, more generally, data) to the shaders.
 Instead of rewriting code, it's better to use functions (externally defined) in the code to access data, and then link the concrete implementation later.
+
+
+Issue: Vulkan expects a `Block` annotation on structure types that are used as memory interfaces. 
+But in our case, there are no "uniform blocks" with ad-hoc structures to represent memory interfaces. 
+I.e. a uniform buffer may be declared like this:
+
+    uniform StructureType uniforms;
+
+Vulkan requires that `StructureType` is annotated with the `Block` decoration, but `StructureType` can be used in other ways,
+and is not *specifically* an interface type.
+
+# Interpolation qualifiers
+
+Q: Can those be put on struct fields? Does the struct type become "special" if this is the case?
+
+    // this is a "stage interface" struct
+    struct Inputs {
+        noperspective vec3 pos;
+        centroid vec3 color;
+    };
+
+Note: in GLSL, structs cannot be used as I/O variables. However, they can in WGSL and HLSL.
+Some languages put them on entry point arguments:
+
+    vec4 main(flat in vec3 color, noperspective in vec2 uv, uniform float4x4 transform);
+
+
+slang: I think they allow both entry-point and global uniforms, but not sure about stage interface structs, or interpolation qualifiers in structs
+MSL: everything passed as entry-point arguments. No explicit interface structs
+HLSL: interpolation qualifiers on both fields and entry-point arguments
+GLSL: interpolation qualifiers on interface blocks & individual in/out globals; no entry-point arguments
+WGSL: uniforms as global args, input as entry-point arguments and interface structs
+
+Inputs/outputs should be function parameters, so that multiple entry points can coexist. Also see https://github.com/gpuweb/gpuweb/issues/1155#issuecomment-714801969
+
+WGSL: user defined IO types can be used outside of shader interfaces. In this case, interpolation qualifiers and `builtin` annotations are ignored (https://github.com/gpuweb/gpuweb/issues/1526).
+
+Alternatives: return interface struct with annotations
+
+    struct VertexOutputs {
+        @position vec4 position;
+        @interpolate(noperspective) vec2 uv;
+    }
+
+    VertexOutput vertexMain(in vec3 position, uniform mat4 transform) {
+        // ...
+        return VertexOutput(...);
+    }
+
+No interface structs, only params:
+
+    void vertexMain(in vec3 position, 
+                    uniform in mat4 transform, 
+                    out builtin(position) vec4 position, 
+                    out noperspective vec2 uv)
+    {
+      // ...
+    }
+
+Structs are nice for the interface between different stages, because we don't have to modify multiple entry point signatures
+if we want to add a new variable propagated between stages.
+
+Do the same as WGSL here: ignore interpolation and builtin qualifiers when the struct is not used in a IO context.
+
+
+Issue: struct used in different uniform blocks:
+
+    struct @layout(std140) Stroke {
+        vec2 a;
+        vec2[10] stride(16) b;
+        float taper;
+    };
+    
+    layout(set=0,binding=0,std140) uniform Test {
+        Stroke s1;
+        Stroke s2;
+    };
+    
+    layout(set=0,binding=1,std430) buffer Test2 {
+        Stroke s1;
+        Stroke s2;
+    };
+
+There are two versions of `Stroke` in the emitted SPIR-V: one with std140 layout, another with std430 layout.
+
+
+## Attribute syntax
+
+Before the item:
+
+    @position vec4 pos;
+
+Problem with that syntax is that it's ambiguous if we want to put attributes on the type, e.g.:
+
+    @location(0) @stride(16) vec4[10] data;   // is "@stride(16)" referring to the type `vec4`, the type `vec4[10]`, or the field `data`?
+
+Solution: put attribute after the item:
+
+    vec4[10] stride(16) data @location(0);
+
+There might be an ambiguity with function types:
+    
+    void(vec4 @location(0));  // is the attribute on the type or the parameter?
+
+Alternatives: 
+* no attributes on types: the main use case for attributes on types is the `stride` decoration to disambiguate between different array types. If attributes on types are not allowed, then would need a special syntax for the stride.
+=> Attributes on type *declarations* are OK actually, the issue is attributes on *type references*. The `@stride` attribute is more like a qualifier (like `const` or `volatile`) than an attribute.
+* special types (aligned to 16-byte boundaries) for std140 buffers:
+  * `aligned_vec2`, `aligned_float` or `std140_vec2`, `std140_float`
+  * this changes the element type instead of the array type
+  * the required changes are minimal on the syntax, but need to add implicit conversions
+
+
+Issue: attributes on functions
+    
+    void vertexMain(in vec3 position,
+                    uniform in mat4 transform,
+                    out builtin(position) vec4 position,
+                    out noperspective vec2 uv) @vertex
+    {
+        // ...
+    } 
+
+## Attributes on fields / functions, etc.
+
+
+# TODOs
+
+* Would be nice to have a syntax highlighter and some IDE integration
+  * LSP?

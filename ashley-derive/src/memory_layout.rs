@@ -1,5 +1,5 @@
 use crate::CRATE;
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::{parse_quote, spanned::Spanned, GenericParam, Generics};
 
@@ -26,6 +26,7 @@ pub(crate) fn has_repr_c_attr(ast: &syn::DeriveInput) -> bool {
 /// field of a repr(C) struct.
 ///
 /// This assumes that the derive input is a repr(C) struct.
+///
 pub(crate) fn generate_repr_c_layout_const_fn(derive_input: &syn::DeriveInput) -> Result<TokenStream, syn::Error> {
     let fields = match derive_input.data {
         syn::Data::Struct(ref s) => &s.fields,
@@ -87,7 +88,7 @@ fn add_trait_bounds(mut generics: Generics) -> Generics {
     generics
 }
 
-/// Derives `HirType`
+/// Derives `MemoryLayout`
 pub fn derive(input: proc_macro::TokenStream) -> TokenStream {
     let derive_input: syn::DeriveInput = match syn::parse(input) {
         Ok(input) => input,
@@ -129,22 +130,28 @@ pub fn derive(input: proc_macro::TokenStream) -> TokenStream {
     // generate code to describe each field in HIR
     let mut fields_desc = vec![];
     let mut fields_desc_idents = vec![];
+    let mut field_types = vec![];
     for (i, f) in fields.iter().enumerate() {
         let field_ty = &f.ty;
         let ident = f.ident.clone().unwrap_or(format_ident!("__{i}"));
         fields_desc.push(quote! {
             let #ident = #CRATE::hir::types::Field {
-                ty: <#field_ty>::hir_repr(m),
+                ty: <#field_ty>::hir_type(m),
                 name: Some(std::stringify!(#ident).into()),
-                offset: Some(Self::FIELDS[#i].0)
+                //offset: Some(Self::FIELDS[#i].0),
+                interpolation: None,
             };
         });
         fields_desc_idents.push(ident);
+        field_types.push(field_ty);
     }
 
     // generate impls
     let struct_name = &derive_input.ident;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    let i = 0..fields.len();
+    let i2 = 0..fields.len();
 
     quote! {
         #repr_c_check
@@ -152,18 +159,25 @@ pub fn derive(input: proc_macro::TokenStream) -> TokenStream {
         // field layout
         impl #impl_generics #struct_name #ty_generics #where_clause {
             #layout_const_fn
-            const FIELDS: &'static [(usize,usize)] = Self::layout().as_slice();
+            const FIELD_LAYOUTS: &'static [(usize,usize)] = Self::layout().as_slice();
         }
 
         // trait impl
-        impl #impl_generics #CRATE::utils::HirType for #struct_name #ty_generics #where_clause {
-            fn hir_repr(m: &mut #CRATE::hir::Module) -> #CRATE::hir::Type {
+        impl #impl_generics #CRATE::utils::MemoryLayout for #struct_name #ty_generics #where_clause {
+            fn hir_type(m: &mut #CRATE::hir::Module) -> #CRATE::hir::Type {
                 #(#fields_desc)*
+                let layout = #CRATE::hir::StructLayout {
+                    offsets: vec![#(Self::FIELD_LAYOUTS[#i2].0 as u32),*],
+                    layouts: vec![]
+                };
+
                 m.define_type(#CRATE::hir::TypeData::Struct(#CRATE::hir::types::StructType {
                     fields: vec![
                         #(#fields_desc_idents,)*
                     ].into(),
-                    name: Some(std::stringify!(#struct_name).into())
+                    name: Some(std::stringify!(#struct_name).into()),
+                    layout: Some(layout),
+                    block: false
                 }))
             }
         }

@@ -39,11 +39,15 @@ fn merge_type(dst: &mut Module, mut tydata: TypeData<'static>, map: &[usize]) ->
         *ty = Type::from_index(map[ty.index()]);
     };
     match tydata {
-        TypeData::Array(ref mut ty, _) => {
-            remap(ty);
+        TypeData::Array {
+            ref mut element_type, ..
+        } => {
+            remap(element_type);
         }
-        TypeData::RuntimeArray(ref mut ty) => {
-            remap(ty);
+        TypeData::RuntimeArray {
+            ref mut element_type, ..
+        } => {
+            remap(element_type);
         }
         TypeData::Struct(ref mut struct_type) => {
             for f in struct_type.fields.to_mut().iter_mut() {

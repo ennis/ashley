@@ -1,9 +1,11 @@
 //! Typed AST representation
+mod attributes;
 mod builtins;
 mod consteval;
 mod def;
 mod expr;
 mod item;
+mod layout;
 mod lower;
 mod overload;
 mod scope;
@@ -16,6 +18,8 @@ pub use expr::Expr;
 pub use lower::lower_to_hir;
 pub(crate) use scope::Scope;
 pub use ty::{FunctionType, ScalarType, Type, TypeKind};
+
+use self::layout::std_array_stride;
 
 use crate::{
     builtins::PrimitiveTypes,

@@ -1,12 +1,11 @@
 use crate::{
     hir,
     tast::{
-        ty::{ImageSampling, ImageType},
+        ty::{ImageSampling, ImageType, Qualifiers, StructField},
         ScalarType, Type, TypeKind, Types,
     },
 };
-use core::fmt;
-use std::fmt::Debug;
+use std::{fmt, fmt::Debug};
 
 //--------------------------------------------------------------------------------------------------
 
@@ -84,30 +83,34 @@ define_primitive_types! {
     dvec3           TypeKind::Vector(ScalarType::Double, 3);
     dvec4           TypeKind::Vector(ScalarType::Double, 4);
 
-    mat2            TypeKind::Matrix { component_type: ScalarType::Float, columns: 2, rows: 2 };
-    mat3            TypeKind::Matrix { component_type: ScalarType::Float, columns: 3, rows: 3 };
-    mat4            TypeKind::Matrix { component_type: ScalarType::Float, columns: 4, rows: 4 };
-    dmat2           TypeKind::Matrix { component_type: ScalarType::Double, columns: 2, rows: 2 };
-    dmat3           TypeKind::Matrix { component_type: ScalarType::Double, columns: 3, rows: 3 };
-    dmat4           TypeKind::Matrix { component_type: ScalarType::Double, columns: 4, rows: 4 };
-    mat2x2          TypeKind::Matrix { component_type: ScalarType::Float, columns: 2, rows: 2 };
-    mat2x3          TypeKind::Matrix { component_type: ScalarType::Float, columns: 2, rows: 3 };
-    mat2x4          TypeKind::Matrix { component_type: ScalarType::Float, columns: 2, rows: 4 };
-    mat3x2          TypeKind::Matrix { component_type: ScalarType::Float, columns: 3, rows: 2 };
-    mat3x3          TypeKind::Matrix { component_type: ScalarType::Float, columns: 3, rows: 3 };
-    mat3x4          TypeKind::Matrix { component_type: ScalarType::Float, columns: 3, rows: 4 };
-    mat4x2          TypeKind::Matrix { component_type: ScalarType::Float, columns: 4, rows: 2 };
-    mat4x3          TypeKind::Matrix { component_type: ScalarType::Float, columns: 4, rows: 3 };
-    mat4x4          TypeKind::Matrix { component_type: ScalarType::Float, columns: 4, rows: 4 };
-    dmat2x2         TypeKind::Matrix { component_type: ScalarType::Double, columns: 2, rows: 2 };
-    dmat2x3         TypeKind::Matrix { component_type: ScalarType::Double, columns: 2, rows: 3 };
-    dmat2x4         TypeKind::Matrix { component_type: ScalarType::Double, columns: 2, rows: 4 };
-    dmat3x2         TypeKind::Matrix { component_type: ScalarType::Double, columns: 3, rows: 2 };
-    dmat3x3         TypeKind::Matrix { component_type: ScalarType::Double, columns: 3, rows: 3 };
-    dmat3x4         TypeKind::Matrix { component_type: ScalarType::Double, columns: 3, rows: 4 };
-    dmat4x2         TypeKind::Matrix { component_type: ScalarType::Double, columns: 4, rows: 2 };
-    dmat4x3         TypeKind::Matrix { component_type: ScalarType::Double, columns: 4, rows: 3 };
-    dmat4x4         TypeKind::Matrix { component_type: ScalarType::Double, columns: 4, rows: 4 };
+    // TODO check strides
+    mat2            TypeKind::Matrix { stride: 8, component_type: ScalarType::Float, columns: 2, rows: 2 };
+    mat3            TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 3, rows: 3 };
+    mat4            TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 4, rows: 4 };
+    dmat2           TypeKind::Matrix { stride: 16, component_type: ScalarType::Double, columns: 2, rows: 2 };
+    dmat3           TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 3, rows: 3 };
+    dmat4           TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 4, rows: 4 };
+    mat2x2          TypeKind::Matrix { stride: 8, component_type: ScalarType::Float, columns: 2, rows: 2 };
+    mat2x3          TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 2, rows: 3 };
+    mat2x4          TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 2, rows: 4 };
+    mat3x2          TypeKind::Matrix { stride: 8, component_type: ScalarType::Float, columns: 3, rows: 2 };
+    mat3x3          TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 3, rows: 3 };
+    mat3x4          TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 3, rows: 4 };
+    mat4x2          TypeKind::Matrix { stride: 8, component_type: ScalarType::Float, columns: 4, rows: 2 };
+    mat4x3          TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 4, rows: 3 };
+    mat4x4          TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 4, rows: 4 };
+    dmat2x2         TypeKind::Matrix { stride: 16, component_type: ScalarType::Double, columns: 2, rows: 2 };
+    dmat2x3         TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 2, rows: 3 };
+    dmat2x4         TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 2, rows: 4 };
+    dmat3x2         TypeKind::Matrix { stride: 16, component_type: ScalarType::Double, columns: 3, rows: 2 };
+    dmat3x3         TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 3, rows: 3 };
+    dmat3x4         TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 3, rows: 4 };
+    dmat4x2         TypeKind::Matrix { stride: 16, component_type: ScalarType::Double, columns: 4, rows: 2 };
+    dmat4x3         TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 4, rows: 3 };
+    dmat4x4         TypeKind::Matrix { stride: 32, component_type: ScalarType::Double, columns: 4, rows: 4 };
+
+    // TODO matrix types with std140 strides
+    std140_mat2     TypeKind::Matrix { stride: 16, component_type: ScalarType::Float, columns: 2, rows: 2 };
 
     sampler         TypeKind::Sampler;
     samplerShadow   TypeKind::SamplerShadow;
@@ -187,20 +190,20 @@ define_primitive_types! {
     // unnameable types
     [private]
 
-    modf_result_float TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), float.clone()), ("whole".to_string(), float.clone())] };
-    modf_result_vec2  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec2.clone()), ("whole".to_string(), vec2.clone())] };
-    modf_result_vec3  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec3.clone()), ("whole".to_string(), vec3.clone())] };
-    modf_result_vec4  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec4.clone()), ("whole".to_string(), vec4.clone())] };
+    modf_result_float TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: float.clone(), qualifiers: Qualifiers::default() }, StructField { name: "whole".to_string(), ty: float.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_vec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "whole".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_vec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "whole".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_vec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "whole".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  }] };
 
-    modf_result_double TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), double.clone()), ("whole".to_string(), double.clone())] };
-    modf_result_dvec2  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), dvec2.clone()), ("whole".to_string(), dvec2.clone())] };
-    modf_result_dvec3  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), dvec3.clone()), ("whole".to_string(), dvec3.clone())] };
-    modf_result_dvec4  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), dvec4.clone()), ("whole".to_string(), dvec4.clone())] };
+    modf_result_double TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: double.clone(), qualifiers: Qualifiers::default() }, StructField { name: "whole".to_string(),ty: double.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_dvec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: dvec2.clone(), qualifiers: Qualifiers::default() },  StructField { name: "whole".to_string(),ty: dvec2.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_dvec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: dvec3.clone(), qualifiers: Qualifiers::default() },  StructField { name: "whole".to_string(),ty: dvec3.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_dvec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: dvec4.clone(), qualifiers: Qualifiers::default() },  StructField { name: "whole".to_string(),ty: dvec4.clone(), qualifiers: Qualifiers::default()  }] };
 
-    frexp_result_float TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), float.clone()), ("exp".to_string(), float.clone())] };
-    frexp_result_vec2  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec2.clone()), ("exp".to_string(), vec2.clone())] };
-    frexp_result_vec3  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec3.clone()), ("exp".to_string(), vec3.clone())] };
-    frexp_result_vec4  TypeKind::Struct { name: String::new(), def: None, fields: vec![("fract".to_string(), vec4.clone()), ("exp".to_string(), vec4.clone())] };
+    frexp_result_float TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: float.clone(), qualifiers: Qualifiers::default()  }, StructField { name: "exp".to_string(), ty: float.clone(), qualifiers: Qualifiers::default()  } ] };
+    frexp_result_vec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "exp".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  } ] };
+    frexp_result_vec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "exp".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  } ] };
+    frexp_result_vec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "exp".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  } ] };
 }
 
 //--------------------------------------------------------------------------------------------------

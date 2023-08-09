@@ -58,7 +58,7 @@ mod tests {
     use crate::{
         diagnostic::SourceFileProvider,
         syntax,
-        syntax::{ast::AstNode, Diagnostics, SyntaxNode},
+        syntax::{ast::AstNode, SyntaxNode},
         Session,
     };
     use codespan_reporting::{

@@ -1,5 +1,7 @@
-use crate::hir::{Module, Type};
-use ashley::diagnostic::SourceLocation;
+use crate::{
+    diagnostic::SourceLocation,
+    hir::{Module, StructLayout, Type},
+};
 use rspirv::{
     spirv,
     spirv::{AccessQualifier, ImageFormat},
@@ -29,12 +31,53 @@ impl ScalarType {
     }
 }
 
+/*bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct FieldFlags: u32 {
+        const NO_PERSPECTIVE = 0b00000001;
+        const FLAT = 0b00000010;
+        const C = 0b00000100;
+        const ABC = Self::A.bits() | Self::B.bits() | Self::C.bits();
+    }
+}*/
+
+/// Builtin variable.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Builtin {
+    Position,
+    PointSize,
+}
+
+#[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum InterpolationKind {
+    #[default]
+    Flat,
+    NoPerspective,
+    Smooth,
+}
+
+#[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum InterpolationSampling {
+    #[default]
+    Center,
+    Centroid,
+    Sample,
+}
+
+#[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct Interpolation {
+    pub kind: InterpolationKind,
+    pub sampling: InterpolationSampling,
+}
+
 /// Field of a struct type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Field<'a> {
     pub ty: Type,
     pub name: Option<Cow<'a, str>>,
-    pub offset: Option<usize>,
+    //pub offset: Option<usize>,
+    /// For fields of interface blocks, defines the interpolation parameters of the field.
+    pub interpolation: Option<Interpolation>,
 }
 
 impl<'a> Field<'a> {
@@ -42,16 +85,42 @@ impl<'a> Field<'a> {
         Field {
             ty: self.ty,
             name: self.name.map(|name| Cow::Owned(name.into_owned())),
-            offset: self.offset,
+            interpolation: self.interpolation,
         }
     }
 }
+
+/// Layout of memory interface structs.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MemoryInterfaceLayout {
+    /// std140 layout
+    Std140,
+    /// std430 layout
+    Std430,
+    /// Explicitly-specified layout
+    Explicit(StructLayout),
+}
+
+/*
+/// Special kinds of structs.
+#[derive(Clone, Debug)]
+pub enum StructTypeKind {
+    /// This is a regular struct, not used in interfaces.
+    NoInterface,
+    /// The struct is used as an interface type between stages.
+    StageInterface,
+    /// The struct describes a memory interface between the host and the shader.
+    MemoryInterface(MemoryInterfaceLayout),
+}*/
 
 /// Structure type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StructType<'a> {
     pub name: Option<Cow<'a, str>>,
     pub fields: Cow<'a, [Field<'a>]>,
+    pub layout: Option<StructLayout>,
+    /// Whether this structure type is a memory interface block (`Block` decoration in SPIR-V).
+    pub block: bool,
 }
 
 impl<'a> StructType<'a> {
@@ -60,6 +129,8 @@ impl<'a> StructType<'a> {
         StructType {
             name: self.name.map(|name| Cow::Owned(name.into_owned())),
             fields: Cow::Owned(fields),
+            layout: self.layout.clone(),
+            block: self.block,
         }
     }
 }
@@ -73,6 +144,10 @@ impl<'a> StructType<'a> {
     /// Finds a field by name.
     pub fn field(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.name.as_deref() == Some(name))
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        self.layout.is_none()
     }
 }
 
@@ -128,11 +203,19 @@ pub enum TypeData<'a> {
         component_type: ScalarType,
         columns: u8,
         rows: u8,
+        stride: u32,
     },
     /// Array type (element type + size).
-    Array(Type, u32),
+    Array {
+        element_type: Type,
+        size: u32,
+        stride: Option<u32>,
+    },
     /// Runtime array type. Array without a known length.
-    RuntimeArray(Type),
+    RuntimeArray {
+        element_type: Type,
+        stride: Option<u32>,
+    },
     /// Structure type (array of (offset, type) tuples).
     Struct(StructType<'a>),
     /// Sampled image type (e.g. `texture2D`).
@@ -166,13 +249,23 @@ impl<'a> TypeData<'a> {
                 component_type,
                 columns,
                 rows,
+                stride,
             } => TypeData::Matrix {
                 component_type,
                 columns,
                 rows,
+                stride,
             },
-            TypeData::Array(t, n) => TypeData::Array(t, n),
-            TypeData::RuntimeArray(t) => TypeData::RuntimeArray(t),
+            TypeData::Array {
+                element_type,
+                size,
+                stride,
+            } => TypeData::Array {
+                element_type,
+                size,
+                stride,
+            },
+            TypeData::RuntimeArray { element_type, stride } => TypeData::RuntimeArray { element_type, stride },
             TypeData::SampledImage(i) => TypeData::SampledImage(i),
             TypeData::Image(i) => TypeData::Image(i),
             TypeData::Pointer {
@@ -216,6 +309,19 @@ impl<'a> TypeData<'a> {
     pub fn is_sampler(&self) -> bool {
         match self {
             TypeData::Sampler => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        match self {
+            TypeData::Image(_)
+            | TypeData::String
+            | TypeData::Sampler
+            | TypeData::SamplerShadow
+            | TypeData::Unknown
+            | TypeData::Function(_) => true,
+            TypeData::Struct(ty) => ty.is_opaque(),
             _ => false,
         }
     }
@@ -309,6 +415,7 @@ impl<'a> fmt::Debug for TypeDataDebug<'a> {
                 rows,
                 columns,
                 component_type,
+                stride,
             } => {
                 let prefix = match component_type {
                     ScalarType::Float => "mat",
@@ -317,13 +424,25 @@ impl<'a> fmt::Debug for TypeDataDebug<'a> {
                 };
                 write!(f, "{prefix}{columns}x{rows}")?;
             }
-            TypeData::Array(ty, n) => {
-                let td = self.0.debug_type(*ty);
-                write!(f, "{td:?}[{n}]")?;
+            TypeData::Array {
+                element_type,
+                size,
+                stride,
+            } => {
+                let td = self.0.debug_type(*element_type);
+                if let Some(stride) = *stride {
+                    write!(f, "{td:?}[{size}] stride({stride})")?;
+                } else {
+                    write!(f, "{td:?}[{size}]")?;
+                }
             }
-            TypeData::RuntimeArray(rt) => {
-                let td = self.0.debug_type(*rt);
-                write!(f, "{td:?}[]")?;
+            TypeData::RuntimeArray { element_type, stride } => {
+                let td = self.0.debug_type(*element_type);
+                if let Some(stride) = *stride {
+                    write!(f, "@stride({stride}) {td:?}[]")?;
+                } else {
+                    write!(f, "{td:?}[]")?;
+                }
             }
             TypeData::Struct(s) => {
                 print_struct_type(self.0, s, f)?;

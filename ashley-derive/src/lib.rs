@@ -4,7 +4,7 @@ extern crate proc_macro;
 use proc_macro2::Span;
 use quote::{ToTokens, TokenStreamExt};
 
-mod hir_type;
+mod memory_layout;
 
 //--------------------------------------------------------------------------------------------------
 struct CrateName;
@@ -16,7 +16,7 @@ impl ToTokens for CrateName {
     }
 }
 
-#[proc_macro_derive(HirType)]
-pub fn hir_type_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    hir_type::derive(input).into()
+#[proc_macro_derive(MemoryLayout)]
+pub fn memory_layout_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    memory_layout::derive(input).into()
 }

@@ -1,6 +1,6 @@
 use ashley::{
     hir::transform::{write_spirv, ShaderInterfaceTransform, ShaderInterfaceTransformError},
-    utils::HirType,
+    utils::{MemoryLayout, Std140Int, Std140Vec4},
     QueryError, Session,
 };
 use spirv_tools::{
@@ -59,6 +59,7 @@ struct Uniforms {
     time: f32,
     width: u32,
     height: u32,
+    frame: u32
 };
 
 @group(0) @binding(0) 
@@ -92,13 +93,13 @@ struct WgpuState {
     size: winit::dpi::PhysicalSize<u32>,
 }
 
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, HirType)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, MemoryLayout)]
 #[repr(C)]
 struct Uniforms {
-    resolution: [i32; 3],
-    dummy: f32,
     time: f32,
-    frame: i32,
+    width: u32,
+    height: u32,
+    frame: u32,
 }
 
 const PRIMITIVE_STATE: wgpu::PrimitiveState = wgpu::PrimitiveState {
@@ -171,8 +172,8 @@ impl WgpuState {
         let uniforms_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Uniforms Buffer"),
             contents: bytemuck::cast_slice(&[Uniforms {
-                resolution: [config.width as i32, config.height as i32, 0],
-                dummy: 0.0,
+                width: config.width,
+                height: config.height,
                 time: 0.0,
                 frame: 0,
             }]),
@@ -308,18 +309,18 @@ impl WgpuState {
                     max_limits: vec![],
                 }),
             );
-            match result {
-                Ok(_) => {}
-                Err(err) => {
-                    let assembler = spirv_tools::assembler::create(None);
-                    let dis = assembler
-                        .disassemble(&code, DisassembleOptions::default())
-                        .unwrap()
-                        .unwrap();
-                    eprintln!("{dis}");
-                    eprintln!("[{}] SPIR-V validation failed: {}", module_name, err)
-                }
-            }
+            //match result {
+            //    Ok(_) => {}
+            //    Err(err) => {
+            let assembler = spirv_tools::assembler::create(None);
+            let dis = assembler
+                .disassemble(&code, DisassembleOptions::default())
+                .unwrap()
+                .unwrap();
+            eprintln!("{dis}");
+            //eprintln!("[{}] SPIR-V validation failed: {}", module_name, err)
+            //    }
+            //}
         }
         validate_spirv(stem, &spv);
 
@@ -373,9 +374,9 @@ impl WgpuState {
 
     fn update(&mut self) {
         let uniforms = Uniforms {
-            resolution: [self.config.width as i32, self.config.height as i32, 0],
-            dummy: 0.0,
             time: Instant::now().duration_since(self.start_instant).as_secs_f32(),
+            width: self.config.width,
+            height: self.config.height,
             frame: 0,
         };
         self.queue

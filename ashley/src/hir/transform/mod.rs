@@ -4,7 +4,11 @@ mod link;
 use crate::{
     diagnostic::Diagnostics,
     hir,
-    hir::{GlobalVariable, GlobalVariableData, InstructionData, Module, Operand, Type, TypeData, ValueData},
+    hir::{
+        types::{Field, MemoryInterfaceLayout, StructType},
+        Decoration, GlobalVariable, GlobalVariableData, InstructionData, Layout, Module, Operand, StructLayout, Type,
+        TypeData, ValueData,
+    },
     tast, utils,
 };
 use ::spirv::StorageClass;
@@ -84,6 +88,7 @@ fn rewrite_uniform_access(
     field_index: i32,
 ) {
     let field_index = hir.const_i32(field_index);
+    let const_zero = hir.const_i32(0);
     let ty = hir.globals[var].ty;
     let ptr_ty = hir.pointer_type(ty, StorageClass::Uniform);
     for (_, func) in hir.functions.iter_mut() {
@@ -98,6 +103,9 @@ fn rewrite_uniform_access(
                         block.instructions[i]
                             .operands
                             .insert(1, Operand::ConstantRef(field_index));
+                        block.instructions[i]
+                            .operands
+                            .insert(1, Operand::ConstantRef(const_zero));
                     }
                     Op::Load if block.instructions[i].operands[0] == Operand::GlobalRef(var) => {
                         trace!("rewrite OpLoad {} {:?}", func.name, block.instructions[i]);
@@ -107,7 +115,11 @@ fn rewrite_uniform_access(
                             InstructionData {
                                 opcode: Op::AccessChain,
                                 result: Some(result),
-                                operands: smallvec![Operand::GlobalRef(buffer_var), Operand::ConstantRef(field_index)],
+                                operands: smallvec![
+                                    Operand::GlobalRef(buffer_var),
+                                    Operand::ConstantRef(const_zero), // interface wrapper struct
+                                    Operand::ConstantRef(field_index)
+                                ],
                             },
                         );
                         i += 1;
@@ -152,12 +164,31 @@ impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
         })
     }
 
-    pub fn provide_uniform_buffer_as_type<T: utils::HirType>(
+    pub fn provide_uniform_buffer_as_type<T: utils::MemoryLayout>(
         &mut self,
         set: u32,
         binding: u32,
     ) -> Result<(), ShaderInterfaceTransformError> {
-        let ty = T::hir_repr(self.hir);
+        let ty = T::hir_type(self.hir);
+
+        // wrapper type with a `Block` decoration
+        let block_ty_data = TypeData::Struct(StructType {
+            name: None,
+            fields: vec![Field {
+                ty,
+                name: None,
+                interpolation: None,
+            }]
+            .into(),
+            layout: Some(StructLayout {
+                offsets: vec![0],
+                layouts: vec![],
+            }),
+            block: true,
+        });
+        let block_ty = self.hir.define_type(block_ty_data);
+
+        // retrieve the StructType for T
         let tydata = &self.hir.types[ty];
         let struct_ty = match tydata {
             TypeData::Struct(st) => st,
@@ -185,18 +216,19 @@ impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
 
         // introduce a new uniform variable (pointer-typed) for the uniform buffer
         let decorations = vec![
-            rspirv::sr::Decoration::Uniform,
-            rspirv::sr::Decoration::DescriptorSet(set),
-            rspirv::sr::Decoration::Binding(binding),
+            Decoration::Uniform,
+            Decoration::DescriptorSet(set),
+            Decoration::Binding(binding),
+            Decoration::Block,
         ];
-        let ptr_ty = self.hir.pointer_type(ty, StorageClass::Uniform);
         let buffer_var = self.hir.define_global_variable(GlobalVariableData {
             name: "".to_string(), // TODO name
-            ty: ptr_ty,
-            storage_class: StorageClass::Uniform, // not sure what I should put here?
-            source_location: None,                // synthetic
+            ty: block_ty,
+            storage_class: StorageClass::Uniform,
+            source_location: None, // synthetic
             decorations,
             removed: false,
+            linkage: None,
         });
 
         // replace accesses to any matched interface var with an access to a field of the buffer

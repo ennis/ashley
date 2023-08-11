@@ -1,7 +1,17 @@
-use crate::{builtins::BuiltinSignature, diagnostic::SourceLocation, syntax::ast, tast::ty::Type};
+use crate::{
+    builtins::BuiltinSignature,
+    diagnostic::{Diagnostics, SourceLocation},
+    hir::Interpolation,
+    syntax::ast,
+    tast::{
+        attributes::{KnownAttribute, KnownAttributeKind},
+        ty::Type,
+    },
+};
 use std::fmt;
 
 /// Describes the kind of a global program variable.
+/// TODO remove this and use spirv::StorageClass directly?
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Qualifier {
     Buffer,
@@ -54,6 +64,55 @@ pub struct FunctionParam {
     pub name: String,
 }
 
+/// Qualifiers on functions.
+#[derive(Default, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct FunctionQualifiers {
+    pub execution_model: Option<spirv::ExecutionModel>,
+}
+
+impl FunctionQualifiers {
+    pub(crate) fn from_attributes(
+        attrs: &[KnownAttribute],
+        srcloc: Option<SourceLocation>,
+        diag: &mut Diagnostics,
+    ) -> FunctionQualifiers {
+        let mut execution_model = None;
+        let mut specified_execution_model_more_than_once = false;
+
+        for attr in attrs {
+            match attr.kind {
+                KnownAttributeKind::Vertex => {
+                    if execution_model.is_some() {
+                        specified_execution_model_more_than_once = true;
+                    }
+                    execution_model = Some(spirv::ExecutionModel::Vertex);
+                }
+                KnownAttributeKind::Fragment => {
+                    if execution_model.is_some() {
+                        specified_execution_model_more_than_once = true;
+                    }
+                    execution_model = Some(spirv::ExecutionModel::Fragment);
+                }
+                _ => {
+                    //
+                    diag.error(format!("invalid attribute"))
+                        .primary_label_opt(srcloc, "")
+                        .emit();
+                }
+            }
+        }
+
+        if specified_execution_model_more_than_once {
+            // TODO more precise locations
+            diag.error(format!("execution model specified more than once"))
+                .primary_label_opt(srcloc, "")
+                .emit();
+        }
+
+        FunctionQualifiers { execution_model }
+    }
+}
+
 /// A function definition or declaration.
 #[derive(Debug)]
 pub struct FunctionDef {
@@ -63,6 +122,7 @@ pub struct FunctionDef {
     pub function_type: Type,
     pub parameters: Vec<FunctionParam>,
     pub builtin: Option<&'static BuiltinSignature>,
+    pub execution_model: Option<spirv::ExecutionModel>,
 }
 
 #[derive(Debug)]
@@ -71,6 +131,9 @@ pub struct GlobalDef {
     pub linkage: Option<spirv::LinkageType>,
     pub ty: Type,
     pub qualifier: Option<Qualifier>,
+    pub location: Option<u32>,
+    pub interpolation: Option<Interpolation>,
+    pub builtin: Option<spirv::BuiltIn>,
 }
 
 #[derive(Debug)]

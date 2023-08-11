@@ -22,6 +22,23 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     value + multiple - remainder
 }
 
+/// Helper macro to write a comma-separated list.
+// implemented as a macro to avoid borrowing woes
+macro_rules! write_list {
+    ($w:expr, $i:ident in $coll:expr => $b:block) => {
+        let mut first = true;
+        for $i in $coll {
+            if !first {
+                write!($w, ",").unwrap();
+            }
+            $b
+            first = false;
+        }
+    };
+}
+
+pub(crate) use write_list;
+
 /// Defines arena ID types.
 macro_rules! id_types {
     ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
@@ -67,7 +84,8 @@ macro_rules! id_types {
 pub(crate) use id_types;
 
 /// A "side-map" for items allocated in an IdArena.
-/// TODO: the API is shit, needs T: Default+Clone, only used once, needs mut access for reading
+// TODO: the API is shit, needs T: Default+Clone, only used once, needs mut access for reading
+// TODO: don't make it public?
 pub struct IdMap<Id, T> {
     map: Vec<Option<T>>,
     _phantom: PhantomData<fn() -> Id>,

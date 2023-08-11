@@ -14,6 +14,7 @@ use crate::{
 use ::spirv::StorageClass;
 use smallvec::smallvec;
 use spirv::Op;
+use std::mem;
 
 pub use self::{emit_spirv::write_spirv, link::link_module_pipeline};
 
@@ -236,6 +237,16 @@ impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
             rewrite_uniform_access(self.hir, var, buffer_var, field_index);
             self.hir.remove_global(var);
         }
+
+        // recompute shader interfaces
+        // TODO: do that in `finish()`
+        // temporarily move them out so we can modify them without borrow-locking the module
+        let mut entry_points = mem::take(&mut self.hir.entry_points);
+        for (_, epdata) in entry_points.iter_mut() {
+            let shader_interface = self.hir.shader_interface(epdata.function);
+            epdata.shader_interface = shader_interface;
+        }
+        self.hir.entry_points = entry_points;
 
         Ok(())
     }

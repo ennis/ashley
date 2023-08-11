@@ -1,8 +1,9 @@
+// TODO move this out of `transform`
 use crate::{
     hir::{
         types::{ImageSampling, ImageType, ScalarType},
-        Block, Constant, ConstantData, Decoration, ExtInstSet, Function, GlobalVariable, IdRef, Local, Module, Operand,
-        TerminatingInstruction, Type, TypeData, Value,
+        Block, Constant, ConstantData, Decoration, EntryPoint, ExtInstSet, Function, GlobalVariable, IdRef, Local,
+        Module, Operand, TerminatingInstruction, Type, TypeData, Value,
     },
     utils::IdMap,
 };
@@ -400,11 +401,41 @@ impl<'a> Ctxt<'a> {
         if let Some(linkage) = fdata.linkage {
             self.emit_linkage_decoration(function_id, &fdata.name, linkage);
         }
+
         self.function_map.insert(function, function_id);
         function_id
     }
 
-    fn emit_decoration(&mut self, deco: &Decoration) {}
+    fn emit_decorations(&mut self, id: Word, decorations: &[Decoration]) {
+        for deco in decorations.iter() {
+            match deco {
+                Decoration::LinkageAttributes(name, linkage) => {
+                    self.emit_linkage_decoration(id, name, *linkage);
+                }
+                //Decoration::Block => self.builder.decorate(id, spirv::Decoration::Block, []),
+                Decoration::DescriptorSet(set) => {
+                    self.builder
+                        .decorate(id, spirv::Decoration::DescriptorSet, [dr::Operand::LiteralInt32(*set)])
+                }
+                Decoration::Binding(binding) => {
+                    self.builder
+                        .decorate(id, spirv::Decoration::Binding, [dr::Operand::LiteralInt32(*binding)])
+                }
+                Decoration::BuiltIn(builtin) => {
+                    self.builder
+                        .decorate(id, spirv::Decoration::BuiltIn, [dr::Operand::BuiltIn(*builtin)])
+                }
+                Decoration::Location(location) => {
+                    self.builder
+                        .decorate(id, spirv::Decoration::Location, [dr::Operand::LiteralInt32(*location)])
+                }
+                _ => {
+                    // TODO other decorations
+                    warn!("unimplemented decoration {:?}", deco);
+                }
+            }
+        }
+    }
 
     fn emit_global(&mut self, g: GlobalVariable) -> Word {
         if let Some(word) = self.global_map.get(g) {
@@ -420,30 +451,23 @@ impl<'a> Ctxt<'a> {
         let ptr_ty = self.builder.type_pointer(None, gdata.storage_class, ty);
         let id = self.builder.variable(ptr_ty, None, gdata.storage_class, None); // TODO initializers
 
-        for deco in gdata.decorations.iter() {
-            match deco {
-                Decoration::LinkageAttributes(name, linkage) => {
-                    self.emit_linkage_decoration(id, &name, *linkage);
-                }
-                //Decoration::Block => self.builder.decorate(id, spirv::Decoration::Block, []),
-                Decoration::DescriptorSet(set) => {
-                    self.builder
-                        .decorate(id, spirv::Decoration::DescriptorSet, [dr::Operand::LiteralInt32(*set)])
-                }
-                Decoration::Binding(binding) => {
-                    self.builder
-                        .decorate(id, spirv::Decoration::Binding, [dr::Operand::LiteralInt32(*binding)])
-                }
-                _ => {
-                    // TODO other decorations
-                    warn!("unimplemented decoration {:?}", deco);
-                }
-            }
-        }
-
+        self.emit_decorations(id, &gdata.decorations);
         self.builder.name(id, &gdata.name);
         self.global_map.insert(g, id);
         id
+    }
+
+    fn emit_entry_point(&mut self, entry_point: EntryPoint) {
+        let ep = &self.module.entry_points[entry_point];
+        let func = self.function_map[ep.function];
+        let shader_interface: Vec<_> = ep.shader_interface.iter().map(|i| self.global_map[*i]).collect();
+        self.builder
+            .entry_point(ep.execution_model, func, &ep.name, &shader_interface);
+        if ep.execution_model == spirv::ExecutionModel::Fragment {
+            // FIXME HACK
+            self.builder
+                .execution_mode(func, spirv::ExecutionMode::OriginUpperLeft, []);
+        }
     }
 
     fn operand_to_rspirv(
@@ -513,7 +537,7 @@ pub fn write_spirv(module: &Module) -> Vec<u32> {
     let mut builder = rspirv::dr::Builder::new();
 
     builder.set_version(1, 5);
-    builder.capability(Capability::Linkage);
+    //builder.capability(Capability::Linkage);  // TODO
     builder.capability(Capability::Shader);
 
     let mut ext_inst_sets = IdMap::with_capacity(module.ext_inst_sets.len());
@@ -540,6 +564,10 @@ pub fn write_spirv(module: &Module) -> Vec<u32> {
 
     for (f, _) in module.functions.iter() {
         ctxt.emit_function(f);
+    }
+
+    for (ep, _) in module.entry_points.iter() {
+        ctxt.emit_entry_point(ep);
     }
 
     builder.module().assemble()

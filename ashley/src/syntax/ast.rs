@@ -222,11 +222,12 @@ impl_ast_variant_node!(AttrItem, [
     ATTR_LITERAL => AttrLiteral,
     ATTR_KEY_VALUE => AttrKeyValue
 ]);
-impl_ast_node!(Attribute   <ATTRIBUTE>      [token name: Ident, nodes args: AttrItem]);
+impl_ast_node!(Attribute   <ATTRIBUTE>      [token name: Ident, node args: AttrArgs]);
 impl_ast_node!(AttrIdent   <ATTR_IDENT>     [token ident: Ident]);
 impl_ast_node!(AttrLiteral <ATTR_LITERAL>   [node expr: LitExpr]);
 impl_ast_node!(AttrKeyValue <ATTR_KEY_VALUE> [token key: Ident, node value: Expr]);
-impl_ast_node!(AttrNested  <ATTR_NESTED>  [token ident: Ident, nodes args: AttrItem]);
+impl_ast_node!(AttrNested  <ATTR_NESTED>  [token ident: Ident, node args: AttrArgs]);
+impl_ast_node!(AttrArgs    <ATTR_ARGS>  [nodes args: AttrItem]);
 impl_ast_node!(Module      <MODULE>       [nodes items: Item]);
 impl_ast_node!(ImportDecl  <IMPORT_DECL>  [token package_name: Ident]);
 impl_ast_node!(ImportParamList <IMPORT_PARAM_LIST>  []);
@@ -246,7 +247,8 @@ impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
 impl_ast_node!(ClosureParamList   <CLOSURE_PARAM_LIST>   [nodes parameters: Type]);
 
 impl_ast_node!(FnDef<FN_DEF>
-               [node visibility: Visibility,
+               [nodes attrs: Attribute,
+                node visibility: Visibility,
                 node extern_: Linkage,
                 node return_type: Type,
                 node param_list: ParamList,

@@ -1589,10 +1589,35 @@ Issue: attributes on functions
         // ...
     } 
 
-## Attributes on fields / functions, etc.
+# Attributes on fields / functions, etc.
+
+One type per attribute, e.g.:
+
+    pub struct GuiWidgetAttribute {
+    }
+    
+    sess.register_custom_attribute::<GuiWidgetAttribute>("gui");
+
+Query an attribute on a package:
+
+    sess.has_attribute::<GuiWidgetAttribute>(def: DefId);
+
 
 
 # TODOs
 
-* Would be nice to have a syntax highlighter and some IDE integration
-  * LSP?
+1. Determine shader interface
+   Where to do this? 
+    - Post-HIR (when emitting SPIR-V)
+    - Pre-HIR (when lowering TAST to HIR)
+   Would make sense to do this post-HIR, so that we can do interface transformations on the HIR without worrying about the interface?
+Makes sense to do this on HIR.
+ 
+2. Refactor attribute handling
+   * Define attributes by specifying their ident and syntax 
+   * Attributes are put in an enum type, with a filter to constrain where they may appear (structures, members, functions, global variables, arguments)
+3. qualifiers on global variables
+4. Test and review layout calculations
+5. Back-links from TAST to original syntax
+6. Would be nice to have a syntax highlighter and some IDE integration with LSP
+

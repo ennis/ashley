@@ -5,19 +5,75 @@ use crate::{
     syntax::ast,
     tast,
     tast::{
-        attributes::{parse_attributes, AttributeTarget, KnownAttribute},
-        def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef},
+        attributes::{check_attributes, AttributeTarget, KnownAttribute, KnownAttributeKind},
+        def::{DefKind, FunctionDef, FunctionParam, FunctionQualifiers, GlobalDef, StructDef},
         layout::{
             std_struct_layout,
             StdLayoutRules::{Std140, Std430},
         },
         scope::{Res, Scope},
-        ty::{Qualifiers, StructField},
+        ty::StructField,
         Def, DefId, FunctionType, IdentExt, Type, TypeCheckItemCtxt, TypeKind, Visibility,
     },
     utils::round_up,
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Attributes on struct fields or variables.
+#[derive(Default, Clone, Debug, Eq, PartialEq, Hash)]
+struct VariableAttributes {
+    location: Option<u32>,
+    interpolation: Option<Interpolation>,
+    builtin: Option<spirv::BuiltIn>,
+    offset: Option<u32>,
+    align: Option<u32>,
+}
+
+impl VariableAttributes {
+    fn from_attributes(attrs: &[KnownAttribute]) -> VariableAttributes {
+        let mut location = None;
+        let mut interpolation = None;
+        let mut builtin = None;
+        let mut offset = None;
+        let mut align = None;
+
+        for attr in attrs {
+            match attr.kind {
+                KnownAttributeKind::Interpolate { kind, sampling } => {
+                    interpolation = Some(Interpolation {
+                        kind,
+                        sampling: sampling.unwrap_or_default(),
+                    });
+                }
+                KnownAttributeKind::Location(l) => {
+                    location = Some(l);
+                }
+                KnownAttributeKind::Offset(o) => {
+                    offset = Some(o);
+                }
+                KnownAttributeKind::Align(a) => {
+                    align = Some(a);
+                }
+                KnownAttributeKind::Position => {
+                    builtin = Some(spirv::BuiltIn::Position);
+                }
+                KnownAttributeKind::PointSize => {
+                    builtin = Some(spirv::BuiltIn::PointSize);
+                }
+                _ => {}
+            }
+        }
+
+        VariableAttributes {
+            location,
+            interpolation,
+            builtin,
+            offset,
+            align,
+        }
+    }
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
@@ -46,6 +102,14 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         }
     }
 
+    fn check_attributes(
+        &mut self,
+        target: AttributeTarget,
+        attrs: impl Iterator<Item = ast::Attribute>,
+    ) -> Vec<KnownAttribute> {
+        check_attributes(&self.sess.custom_attributes, target, attrs, &mut self.sess.diag)
+    }
+
     fn typecheck_global_variable(&mut self, global: &ast::Global) -> Option<DefId> {
         let name = global.name().to_string_opt();
         let qualifier = global.qualifier().and_then(|q| q.qualifier());
@@ -65,6 +129,10 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         // because it's valid to define a global variable without an initializer
         // this should be LinkOnceODR
 
+        // process attributes
+        let attrs = self.check_attributes(AttributeTarget::GLOBAL, global.attrs());
+        let var_attrs = VariableAttributes::from_attributes(&attrs);
+
         if external_linkage {
             eprintln!("TODO variable external linkage")
             //todo!("variable external linkage")
@@ -82,6 +150,9 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
                 linkage,
                 ty,
                 qualifier,
+                location: var_attrs.location,
+                interpolation: var_attrs.interpolation,
+                builtin: var_attrs.builtin,
             }),
         };
 
@@ -128,6 +199,18 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
             self.sess.tyctxt.prim_tys.void.clone()
         };
 
+        // process attributes
+        let known_attributes = self.check_attributes(AttributeTarget::FUNCTION, fn_def.attrs());
+
+        let mut execution_model = None;
+        for attr in known_attributes {
+            match attr.kind {
+                KnownAttributeKind::Vertex => execution_model = Some(spirv::ExecutionModel::Vertex),
+                KnownAttributeKind::Fragment => execution_model = Some(spirv::ExecutionModel::Fragment),
+                _ => {}
+            }
+        }
+
         // create function type
         let func_type = self.sess.tyctxt.ty(TypeKind::Function(FunctionType {
             arg_types,
@@ -169,6 +252,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
                 function_type: func_type.clone(),
                 parameters: params,
                 builtin: None,
+                execution_model,
             }),
         };
         // TODO: check for duplicate definitions
@@ -190,21 +274,18 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
                 .map(|ty| self.convert_type(ty.clone()))
                 .unwrap_or_else(|| self.sess.tyctxt.error.clone());
 
-            let (attrs, extra_attrs) = parse_attributes(field.attrs(), AttributeTarget::MEMBER, &mut self.sess.diag);
-            let qualifiers = Qualifiers::from_attributes(&attrs, Some(field.source_location()), &mut self.sess.diag);
-
-            if !extra_attrs.is_empty() {
-                self.sess
-                    .diag
-                    .error("unrecognized attribute(s) on field")
-                    .primary_label(&field, "")
-                    .emit();
-            }
+            // process field attributes
+            let attrs = self.check_attributes(AttributeTarget::MEMBER, field.attrs());
+            let var_attrs = VariableAttributes::from_attributes(&attrs);
 
             fields.push(StructField {
                 name: field.ident().to_string_opt(),
                 ty,
-                qualifiers,
+                location: var_attrs.location,
+                interpolation: var_attrs.interpolation,
+                builtin: var_attrs.builtin,
+                offset: var_attrs.offset,
+                align: var_attrs.align,
             });
         }
 

@@ -50,7 +50,7 @@ fn print_interface(hir: &hir::Module) {
             StorageClass::Output => {
                 outputs.push(g);
             }
-            StorageClass::Uniform => match hir.type_data(gdata.ty) {
+            StorageClass::Uniform => match hir.types[gdata.ty] {
                 TypeData::Pointer {
                     storage_class,
                     pointee_type,

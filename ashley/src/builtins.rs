@@ -1,7 +1,7 @@
 use crate::{
     hir,
     tast::{
-        ty::{ImageSampling, ImageType, Qualifiers, StructField},
+        ty::{ImageSampling, ImageType, StructField},
         ScalarType, Type, TypeKind, Types,
     },
 };
@@ -190,20 +190,20 @@ define_primitive_types! {
     // unnameable types
     [private]
 
-    modf_result_float TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: float.clone(), qualifiers: Qualifiers::default() }, StructField { name: "whole".to_string(), ty: float.clone(), qualifiers: Qualifiers::default()  }] };
-    modf_result_vec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "whole".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  }] };
-    modf_result_vec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "whole".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  }] };
-    modf_result_vec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "whole".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_float TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), float.clone()), StructField::new("whole".to_string(), float.clone()) ] };
+    modf_result_vec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), vec2.clone()) ,  StructField::new("whole".to_string(), vec2.clone()) ] };
+    modf_result_vec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), vec3.clone()) ,  StructField::new("whole".to_string(), vec3.clone()) ] };
+    modf_result_vec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), vec4.clone()) ,  StructField::new("whole".to_string(), vec4.clone()) ] };
 
-    modf_result_double TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: double.clone(), qualifiers: Qualifiers::default() }, StructField { name: "whole".to_string(),ty: double.clone(), qualifiers: Qualifiers::default()  }] };
-    modf_result_dvec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: dvec2.clone(), qualifiers: Qualifiers::default() },  StructField { name: "whole".to_string(),ty: dvec2.clone(), qualifiers: Qualifiers::default()  }] };
-    modf_result_dvec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: dvec3.clone(), qualifiers: Qualifiers::default() },  StructField { name: "whole".to_string(),ty: dvec3.clone(), qualifiers: Qualifiers::default()  }] };
-    modf_result_dvec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: dvec4.clone(), qualifiers: Qualifiers::default() },  StructField { name: "whole".to_string(),ty: dvec4.clone(), qualifiers: Qualifiers::default()  }] };
+    modf_result_double TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), double.clone()), StructField::new("whole".to_string(),double.clone()) ] };
+    modf_result_dvec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), dvec2.clone()),  StructField::new("whole".to_string(),dvec2.clone()) ] };
+    modf_result_dvec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), dvec3.clone()),  StructField::new("whole".to_string(),dvec3.clone()) ] };
+    modf_result_dvec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), dvec4.clone()),  StructField::new("whole".to_string(),dvec4.clone()) ] };
 
-    frexp_result_float TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: float.clone(), qualifiers: Qualifiers::default()  }, StructField { name: "exp".to_string(), ty: float.clone(), qualifiers: Qualifiers::default()  } ] };
-    frexp_result_vec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "exp".to_string(), ty: vec2.clone(), qualifiers: Qualifiers::default()  } ] };
-    frexp_result_vec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "exp".to_string(), ty: vec3.clone(), qualifiers: Qualifiers::default()  } ] };
-    frexp_result_vec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField { name: "fract".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  },  StructField { name: "exp".to_string(), ty: vec4.clone(), qualifiers: Qualifiers::default()  } ] };
+    frexp_result_float TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), float.clone()) , StructField::new("exp".to_string(), float.clone())  ] };
+    frexp_result_vec2  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), vec2.clone()) ,  StructField::new("exp".to_string(), vec2.clone())  ] };
+    frexp_result_vec3  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), vec3.clone()) ,  StructField::new("exp".to_string(), vec3.clone())  ] };
+    frexp_result_vec4  TypeKind::Struct { name: String::new(), def: None, offsets: None, fields: vec![StructField::new("fract".to_string(), vec4.clone()) ,  StructField::new("exp".to_string(), vec4.clone())  ] };
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -944,7 +944,7 @@ builtin_operations! {
         dvec3(dvec3,dvec3)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
         dvec4(dvec4,dvec4)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
 
-        // TODO fix this
+        // TODO implement this
         ivecN(int,ivecN)    => |_ctxt, fb, args, _types, ret| todo!();
         ivecN(ivecN,int)    => |_ctxt, fb, args, _types, ret| todo!();
         ivecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);

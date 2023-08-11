@@ -1,6 +1,7 @@
 use crate::{
     diagnostic::SourceLocation,
     hir::{Module, StructLayout, Type},
+    utils::write_list,
 };
 use rspirv::{
     spirv,
@@ -40,13 +41,6 @@ impl ScalarType {
         const ABC = Self::A.bits() | Self::B.bits() | Self::C.bits();
     }
 }*/
-
-/// Builtin variable.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Builtin {
-    Position,
-    PointSize,
-}
 
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum InterpolationKind {
@@ -325,20 +319,6 @@ impl<'a> TypeData<'a> {
             _ => false,
         }
     }
-}
-
-// implemented as a macro to avoid borrowing woes
-macro_rules! write_list {
-    ($w:expr, $i:ident in $coll:expr => $b:block) => {
-        let mut first = true;
-        for $i in $coll {
-            if !first {
-                write!($w, ",").unwrap();
-            }
-            $b
-            first = false;
-        }
-    };
 }
 
 fn print_image_type(img: &ImageType, f: &mut fmt::Formatter, is_sampled: bool) -> fmt::Result {

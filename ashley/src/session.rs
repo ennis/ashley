@@ -4,13 +4,23 @@ use crate::{
     hir, syntax,
     syntax::ast,
     tast,
-    tast::{typecheck_body, typecheck_items, Def, DefId, LocalDefId, TypeCtxt},
+    tast::{
+        typecheck_body, typecheck_items, Attribute, AttributeChecker, AttributeCheckerImpl, AttributeMultiplicity,
+        AttributeTarget, Def, DefId, LocalDefId, TypeCtxt,
+    },
     termcolor,
     utils::{Id, TypedIndexMap, TypedVecMap},
 };
 use ashley::tast::lower_to_hir;
 use codespan_reporting::term;
-use std::{borrow::Cow, collections::HashSet, fmt, fs, path::PathBuf, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt, fs,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::Arc,
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -244,6 +254,21 @@ impl Pkgs {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    #[error("an attribute with the same name already exists")]
+    AttributeAlreadyExists,
+}
+
+/// Registered attribute.
+pub(crate) struct AttributeRegistration {
+    pub(crate) name: String,
+    pub(crate) valid_targets: AttributeTarget,
+    pub(crate) multiplicity: AttributeMultiplicity,
+    pub(crate) mutually_exclusive: Vec<String>,
+    pub(crate) checker: Box<dyn AttributeChecker>,
+}
+
 /// Compilation session.
 pub struct Session<'a> {
     /// Diagnostics output
@@ -254,6 +279,9 @@ pub struct Session<'a> {
     pub pkgs: Pkgs,
     pub(crate) source_files: SourceFileProvider,
     resolver: Arc<dyn PackageResolver>,
+
+    /// Registered custom attributes.
+    pub(crate) custom_attributes: HashMap<String, AttributeRegistration>,
 }
 
 impl<'a> Session<'a> {
@@ -273,6 +301,7 @@ impl<'a> Session<'a> {
             pkgs: Pkgs {
                 packages: TypedIndexMap::new(),
             },
+            custom_attributes: Default::default(),
         }
     }
 
@@ -280,6 +309,31 @@ impl<'a> Session<'a> {
     pub fn with_package_resolver(mut self, resolver: impl PackageResolver + 'static) -> Session<'a> {
         self.resolver = Arc::new(resolver);
         self
+    }
+
+    /// Registers a custom attribute.
+    pub fn register_custom_attribute<T: Attribute + 'static>(
+        &mut self,
+        name: &str,
+        targets: AttributeTarget,
+        multiplicity: AttributeMultiplicity,
+    ) -> Result<(), SessionError> {
+        let checker: Box<dyn AttributeChecker> = Box::new(AttributeCheckerImpl::<T>(PhantomData));
+        if self.custom_attributes.contains_key(name) {
+            return Err(SessionError::AttributeAlreadyExists);
+        }
+        // TODO mutually exclusive attrs
+        self.custom_attributes.insert(
+            name.to_string(),
+            AttributeRegistration {
+                name: name.to_string(),
+                valid_targets: targets,
+                multiplicity,
+                mutually_exclusive: vec![],
+                checker,
+            },
+        );
+        Ok(())
     }
 
     /*/// Sets the diagnostics output.

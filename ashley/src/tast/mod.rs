@@ -13,6 +13,8 @@ mod stmt;
 mod swizzle;
 pub mod ty;
 
+pub use attributes::{AttrParseError, Attribute, AttributeMultiplicity, AttributeTarget};
+pub(crate) use attributes::{AttributeChecker, AttributeCheckerImpl};
 pub use def::{Def, DefKind, FunctionDef, Qualifier, Visibility};
 pub use expr::Expr;
 pub use lower::lower_to_hir;
@@ -23,6 +25,7 @@ use self::layout::std_array_stride;
 
 use crate::{
     builtins::PrimitiveTypes,
+    diagnostic::Diagnostics,
     session::{PackageId, QueryError},
     syntax::ast,
     tast::{stmt::Stmt, ty::convert_type},
@@ -37,6 +40,15 @@ use std::{
         Arc,
     },
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Utility trait to parse a value with access to the diagnostics output.
+pub trait ParseFrom<T>: Sized {
+    fn parse_from(value: T, diag: &mut Diagnostics) -> Result<Self, ()>;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub type ExprId = Id<Expr>;
 pub type StmtId = Id<Stmt>;

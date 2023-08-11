@@ -578,6 +578,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.finish_node();
     }
 
+    /// Parse a top-level item.
     fn parse_items(&mut self) {
         let mut progress = Progress::default();
         let mut decl_start: Option<Checkpoint> = None;
@@ -609,6 +610,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 None => break,
                 _ => {
                     self.parse_function_or_variable(decl_start);
+                    decl_start = None;
                 }
             }
         }

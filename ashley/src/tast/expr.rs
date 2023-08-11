@@ -215,7 +215,11 @@ impl TypeCheckBodyCtxt<'_, '_> {
         match *ty.deref() {
             TK::Scalar(_) | TK::Vector(_, _) | TK::Matrix { .. } => {
                 for &ctor in builtins::CONSTRUCTORS {
-                    if ctor.ty == *ty && ctor.args.iter().zip(arg_tys.iter()).all(|(a, b)| *a == **b) {
+                    // FIXME: scalar conversions?
+                    if ctor.ty == *ty
+                        && ctor.args.len() == arg_tys.len()
+                        && ctor.args.iter().zip(arg_tys.iter()).all(|(a, b)| *a == **b)
+                    {
                         return Expr::new(
                             ExprKind::BuiltinConstructor {
                                 ctor,
@@ -900,7 +904,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             syntax: Some(lit_expr.syntax().clone()),
                             ty: self.sess.tyctxt.prim_tys.float.clone(),
                             kind: ExprKind::Literal {
-                                value: ConstantValue::Float(OrderedFloat::from(v as f32)),
+                                value: ConstantValue::Float(OrderedFloat::from(dbg!(v as f32))),
                             },
                         }
                     }

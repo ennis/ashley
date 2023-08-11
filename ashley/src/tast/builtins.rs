@@ -54,6 +54,7 @@ impl TypeCheckItemCtxt<'_, '_> {
                                 function_type,
                                 parameters,
                                 builtin: Some(sig),
+                                execution_model: None,
                             }),
                         });
                     }

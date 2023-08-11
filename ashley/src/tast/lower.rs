@@ -3,7 +3,9 @@ use crate::{
     builtins::{BuiltinSignature, Constructor},
     diagnostic::{AsSourceLocation, Diagnostics, SourceLocation},
     hir,
-    hir::{FunctionData, IdRef, Layout, StructLayout},
+    hir::{
+        Decoration, FunctionData, IdRef, Interpolation, InterpolationKind, InterpolationSampling, Layout, StructLayout,
+    },
     session::PackageId,
     syntax::{ast, ast::AstNode},
     tast,
@@ -18,7 +20,7 @@ use crate::{
     utils::round_up,
     QueryError, Session,
 };
-use std::{alloc::LayoutErr, borrow::Cow, collections::HashMap, ops::Deref};
+use std::{borrow::Cow, collections::HashMap, ops::Deref};
 
 enum HirDef {
     Variable(hir::GlobalVariable),
@@ -36,6 +38,21 @@ struct LowerCtxt<'a, 'diag> {
 struct TypedIdRef {
     ty: hir::Type,
     id: hir::IdRef,
+}
+
+fn apply_interpolation_decorations(decorations: &mut Vec<Decoration>, interp: &Option<Interpolation>) {
+    if let Some(interp) = interp {
+        match interp.kind {
+            InterpolationKind::Flat => decorations.push(hir::Decoration::Flat),
+            InterpolationKind::NoPerspective => decorations.push(hir::Decoration::NoPerspective),
+            InterpolationKind::Smooth => {}
+        }
+        match interp.sampling {
+            InterpolationSampling::Center => {}
+            InterpolationSampling::Centroid => decorations.push(hir::Decoration::Centroid),
+            InterpolationSampling::Sample => decorations.push(hir::Decoration::Sample),
+        }
+    }
 }
 
 // TODO this might move to the HIR builder
@@ -170,13 +187,23 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             None => spirv::StorageClass::Private,
         };
         let ty = self.convert_type(hir, &global_def.ty);
+
+        let mut decorations = vec![];
+        apply_interpolation_decorations(&mut decorations, &global_def.interpolation);
+        if let Some(loc) = global_def.location {
+            decorations.push(Decoration::Location(loc))
+        }
+        if let Some(builtin) = global_def.builtin {
+            decorations.push(Decoration::BuiltIn(builtin))
+        }
+
         let id = hir.define_global_variable(hir::GlobalVariableData {
             name: def.name.clone(),
             ty,
             storage_class,
             source_location: def.location,
             linkage: global_def.linkage,
-            decorations: vec![],
+            decorations,
             removed: false,
         });
         self.def_map.insert(def_id, HirDef::Variable(id));
@@ -264,7 +291,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 place
             }
             ExprKind::LocalVar { var } => {
-                eprintln!("local map: {:?}", self.local_map);
+                //eprintln!("local map: {:?}", self.local_map);
                 Place {
                     base: self
                         .local_map
@@ -610,7 +637,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                     func_type,
                     params,
                     function_def.linkage,
-                    spirv::FunctionControl::NONE,
+                    function_def.function_control,
                 )
             } else {
                 let (mut func_data, entry_block_id) = hir::FunctionData::new(
@@ -618,7 +645,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                     func_type,
                     params,
                     function_def.linkage,
-                    spirv::FunctionControl::NONE,
+                    function_def.function_control,
                 );
                 let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
                 let entry_block = typed_body.entry_block.expect("function has no entry block");
@@ -646,13 +673,21 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 func_type,
                 params,
                 function_def.linkage,
-                spirv::FunctionControl::NONE,
+                function_def.function_control,
             )
         };
 
         self.local_map.clear();
-        self.def_map
-            .insert(def_id, HirDef::Function(hir.add_function(func_data.clone())));
+
+        let hir_func = hir.add_function(func_data.clone());
+
+        // functions that have an execution model attribute are entry points
+        if let Some(execution_model) = function_def.execution_model {
+            hir.define_entry_point(hir_func, &def.name, execution_model)
+                .expect("error adding entry point");
+        }
+
+        self.def_map.insert(def_id, HirDef::Function(hir_func));
     }
 
     fn lower_def(&mut self, hir: &mut hir::Module, def: &Def, def_id: DefId) {
@@ -664,8 +699,8 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             DefKind::Global(ref global) => {
                 self.lower_global(hir, def_id, def, global);
             }
-            DefKind::Struct(ref _struct_def) => {
-                todo!("struct lowering")
+            DefKind::Struct(ref struct_def) => {
+                self.convert_type(hir, &struct_def.ty);
             }
         }
     }

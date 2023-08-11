@@ -242,7 +242,7 @@ pub(crate) fn std_struct_layout(
             // round up the alignment to vec4 if layout rule is std140
             actual_alignment = round_up(actual_alignment, 16)
         }
-        if let Some(explicit_alignment) = field.qualifiers.align {
+        if let Some(explicit_alignment) = field.align {
             // take into account explicit alignment if any
             // check that it's a power of two
             if !explicit_alignment.is_power_of_two() {
@@ -255,7 +255,7 @@ pub(crate) fn std_struct_layout(
         }
 
         // compute actual offset
-        let mut actual_offset = if let Some(explicit_offset) = field.qualifiers.offset {
+        let mut actual_offset = if let Some(explicit_offset) = field.offset {
             // check that it doesn't overlap with the previous member
             if explicit_offset < next_offset {
                 let name = &field.name;

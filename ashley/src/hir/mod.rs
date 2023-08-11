@@ -17,7 +17,7 @@ use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::{spirv, spirv::LinkageType};
 use smallvec::SmallVec;
-use spirv::StorageClass;
+use spirv::{Op, StorageClass};
 use std::{collections::HashSet, fmt, hash::Hash, num::NonZeroU32};
 
 pub use self::{
@@ -25,7 +25,7 @@ pub use self::{
     constant::ConstantData,
     decoration::Decoration,
     layout::{ArrayLayout, InnerLayout, Layout, StructLayout},
-    types::{Builtin, Interpolation, InterpolationKind, InterpolationSampling, TypeData, TypeDataDebug},
+    types::{Interpolation, InterpolationKind, InterpolationSampling, TypeData, TypeDataDebug},
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -53,6 +53,9 @@ id_types! {
 
     /// Handle to a function basic block.
     pub struct Block;
+
+    /// Handle to an entry point definition.
+    pub struct EntryPoint;
 
     /// ID representing an imported extended instruction set.
     pub struct ExtInstSet;
@@ -408,6 +411,14 @@ pub struct FunctionData {
     pub function_control: spirv::FunctionControl,
 }
 
+#[derive(Clone, Debug)]
+pub struct EntryPointData {
+    pub function: Function,
+    pub name: String,
+    pub execution_model: spirv::ExecutionModel,
+    pub shader_interface: Vec<GlobalVariable>,
+}
+
 impl FunctionData {
     /// Creates a new function with a block.
     pub fn new(
@@ -511,7 +522,7 @@ impl BlockData {
     }
 }
 
-/// Describes the domain of a shader value.
+/*/// Describes the domain of a shader value.
 #[derive(Copy, Clone, Debug)]
 pub enum Domain {
     /// Uniforms
@@ -524,7 +535,7 @@ pub enum Domain {
     FragmentInvocation,
     /// Generic value inside a shader invocation (used for all other stages).
     Invocation,
-}
+}*/
 
 /// Describes a global variable.
 pub struct GlobalVariableData {
@@ -539,17 +550,13 @@ pub struct GlobalVariableData {
     pub source_location: Option<SourceLocation>,
     /// SPIR-V variable decorations.
     pub decorations: Vec<Decoration>,
-    /// Whether the global variable has been explicitly removed.
-    pub removed: bool,
+    /// Linkage information.
     pub linkage: Option<LinkageType>,
-}
-
-pub enum ProgramKind {
-    Generic,
-    Vertex,
-    Fragment,
-    Compute,
-    Rasterize,
+    /// Whether the global variable has been explicitly removed with `remove_global_var`.
+    ///
+    /// Analyses should treat the variable as non-existent if this flag is true. Well-formed modules
+    /// should not contain any reference to a deleted global variable.
+    pub removed: bool,
 }
 
 macro_rules! const_vec_builder {
@@ -587,15 +594,22 @@ macro_rules! const_vec_builder {
     };
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("an entry point with the same name and execution model already exists")]
+    EntryPointAlreadyExists,
+}
+
 /// Container for HIR entities.
 ///
 /// It holds regions, values, operations, types and attributes.
 pub struct Module {
-    pub(crate) types: UniqueArena<TypeData<'static>, Type>,
-    pub(crate) constants: UniqueArena<ConstantData, Constant>,
+    pub types: UniqueArena<TypeData<'static>, Type>,
+    pub constants: UniqueArena<ConstantData, Constant>,
     pub ext_inst_sets: UniqueArena<String, ExtInstSet>,
     pub functions: id_arena::Arena<FunctionData, Function>,
     pub globals: id_arena::Arena<GlobalVariableData, GlobalVariable>,
+    pub entry_points: id_arena::Arena<EntryPointData, EntryPoint>,
     ty_unknown: Type,
     ty_unit: Type,
 }
@@ -613,6 +627,7 @@ impl Module {
         let extended_instruction_sets = UniqueArena::new();
         let functions = Default::default();
         let globals = Default::default();
+        let entry_points = Default::default();
         let (ty_unknown, _) = types.insert(TypeData::Unknown);
         let (ty_unit, _) = types.insert(TypeData::Unit);
 
@@ -622,6 +637,7 @@ impl Module {
             ext_inst_sets: extended_instruction_sets,
             functions,
             globals,
+            entry_points,
             ty_unknown,
             ty_unit,
         }
@@ -656,19 +672,38 @@ impl Module {
         self.define_type(TypeData::Struct(Arc::new(struct_type)))
     }*/
 
-    /// Returns information about a type
-    pub fn type_data(&self, ty: Type) -> &TypeData<'static> {
-        &self.types[ty]
-    }
+    /// Defines an entry point.
+    ///
+    /// The shader interface is determined from the static call tree of the function.
+    pub fn define_entry_point(
+        &mut self,
+        function: Function,
+        name: &str,
+        execution_model: spirv::ExecutionModel,
+    ) -> Result<EntryPoint, Error> {
+        let shader_interface = self.shader_interface(function);
 
-    /*/// Returns the size and alignment of the specified type.
-    pub fn type_layout(&self, ty: Type) -> &Layout {
-        Layout::std140()
-    }*/
+        // can't have two entry points with the same name and execution model
+        // FIXME: remove this check and push that to the caller, or kick it downstream towards validation
+        if self
+            .entry_points
+            .iter()
+            .any(|(_, ep)| &ep.name == name && ep.execution_model == execution_model)
+        {
+            return Err(Error::EntryPointAlreadyExists);
+        }
+
+        Ok(self.entry_points.alloc(EntryPointData {
+            function,
+            name: name.to_string(),
+            execution_model,
+            shader_interface,
+        }))
+    }
 
     /// Returns a proxy for debug-printing a type.
     pub fn debug_type(&self, ty: Type) -> TypeDataDebug {
-        TypeDataDebug(self, self.type_data(ty))
+        TypeDataDebug(self, &self.types[ty])
     }
 
     /// Returns the unknown type.
@@ -736,14 +771,10 @@ impl Module {
         }
     }
 
+    /// Defines a global variable.
     pub fn define_global_variable(&mut self, v: GlobalVariableData) -> GlobalVariable {
         self.globals.alloc(v)
     }
-
-    /*/// Computes the layout of a type (size and alignment) according to std140 rules.
-    pub fn std140_layout(&self, ty: Type) -> Result<Layout, LayoutError> {
-        layout::std140_layout(self, self.type_data(ty))
-    }*/
 
     /// Returns a pointer type.
     pub fn pointer_type(&mut self, pointee_type: Type, storage_class: spirv::StorageClass) -> Type {
@@ -764,6 +795,48 @@ impl Module {
                     _ => false,
                 }
         })
+    }
+
+    /// Returns the shader interface of the specified function.
+    ///
+    /// This returns the set of all statically accessed interface variables in the static call tree of the function.
+    pub fn shader_interface(&self, func: Function) -> Vec<GlobalVariable> {
+        let interface: HashSet<_> = self.interface_variables().map(|(g, _)| g).collect();
+        let mut accessed = HashSet::new();
+        let mut call_stack = vec![func];
+        self.shader_interface_rec(func, &interface, &mut accessed, &mut call_stack);
+        accessed.into_iter().collect()
+    }
+
+    /// Recursive part of `shader_interface`.
+    fn shader_interface_rec(
+        &self,
+        func: Function,
+        interface: &HashSet<GlobalVariable>,
+        accessed: &mut HashSet<GlobalVariable>,
+        call_stack: &mut Vec<Function>,
+    ) {
+        for (b, block_data) in self.functions[func].blocks.iter() {
+            for inst in block_data.instructions.iter() {
+                if inst.opcode == Op::FunctionCall {
+                    let Operand::FunctionRef(callee) = inst.operands[2] else {
+                        panic!("malformed HIR");
+                    };
+                    // visit function if not recursing
+                    if !call_stack.contains(&callee) {
+                        call_stack.push(callee);
+                        self.shader_interface_rec(callee, interface, accessed, call_stack);
+                        call_stack.pop();
+                    }
+                } else {
+                    for op in inst.operands.iter() {
+                        if let Operand::GlobalRef(g) = op {
+                            accessed.insert(*g);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Finds a global variable by name.
@@ -788,6 +861,9 @@ impl Module {
     /// Note that this doesn't actually remove the global variables from `self.globals` as the
     /// underlying data structure doesn't support it. Instead the `removed` flag of the `GlobalVariableData`
     /// is set.
+    ///
+    /// This doesn't check that the variable is not referenced. You must check that yourself before
+    /// calling the function, otherwise the resulting module will be malformed.
     pub fn remove_global(&mut self, var: GlobalVariable) {
         self.globals[var].removed = true;
     }

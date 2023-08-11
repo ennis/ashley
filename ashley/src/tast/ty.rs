@@ -1,16 +1,20 @@
 use crate::{
-    diagnostic::SourceLocation,
+    diagnostic::{AsSourceLocation, Diagnostics, SourceLocation},
     hir,
+    hir::Interpolation,
     syntax::{ast, ast::TypeQualifier, SyntaxNode},
     tast::{
+        attributes::{KnownAttribute, KnownAttributeKind},
         consteval::{try_evaluate_constant_expression, ConstantValue},
         def::DefKind,
+        layout::{std_array_stride, LayoutError, StdLayoutRules::Std430},
         scope::{resolve_name, Res, Scope},
         DefId,
     },
+    utils::round_up,
     Session,
 };
-use ashley::tast::layout::LayoutError;
+pub use hir::types::{ImageSampling, ImageType};
 use spirv::Dim;
 use std::{
     collections::HashSet,
@@ -23,16 +27,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    diagnostic::{AsSourceLocation, Diagnostics},
-    hir::{Builtin, Interpolation},
-    tast::{
-        attributes::{KnownAttribute, KnownAttributeKind},
-        layout::{std_array_stride, StdLayoutRules::Std430},
-    },
-    utils::round_up,
-};
-pub use hir::types::{ImageSampling, ImageType};
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub type ScalarType = hir::types::ScalarType;
 
@@ -145,94 +140,6 @@ pub struct ExplicitStructLayout {
     pub offsets: Vec<u32>,
 }
 
-/// Qualifiers on struct fields or variables.
-#[derive(Default, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Qualifiers {
-    pub location: Option<u32>,
-    pub interpolation: Option<Interpolation>,
-    pub builtin: Option<Builtin>,
-    pub offset: Option<u32>,
-    pub align: Option<u32>,
-}
-
-impl Qualifiers {
-    pub(crate) fn from_attributes(
-        attrs: &[KnownAttribute],
-        srcloc: Option<SourceLocation>,
-        diag: &mut Diagnostics,
-    ) -> Qualifiers {
-        let mut location = None;
-        let mut interpolation = None;
-        let mut builtin = None;
-        let mut offset = None;
-        let mut align = None;
-        let mut specified_more_than_once = HashSet::new();
-        let mut specified_builtin_more_than_once = false;
-
-        // checks:
-        // - for each known attribute, verify that it's only specified once
-
-        for attr in attrs {
-            match attr.kind {
-                KnownAttributeKind::Interpolate { kind, sampling } => {
-                    if interpolation.is_some() {
-                        specified_more_than_once.insert("interpolate");
-                    }
-                    interpolation = Some(Interpolation {
-                        kind,
-                        sampling: sampling.unwrap_or_default(),
-                    });
-                }
-                KnownAttributeKind::Location(l) => {
-                    if location.is_some() {
-                        specified_more_than_once.insert("location");
-                    }
-                    location = Some(l);
-                }
-                KnownAttributeKind::Offset(o) => {
-                    if offset.is_some() {
-                        specified_more_than_once.insert("offset");
-                    }
-                    offset = Some(o);
-                }
-                KnownAttributeKind::Align(a) => {
-                    if align.is_some() {
-                        specified_more_than_once.insert("align");
-                    }
-                    align = Some(a);
-                }
-                KnownAttributeKind::Position => {
-                    if builtin.is_some() {
-                        specified_builtin_more_than_once = true;
-                    }
-                    builtin = Some(Builtin::Position);
-                }
-                KnownAttributeKind::PointSize => {
-                    if builtin.is_some() {
-                        specified_builtin_more_than_once = true;
-                    }
-                    builtin = Some(Builtin::PointSize);
-                }
-            }
-        }
-
-        for attr in specified_more_than_once {
-            // TODO more precise locations
-            diag.error(format!("attribute `{attr}` specified more than once"))
-                .primary_label_opt(srcloc, "")
-                .emit();
-        }
-
-        Qualifiers {
-            location,
-            interpolation,
-            builtin,
-            offset,
-            align,
-        }
-    }
-}
-
 /// Structure field
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StructField {
@@ -240,7 +147,11 @@ pub struct StructField {
     pub name: String,
     /// Type of the field.
     pub ty: Type,
-    pub qualifiers: Qualifiers,
+    pub location: Option<u32>,
+    pub interpolation: Option<Interpolation>,
+    pub builtin: Option<spirv::BuiltIn>,
+    pub offset: Option<u32>,
+    pub align: Option<u32>,
 }
 
 impl StructField {
@@ -248,13 +159,11 @@ impl StructField {
         StructField {
             name,
             ty,
-            qualifiers: Qualifiers {
-                location: None,
-                interpolation: None,
-                builtin: None,
-                offset: None,
-                align: None,
-            },
+            location: None,
+            interpolation: None,
+            builtin: None,
+            offset: None,
+            align: None,
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::CRATE;
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{parse_quote, spanned::Spanned, GenericParam, Generics};
 
@@ -151,7 +151,6 @@ pub fn derive(input: proc_macro::TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let i = 0..fields.len();
-    let i2 = 0..fields.len();
 
     quote! {
         #repr_c_check
@@ -167,7 +166,7 @@ pub fn derive(input: proc_macro::TokenStream) -> TokenStream {
             fn hir_type(m: &mut #CRATE::hir::Module) -> #CRATE::hir::Type {
                 #(#fields_desc)*
                 let layout = #CRATE::hir::StructLayout {
-                    offsets: vec![#(Self::FIELD_LAYOUTS[#i2].0 as u32),*],
+                    offsets: vec![#(Self::FIELD_LAYOUTS[#i].0 as u32),*],
                     layouts: vec![]
                 };
 

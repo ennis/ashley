@@ -56,9 +56,9 @@ struct InterfaceItem {
     kind: InterfaceItemKind,
 }
 
-pub struct ShaderInterfaceTransform<'a, 'diag> {
+pub struct ShaderInterfaceTransform<'a> {
     hir: &'a mut hir::Module,
-    diag: &'a mut Diagnostics<'diag>,
+    diag: &'a mut Diagnostics,
     interface: Vec<InterfaceItem>,
 }
 
@@ -134,8 +134,8 @@ fn rewrite_uniform_access(
     }
 }
 
-impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
-    pub fn new(hir: &'a mut hir::Module, diag: &'a mut Diagnostics<'diag>) -> ShaderInterfaceTransform<'a, 'diag> {
+impl<'a> ShaderInterfaceTransform<'a> {
+    pub fn new(hir: &'a mut hir::Module, diag: &'a mut Diagnostics) -> ShaderInterfaceTransform<'a> {
         ShaderInterfaceTransform {
             hir,
             diag,

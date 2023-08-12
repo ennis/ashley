@@ -1,6 +1,6 @@
 //! Compilation cache
 use crate::{
-    diagnostic::{Diagnostics, SourceFileProvider},
+    diagnostic::{DiagnosticSink, Diagnostics, SourceFileProvider, TermDiagnosticSink},
     hir, syntax,
     syntax::ast,
     tast,
@@ -270,9 +270,9 @@ pub(crate) struct AttributeRegistration {
 }
 
 /// Compilation session.
-pub struct Session<'a> {
+pub struct Session {
     /// Diagnostics output
-    pub diag: Diagnostics<'a>,
+    pub diag: Diagnostics,
     /// Types
     pub tyctxt: TypeCtxt,
     /// Packages & associated modules and definitions.
@@ -284,15 +284,12 @@ pub struct Session<'a> {
     pub(crate) custom_attributes: HashMap<String, AttributeRegistration>,
 }
 
-impl<'a> Session<'a> {
-    /// Creates a new compilation cache with a dummy package resolver, and print diagnostics to stdout.
-    pub fn new() -> Session<'a> {
+impl Session {
+    /// Creates a new session with a dummy package resolver, and print diagnostics to stderr.
+    pub fn new() -> Session {
         let source_files = SourceFileProvider::new();
-        let diag = Diagnostics::new(
-            source_files.clone(),
-            termcolor::StandardStream::stderr(termcolor::ColorChoice::Always),
-            term::Config::default(),
-        );
+        let mut diag = Diagnostics::new(source_files.clone());
+        diag.add_sink(TermDiagnosticSink::new(term::Config::default()));
         Self {
             diag,
             tyctxt: TypeCtxt::new(),
@@ -306,9 +303,17 @@ impl<'a> Session<'a> {
     }
 
     /// Sets the package resolver.
-    pub fn with_package_resolver(mut self, resolver: impl PackageResolver + 'static) -> Session<'a> {
+    pub fn with_package_resolver(mut self, resolver: impl PackageResolver + 'static) -> Session {
         self.resolver = Arc::new(resolver);
         self
+    }
+
+    /// Sets a diagnostic sink.
+    ///
+    /// This overrides any previously set diagnostic sink.
+    pub fn set_diagnostic_sink(&mut self, sink: impl DiagnosticSink + 'static) {
+        self.diag.clear_sinks();
+        self.diag.add_sink(sink)
     }
 
     /// Registers a custom attribute.

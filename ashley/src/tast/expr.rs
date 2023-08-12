@@ -151,7 +151,7 @@ struct Access {
     kind: AccessKind,
 }*/
 
-impl TypeCheckBodyCtxt<'_, '_> {
+impl TypeCheckBodyCtxt<'_> {
     /*pub(crate) fn error_expr(&mut self) -> TypedExpr {
         let err_ty = self.sess.tyctxt.ty(TypeKind::Error);
         let id = self.typed_body.exprs.push(Expr {

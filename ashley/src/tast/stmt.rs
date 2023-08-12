@@ -42,7 +42,7 @@ pub enum StmtKind {
     Error,
 }
 
-impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
+impl<'a> TypeCheckBodyCtxt<'a> {
     /// Typecheck a block and return the id of the block.
     pub fn typecheck_block(&mut self, block: &ast::Block) -> BlockId {
         let mut stmts = Vec::new();

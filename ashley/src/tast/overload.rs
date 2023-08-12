@@ -199,7 +199,7 @@ fn best_overload(mut candidates: Vec<OverloadCandidate>) -> Result<OverloadCandi
     }
 }
 
-impl TypeCheckBodyCtxt<'_, '_> {
+impl TypeCheckBodyCtxt<'_> {
     ///
     pub(crate) fn resolve_overload(
         &mut self,

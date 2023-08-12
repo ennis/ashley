@@ -76,7 +76,7 @@ impl VariableAttributes {
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
+impl<'a> TypeCheckItemCtxt<'a> {
     pub(super) fn typecheck_module(&mut self, module: &ast::Module) {
         self.scopes.push(Scope::new());
         for item in module.items() {

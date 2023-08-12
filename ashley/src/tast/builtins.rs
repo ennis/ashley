@@ -7,7 +7,7 @@ use crate::{
     },
 };
 
-impl TypeCheckItemCtxt<'_, '_> {
+impl TypeCheckItemCtxt<'_> {
     pub(crate) fn define_builtin_functions(&mut self) {
         for builtin in crate::builtins::OPERATION_SIGNATURES {
             for sig in builtin.signatures {

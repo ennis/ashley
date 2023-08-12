@@ -1,27 +1,21 @@
 //! Lowering to HIR
 use crate::{
     builtins::{BuiltinSignature, Constructor},
-    diagnostic::{AsSourceLocation, Diagnostics, SourceLocation},
     hir,
-    hir::{
-        Decoration, FunctionData, IdRef, Interpolation, InterpolationKind, InterpolationSampling, Layout, StructLayout,
-    },
+    hir::{Decoration, FunctionData, IdRef, Interpolation, InterpolationKind, InterpolationSampling, StructLayout},
     session::PackageId,
-    syntax::{ast, ast::AstNode},
-    tast,
+    syntax::{ast, ast::UnaryOp},
     tast::{
         consteval::ConstantValue,
         def::{DefKind, FunctionDef, GlobalDef},
         expr::{ConversionKind, ExprKind},
         stmt::StmtKind,
         swizzle::ComponentIndices,
-        BlockId, Def, DefId, ExprId, LocalVarId, Module, Qualifier, StmtId, Type, TypeKind, TypedBody,
+        BlockId, Def, DefId, ExprId, LocalVarId, Module, Qualifier, StmtId, TypedBody,
     },
-    utils::round_up,
     QueryError, Session,
 };
-use ashley::syntax::ast::UnaryOp;
-use spirv::{CLOp::exp, StorageClass};
+use spirv::StorageClass;
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
 
 enum HirDef {
@@ -37,8 +31,8 @@ enum LocalOrParam {
     Param(hir::Value),
 }
 
-struct LowerCtxt<'a, 'diag> {
-    sess: &'a Session<'diag>,
+struct LowerCtxt<'a> {
+    sess: &'a Session,
     module: &'a Module,
     def_map: HashMap<DefId, HirDef>,
     local_map: HashMap<LocalVarId, hir::Value>,
@@ -75,7 +69,7 @@ struct Place {
     storage_class: spirv::StorageClass,
 }
 
-impl<'a, 'diag> LowerCtxt<'a, 'diag> {
+impl<'a> LowerCtxt<'a> {
     fn lower_module(&mut self, package_id: PackageId, hir: &mut hir::Module) {
         for (def_id, def) in self.module.definitions() {
             if def.builtin {

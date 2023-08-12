@@ -83,14 +83,7 @@ impl Scope {
     }
 }
 
-impl TypeCheckItemCtxt<'_, '_> {
-    /*/// Resolves a name in the current scope
-    pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
-        resolve_name(&self.sess.tyctxt, name, &self.scopes)
-    }*/
-}
-
-impl TypeCheckBodyCtxt<'_, '_> {
+impl TypeCheckBodyCtxt<'_> {
     /// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
         resolve_name(&self.sess.tyctxt, name, &self.scopes)

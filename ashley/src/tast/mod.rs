@@ -225,14 +225,14 @@ impl TypeCtxt {
 }
 
 /// Context for type-checking a single source file.
-pub(crate) struct TypeCheckItemCtxt<'a, 'diag> {
-    sess: &'a mut Session<'diag>,
+pub(crate) struct TypeCheckItemCtxt<'a> {
+    sess: &'a mut Session,
     package: PackageId,
     module: &'a mut Module,
     scopes: Vec<Scope>,
 }
 
-impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
+impl<'a> TypeCheckItemCtxt<'a> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
         convert_type(ty, self.sess, &self.scopes)
     }
@@ -252,13 +252,13 @@ pub(crate) fn typecheck_items(sess: &mut Session, package: PackageId, ast: ast::
     module
 }
 
-pub(crate) struct TypeCheckBodyCtxt<'a, 'diag> {
-    sess: &'a mut Session<'diag>,
+pub(crate) struct TypeCheckBodyCtxt<'a> {
+    sess: &'a mut Session,
     scopes: Vec<Scope>,
     typed_body: &'a mut TypedBody,
 }
 
-impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
+impl<'a> TypeCheckBodyCtxt<'a> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
         convert_type(ty, self.sess, &self.scopes)
     }

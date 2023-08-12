@@ -203,8 +203,8 @@ pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> 
     parser.parse()
 }
 
-struct Parser<'a, 'diag> {
-    sess: &'a mut Session<'diag>,
+struct Parser<'a> {
+    sess: &'a mut Session,
     text: &'a str,
     source_id: SourceId,
     // Current token & span
@@ -230,7 +230,7 @@ impl Default for Progress {
     }
 }
 
-impl<'a, 'diag> Parser<'a, 'diag> {
+impl<'a> Parser<'a> {
     fn parse(mut self) -> SyntaxNode {
         // Don't skip whitespace for the root module
         self.b.start_node(MODULE.into());

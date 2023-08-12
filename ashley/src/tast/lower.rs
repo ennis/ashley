@@ -20,6 +20,8 @@ use crate::{
     utils::round_up,
     QueryError, Session,
 };
+use ashley::syntax::ast::UnaryOp;
+use spirv::{CLOp::exp, StorageClass};
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
 
 enum HirDef {
@@ -28,11 +30,18 @@ enum HirDef {
     Constant(hir::Constant),
 }
 
+enum LocalOrParam {
+    // Pointer-typed
+    Local(hir::Value),
+    // Not necessarily pointer-typed
+    Param(hir::Value),
+}
+
 struct LowerCtxt<'a, 'diag> {
     sess: &'a Session<'diag>,
     module: &'a Module,
     def_map: HashMap<DefId, HirDef>,
-    local_map: HashMap<LocalVarId, hir::Local>,
+    local_map: HashMap<LocalVarId, hir::Value>,
 }
 
 struct TypedIdRef {
@@ -179,7 +188,15 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                     todo!("constant lowering")
                 }
                 Qualifier::Buffer => spirv::StorageClass::StorageBuffer,
-                Qualifier::Uniform => spirv::StorageClass::Uniform,
+                Qualifier::Uniform => {
+                    // close enough, not sure in what ways `Uniform` differs from `UniformConstant`
+                    // apart from the fact that the latter is read-only.
+                    if global_def.ty.is_opaque() {
+                        spirv::StorageClass::UniformConstant
+                    } else {
+                        spirv::StorageClass::Uniform
+                    }
+                }
                 Qualifier::In => spirv::StorageClass::Input,
                 Qualifier::Out => spirv::StorageClass::Output,
                 Qualifier::Shared => spirv::StorageClass::Workgroup,
@@ -214,13 +231,39 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         &mut self,
         fb: &mut hir::FunctionBuilder,
         body: &TypedBody,
+        op: ast::UnaryOp,
         sig: &BuiltinSignature,
         expr: ExprId,
         result_type: hir::Type,
     ) -> IdRef {
-        let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
-        let val = (sig.lower)(&mut (), fb, &[expr.id], &[expr.ty], result_type);
-        val.into()
+        match op {
+            UnaryOp::Not | UnaryOp::Neg => {
+                // expression with no side effects
+                let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
+                let val = (sig.lower)(&mut (), fb, &[expr.id], &[expr.ty], result_type);
+                val.into()
+            }
+            UnaryOp::PrefixInc | UnaryOp::PrefixDec | UnaryOp::PostfixInc | UnaryOp::PostfixDec => {
+                // prefix increment/decrement expr
+                let place = self.lower_place_expr(fb, body, expr);
+                let place_ty = place.ty;
+                let ptr = self.lower_place(fb, place);
+                let val = fb.emit_load(place_ty, ptr, None);
+                let result = (sig.lower)(&mut (), fb, &[IdRef::from(val)], &[place_ty], place_ty);
+                fb.emit_store(ptr, result.into(), None);
+                match op {
+                    UnaryOp::PrefixInc | UnaryOp::PrefixDec => {
+                        // return value before inc/dev
+                        val.into()
+                    }
+                    UnaryOp::PostfixInc | UnaryOp::PostfixDec => {
+                        // return value post-inc/dec
+                        result.into()
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 
     fn lower_bin_expr(
@@ -315,20 +358,24 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                     storage_class: global.storage_class,
                 }
             }
-            ExprKind::Index { array, index } => {
-                let mut place = self.lower_place_expr(fb, body, array);
+            ExprKind::Index { array_or_vector, index } => {
+                let mut place = self.lower_place_expr(fb, body, array_or_vector);
                 let index = self.lower_expr(fb, body, index).expect("expected non-void expression");
                 place.indices.push(index.id);
                 place.ty = ty;
                 place
             }
             ExprKind::ComponentAccess { expr, ref components } => {
-                todo!("swizzle assignment")
-                /*let mut place = self.lower_place(fb, body, expr);
-                let index = fb.const_i32(components as i32);
-                place.indices.push(index.into());
-                place.ty = ty;
-                place*/
+                if components.len() == 1 {
+                    // single-component assignment is OK
+                    let mut place = self.lower_place_expr(fb, body, expr);
+                    let index = fb.const_i32(components[0] as i32);
+                    place.indices.push(index.into());
+                    place.ty = ty;
+                    place
+                } else {
+                    todo!("swizzle assignment")
+                }
             }
             _ => {
                 panic!("invalid place expression")
@@ -458,7 +505,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                 self.lower_bin_assign_expr(fb, body, &signature, lhs, rhs, ty);
                 return None;
             }
-            ExprKind::Unary { expr, signature, op: _ } => self.lower_unary_expr(fb, body, &signature, expr, ty),
+            ExprKind::Unary { expr, signature, op } => self.lower_unary_expr(fb, body, op, &signature, expr, ty),
             ExprKind::Assign { lhs, rhs } => {
                 self.lower_assign_expr(fb, body, lhs, rhs, ty);
                 return None;
@@ -475,7 +522,17 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             }
             ExprKind::LocalVar { var } => {
                 let local = *self.local_map.get(&var).expect("invalid local var");
-                fb.emit_load(ty, local.into(), None).into()
+
+                // Note that both locals and function parameters are represented by LocalVarIds.
+                // However, variables are always lowered to pointer-typed values, while parameters may not.
+                // TODO Should all parameters be pointers? Or should all parameters be moved into local variables at the start of the function?
+                if body.params.contains(&var) {
+                    // this is a parameter, and the corresponding value is the correct type
+                    local.into()
+                } else {
+                    // local variable, load it
+                    fb.emit_load(ty, local.into(), None).into()
+                }
             }
             ExprKind::GlobalVar { var } => {
                 let Some(HirDef::Variable(global)) = self.def_map.get(&var) else { panic!("invalid global var") };
@@ -513,7 +570,8 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
     ) {
         let var = &body.local_vars[var_id];
         let ty = self.convert_type(fb.module, &var.ty);
-        let ptr = fb.add_local(ty, var.name.clone());
+        let ptr_ty = fb.module.pointer_type(ty, StorageClass::Function);
+        let ptr = fb.add_local(ptr_ty, var.name.clone());
         self.local_map.insert(var_id, ptr);
         if let Some(init) = initializer_id {
             let initializer = self.lower_expr(fb, body, init).expect("expected non-void expression");
@@ -558,6 +616,46 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
         fb.select_block(merge_block);
     }
 
+    fn lower_for_loop(
+        &mut self,
+        fb: &mut hir::FunctionBuilder,
+        body: &TypedBody,
+        initializer: Option<StmtId>,
+        condition: Option<ExprId>,
+        loop_expr: Option<ExprId>,
+        stmt: StmtId,
+    ) {
+        let header_block = fb.create_block();
+        let condition_block = fb.create_block();
+        let loop_body_block = fb.create_block();
+        let merge_block = fb.create_block();
+        let continue_target = fb.create_block();
+
+        if let Some(init) = initializer {
+            self.lower_stmt(fb, body, init);
+        }
+        fb.branch(header_block);
+        fb.select_block(header_block);
+        fb.emit_loop_merge(merge_block, continue_target, Default::default());
+        fb.branch(condition_block);
+        fb.select_block(condition_block);
+        if let Some(condition) = condition {
+            let cond_val = self
+                .lower_expr(fb, body, condition)
+                .expect("expected non-void expression");
+            fb.branch_conditional(cond_val.id, loop_body_block, merge_block);
+        }
+        fb.select_block(loop_body_block);
+        self.lower_stmt(fb, body, stmt);
+        fb.branch(continue_target);
+        fb.select_block(continue_target);
+        if let Some(loop_expr) = loop_expr {
+            self.lower_expr(fb, body, loop_expr);
+        }
+        fb.branch(header_block);
+        fb.select_block(merge_block);
+    }
+
     fn lower_stmt(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, stmt: StmtId) {
         let stmt = &body.stmts[stmt];
         //eprintln!("lowering stmt {:?}", stmt);
@@ -584,6 +682,14 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             }
             StmtKind::Error => {
                 panic!("invalid statement encountered during lowering")
+            }
+            StmtKind::ForLoop {
+                initializer,
+                condition,
+                stmt,
+                loop_expr,
+            } => {
+                self.lower_for_loop(fb, body, initializer, condition, loop_expr, stmt);
             }
         }
     }
@@ -647,10 +753,18 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
                     function_def.linkage,
                     function_def.function_control,
                 );
+
+                // fill local map (LocalVarId -> hir::Value) with the function parameters
+                // (reminder: in TAST, function parameters are also identified with LocalVarIds)
+                self.local_map.clear();
+                for (arg, local_var_id) in func_data.arguments.iter().zip(typed_body.params.iter()) {
+                    self.local_map.insert(*local_var_id, *arg);
+                }
+
                 let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
+
                 let entry_block = typed_body.entry_block.expect("function has no entry block");
                 self.lower_block(&mut builder, &typed_body, entry_block);
-
                 if !builder.is_block_terminated() {
                     // Insert OpReturn if the function returns void & the current block is not terminated
                     // (a return statement is not necessary if the function returns void).
@@ -677,7 +791,7 @@ impl<'a, 'diag> LowerCtxt<'a, 'diag> {
             )
         };
 
-        self.local_map.clear();
+        //self.local_map.clear();
 
         let hir_func = hir.add_function(func_data.clone());
 

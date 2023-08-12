@@ -9,12 +9,15 @@ use spirv_tools::{
 };
 use std::{
     borrow::Cow,
-    fs, mem,
+    fs,
+    fs::File,
+    io::Write,
+    mem,
     path::Path,
     time::{Duration, Instant},
 };
 use tracing::warn;
-use wgpu::{util::DeviceExt, ShaderSource};
+use wgpu::{util::DeviceExt, BindingResource, ShaderSource, TextureViewDescriptor};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -89,6 +92,7 @@ struct WgpuState {
     vertex_shader: wgpu::ShaderModule,
     uniforms_buffer: wgpu::Buffer,
     uniforms_bind_group: wgpu::BindGroup,
+    texture: wgpu::Texture,
     start_instant: Instant,
     size: winit::dpi::PhysicalSize<u32>,
 }
@@ -180,26 +184,80 @@ impl WgpuState {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let img = image::io::Reader::open("data/images/haniyasushin_keiki.jpg")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+
+        let texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("the only texture"),
+                size: wgpu::Extent3d {
+                    width: img.width(),
+                    height: img.height(),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
+            },
+            img.as_raw(),
+        );
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("the only texture view"),
+            format: Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
+            array_layer_count: None,
+        });
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let uniforms_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&texture_view),
+                },
+            ],
             label: Some("uniforms_bind_group"),
         });
 
@@ -253,6 +311,7 @@ impl WgpuState {
             vertex_shader,
             uniforms_buffer,
             uniforms_bind_group,
+            texture,
             start_instant: Instant::now(),
             size,
         }
@@ -288,6 +347,8 @@ impl WgpuState {
             warn!("failed to remap uniforms for {file_path:?} ({err}), see standard output for errors");
             return;
         }
+        // provide a texture named "tex"
+        sit.provide_texture(0, 1, "tex");
         // will rewrite the bytecode with the new interface
         sit.finish();
 
@@ -323,6 +384,10 @@ impl WgpuState {
             //}
         }
         validate_spirv(stem, &spv);
+
+        let mut f = File::create("shader.spv").unwrap();
+        let spv_u8: &[u8] = bytemuck::cast_slice(&spv[..]);
+        f.write(spv_u8).unwrap();
 
         // recreate pipeline
         let shader_module_desc = wgpu::ShaderModuleDescriptorSpirV {
@@ -427,7 +492,7 @@ pub fn main() {
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let mut state = WgpuState::new(window);
 
-    state.load_shader("data/shaders/shadertoy_default.glsl");
+    state.load_shader("data/shaders/texture_sample.glsl");
 
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent { ref event, window_id } if window_id == state.window.id() => {

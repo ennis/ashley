@@ -139,6 +139,8 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         }
         let linkage = None;
 
+        // TODO check validity of qualifiers and attributes for the type
+
         let def = Def {
             //package: None,
             location: Some(global.source_location()),
@@ -175,6 +177,7 @@ impl<'a, 'diag> TypeCheckItemCtxt<'a, 'diag> {
         let block = fn_def.block();
 
         // build parameter list
+        // TODO check for unique parameter names
         let mut params = vec![];
         let mut arg_types = vec![];
         if let Some(param_list) = param_list {

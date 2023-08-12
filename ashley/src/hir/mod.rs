@@ -10,6 +10,7 @@ mod visit;
 
 use crate::{
     diagnostic::SourceLocation,
+    hir,
     hir::types::ScalarType,
     utils::{id_types, interner::UniqueArena},
 };
@@ -102,8 +103,6 @@ pub enum IdRef {
     Value(Value),
     /// Function
     Function(Function),
-    /// Local variable
-    Local(Local),
     /// Constant
     Constant(Constant),
     /// Global variable
@@ -152,11 +151,11 @@ impl From<Function> for IdRef {
     }
 }
 
-impl From<Local> for IdRef {
+/*impl From<Local> for IdRef {
     fn from(local: Local) -> Self {
         IdRef::Local(local)
     }
-}
+}*/
 
 //--------------------------------------------------------------------------------------------------
 
@@ -175,7 +174,7 @@ pub enum Operand {
     FunctionRef(Function),
     ValueRef(Value),
     BlockRef(Block),
-    LocalRef(Local),
+    //LocalRef(Local),
     TypeRef(Type),
     ExtInstSet(ExtInstSet),
 
@@ -294,7 +293,7 @@ impl From<IdRef> for Operand {
             IdRef::Constant(c) => Operand::ConstantRef(c),
             IdRef::Global(g) => Operand::GlobalRef(g),
             IdRef::Function(f) => Operand::FunctionRef(f),
-            IdRef::Local(l) => Operand::LocalRef(l),
+            //IdRef::Local(l) => Operand::LocalRef(l),
         }
     }
 }
@@ -390,7 +389,7 @@ pub struct FunctionParameter {
 #[derive(Clone, Debug)]
 pub struct LocalData {
     pub name: String,
-    pub ty: Type,
+    pub value: hir::Value,
 }
 
 /// HIR functions or function declarations.
@@ -541,8 +540,7 @@ pub enum Domain {
 pub struct GlobalVariableData {
     /// Name of the global variable. Should be unique across all global variables and functions in a module.
     pub name: String,
-    /// Type of the global variable (not necessarily a pointer).
-    /// TODO replace with a pointer?
+    /// Type of the global variable (without the mandatory pointer indirection).
     pub ty: Type,
     /// Storage class.
     pub storage_class: spirv::StorageClass,
@@ -791,7 +789,10 @@ impl Module {
         self.globals.iter().filter(|(_, gdata)| {
             !gdata.removed
                 && match gdata.storage_class {
-                    StorageClass::Input | StorageClass::Output | StorageClass::Uniform => true,
+                    StorageClass::Input
+                    | StorageClass::Output
+                    | StorageClass::Uniform
+                    | StorageClass::UniformConstant => true,
                     _ => false,
                 }
         })
@@ -819,7 +820,7 @@ impl Module {
         for (b, block_data) in self.functions[func].blocks.iter() {
             for inst in block_data.instructions.iter() {
                 if inst.opcode == Op::FunctionCall {
-                    let Operand::FunctionRef(callee) = inst.operands[2] else {
+                    let Operand::FunctionRef(callee) = inst.operands[0] else {
                         panic!("malformed HIR");
                     };
                     // visit function if not recursing

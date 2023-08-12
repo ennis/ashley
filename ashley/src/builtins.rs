@@ -1,5 +1,6 @@
 use crate::{
     hir,
+    hir::TypeData,
     tast::{
         ty::{ImageSampling, ImageType, StructField},
         ScalarType, Type, TypeKind, Types,
@@ -782,7 +783,53 @@ trait FunctionBuilderExt {
     fn emit_splat(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::IdRef;
     fn emit_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
     fn emit_i_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
-    //fn emit_u_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    fn emit_vector_minus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    fn emit_i_vector_minus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    fn emit_scalar_minus_vector(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    fn emit_i_scalar_minus_vector(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value;
+    fn emit_f_vector_over_scalar(
+        &mut self,
+        result_type: hir::Type,
+        vector: hir::IdRef,
+        scalar: hir::IdRef,
+    ) -> hir::Value;
+    fn emit_s_vector_over_scalar(
+        &mut self,
+        result_type: hir::Type,
+        vector: hir::IdRef,
+        scalar: hir::IdRef,
+    ) -> hir::Value;
+    fn emit_u_vector_over_scalar(
+        &mut self,
+        result_type: hir::Type,
+        vector: hir::IdRef,
+        scalar: hir::IdRef,
+    ) -> hir::Value;
+    fn emit_f_scalar_over_vector(
+        &mut self,
+        result_type: hir::Type,
+        scalar: hir::IdRef,
+        vector: hir::IdRef,
+    ) -> hir::Value;
+    fn emit_s_scalar_over_vector(
+        &mut self,
+        result_type: hir::Type,
+        scalar: hir::IdRef,
+        vector: hir::IdRef,
+    ) -> hir::Value;
+    fn emit_u_scalar_over_vector(
+        &mut self,
+        result_type: hir::Type,
+        scalar: hir::IdRef,
+        vector: hir::IdRef,
+    ) -> hir::Value;
+
+    fn emit_f_increment(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value;
+    fn emit_f_decrement(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value;
+    fn emit_i_increment(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value;
+    fn emit_i_decrement(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value;
+
+    fn emit_combined_image_sampler(&mut self, image: hir::IdRef, sampler: hir::IdRef) -> hir::Value;
 }
 
 impl FunctionBuilderExt for hir::FunctionBuilder<'_> {
@@ -800,6 +847,8 @@ impl FunctionBuilderExt for hir::FunctionBuilder<'_> {
         }
     }
 
+    // Addition
+
     fn emit_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
         let splat = self.emit_splat(result_type, b);
         self.emit_f_add(result_type, a, splat)
@@ -808,6 +857,120 @@ impl FunctionBuilderExt for hir::FunctionBuilder<'_> {
     fn emit_i_vector_plus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
         let splat = self.emit_splat(result_type, b);
         self.emit_i_add(result_type, a, splat)
+    }
+
+    // Subtraction
+
+    fn emit_vector_minus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
+        let splat = self.emit_splat(result_type, b);
+        self.emit_f_sub(result_type, a, splat)
+    }
+
+    fn emit_i_vector_minus_scalar(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
+        let splat = self.emit_splat(result_type, b);
+        self.emit_i_sub(result_type, a, splat)
+    }
+
+    fn emit_scalar_minus_vector(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
+        let splat = self.emit_splat(result_type, a);
+        self.emit_f_sub(result_type, splat, b)
+    }
+
+    fn emit_i_scalar_minus_vector(&mut self, result_type: hir::Type, a: hir::IdRef, b: hir::IdRef) -> hir::Value {
+        let splat = self.emit_splat(result_type, a);
+        self.emit_i_sub(result_type, splat, b)
+    }
+
+    // Division
+
+    fn emit_f_vector_over_scalar(
+        &mut self,
+        result_type: hir::Type,
+        vector: hir::IdRef,
+        scalar: hir::IdRef,
+    ) -> hir::Value {
+        let splat = self.emit_splat(result_type, scalar);
+        self.emit_f_div(result_type, vector, splat)
+    }
+
+    fn emit_s_vector_over_scalar(
+        &mut self,
+        result_type: hir::Type,
+        vector: hir::IdRef,
+        scalar: hir::IdRef,
+    ) -> hir::Value {
+        let splat = self.emit_splat(result_type, scalar);
+        self.emit_s_div(result_type, vector, splat)
+    }
+
+    fn emit_u_vector_over_scalar(
+        &mut self,
+        result_type: hir::Type,
+        vector: hir::IdRef,
+        scalar: hir::IdRef,
+    ) -> hir::Value {
+        let splat = self.emit_splat(result_type, scalar);
+        self.emit_u_div(result_type, vector, splat)
+    }
+
+    fn emit_f_scalar_over_vector(
+        &mut self,
+        result_type: hir::Type,
+        scalar: hir::IdRef,
+        vector: hir::IdRef,
+    ) -> hir::Value {
+        let splat = self.emit_splat(result_type, scalar);
+        self.emit_f_div(result_type, splat, vector)
+    }
+
+    fn emit_s_scalar_over_vector(
+        &mut self,
+        result_type: hir::Type,
+        scalar: hir::IdRef,
+        vector: hir::IdRef,
+    ) -> hir::Value {
+        let splat = self.emit_splat(result_type, scalar);
+        self.emit_s_div(result_type, splat, vector)
+    }
+
+    fn emit_u_scalar_over_vector(
+        &mut self,
+        result_type: hir::Type,
+        scalar: hir::IdRef,
+        vector: hir::IdRef,
+    ) -> hir::Value {
+        let splat = self.emit_splat(result_type, scalar);
+        self.emit_u_div(result_type, splat, vector)
+    }
+
+    // Increment/decrement
+
+    fn emit_f_increment(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value {
+        let const_one = self.const_f32(1.0);
+        self.emit_f_add(result_type, scalar, const_one.into())
+    }
+
+    fn emit_f_decrement(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value {
+        let const_one = self.const_f32(1.0);
+        self.emit_f_sub(result_type, scalar, const_one.into())
+    }
+
+    fn emit_i_increment(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value {
+        let const_one = self.const_i32(1);
+        self.emit_i_add(result_type, scalar, const_one.into())
+    }
+
+    fn emit_i_decrement(&mut self, result_type: hir::Type, scalar: hir::IdRef) -> hir::Value {
+        let const_one = self.const_i32(1);
+        self.emit_i_sub(result_type, scalar, const_one.into())
+    }
+
+    // Textures
+
+    fn emit_combined_image_sampler(&mut self, image: hir::IdRef, sampler: hir::IdRef) -> hir::Value {
+        let image_ty = self.type_of(image);
+        let sampled_image_ty = self.define_type(TypeData::SampledImage(image_ty));
+        self.emit_sampled_image(sampled_image_ty, image, sampler)
     }
 }
 
@@ -921,6 +1084,19 @@ builtin_operations! {
         uvecN(uint,uvecN)     => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_plus_scalar(ret, args[1], args[0]);
         uvecN(uvecN,uint)     => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_plus_scalar(ret, args[0], args[1]);
     }
+    Sub {
+        vecN(vecN,vecN)       => |_ctxt, fb, args, _types, ret| fb.emit_f_sub(ret, args[0], args[1]);
+        dvecN(dvecN,dvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_f_sub(ret, args[0], args[1]);
+        ivecN(ivecN,ivecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_sub(ret, args[0], args[1]);
+        uvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_sub(ret, args[0], args[1]);
+
+        vecN(float,vecN)      => |_ctxt, fb, args, _types, ret| fb.emit_scalar_minus_vector(ret, args[0], args[1]);
+        vecN(vecN,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_minus_scalar(ret, args[0], args[1]);
+        ivecN(int,ivecN)      => |_ctxt, fb, args, _types, ret| fb.emit_i_scalar_minus_vector(ret, args[0], args[1]);
+        ivecN(ivecN,int)      => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_minus_scalar(ret, args[0], args[1]);
+        uvecN(uint,uvecN)     => |_ctxt, fb, args, _types, ret| fb.emit_i_scalar_minus_vector(ret, args[0], args[1]);
+        uvecN(uvecN,uint)     => |_ctxt, fb, args, _types, ret| fb.emit_i_vector_minus_scalar(ret, args[0], args[1]);
+    }
     Mul {
         vec2(vec2,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
         vec3(vec3,float)      => |_ctxt, fb, args, _types, ret| fb.emit_vector_times_scalar(ret, args[0], args[1]);
@@ -944,6 +1120,8 @@ builtin_operations! {
         dvec3(dvec3,dvec3)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
         dvec4(dvec4,dvec4)       => |_ctxt, fb, args, _types, ret| fb.emit_f_mul(ret, args[0], args[1]);
 
+        // TODO matrices
+
         // TODO implement this
         ivecN(int,ivecN)    => |_ctxt, fb, args, _types, ret| todo!();
         ivecN(ivecN,int)    => |_ctxt, fb, args, _types, ret| todo!();
@@ -953,17 +1131,26 @@ builtin_operations! {
         uvecN(uvecN,uint)    => |_ctxt, fb, args, _types, ret| todo!();
         uvecN(uvecN,uvecN)    => |_ctxt, fb, args, _types, ret| fb.emit_i_mul(ret, args[0], args[1]);
     }
-    Sub {
-        vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_sub(ret, args[0], args[1]);
-        dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_sub(ret, args[0], args[1]);
-        ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_sub(ret, args[0], args[1]);
-        uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_i_sub(ret, args[0], args[1]);    // FIXME ?
-    }
+
     Div {
         vecN(vecN,vecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_div(ret, args[0], args[1]);
         dvecN(dvecN,dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_div(ret, args[0], args[1]);
         ivecN(ivecN,ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_s_div(ret, args[0], args[1]);
         uvecN(uvecN,uvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_u_div(ret, args[0], args[1]);
+
+        vec2(vec2,float)      => |_ctxt, fb, args, _types, ret| fb.emit_f_vector_over_scalar(ret, args[0], args[1]);
+        vec3(vec3,float)      => |_ctxt, fb, args, _types, ret| fb.emit_f_vector_over_scalar(ret, args[0], args[1]);
+        vec4(vec4,float)      => |_ctxt, fb, args, _types, ret| fb.emit_f_vector_over_scalar(ret, args[0], args[1]);
+        vec2(float,vec2)      => |_ctxt, fb, args, _types, ret| fb.emit_f_scalar_over_vector(ret, args[0], args[1]);
+        vec3(float,vec3)      => |_ctxt, fb, args, _types, ret| fb.emit_f_scalar_over_vector(ret, args[0], args[1]);
+        vec4(float,vec4)      => |_ctxt, fb, args, _types, ret| fb.emit_f_scalar_over_vector(ret, args[0], args[1]);
+
+        dvec2(dvec2,double)      => |_ctxt, fb, args, _types, ret| fb.emit_f_vector_over_scalar(ret, args[0], args[1]);
+        dvec3(dvec3,double)      => |_ctxt, fb, args, _types, ret| fb.emit_f_vector_over_scalar(ret, args[0], args[1]);
+        dvec4(dvec4,double)      => |_ctxt, fb, args, _types, ret| fb.emit_f_vector_over_scalar(ret, args[0], args[1]);
+        dvec2(double,dvec2)      => |_ctxt, fb, args, _types, ret| fb.emit_f_scalar_over_vector(ret, args[0], args[1]);
+        dvec3(double,dvec3)      => |_ctxt, fb, args, _types, ret| fb.emit_f_scalar_over_vector(ret, args[0], args[1]);
+        dvec4(double,dvec4)      => |_ctxt, fb, args, _types, ret| fb.emit_f_scalar_over_vector(ret, args[0], args[1]);
     }
     Rem {  }
     Shl {  }
@@ -978,6 +1165,31 @@ builtin_operations! {
         ivecN(ivecN)   => |_ctxt, fb, args, _types, ret| fb.emit_s_negate(ret, args[0]);
         vecN(vecN)     => |_ctxt, fb, args, _types, ret| fb.emit_f_negate(ret, args[0]);
         dvecN(dvecN)   => |_ctxt, fb, args, _types, ret| fb.emit_f_negate(ret, args[0]);
+    }
+
+    PrefixInc {
+        int(int) => |_ctxt, fb, args, _types, ret| fb.emit_i_increment(ret, args[0]);
+        uint(uint) => |_ctxt, fb, args, _types, ret| fb.emit_i_increment(ret, args[0]);
+        float(float) => |_ctxt, fb, args, _types, ret| fb.emit_f_increment(ret, args[0]);
+        double(double) => |_ctxt, fb, args, _types, ret| fb.emit_f_increment(ret, args[0]);
+    }
+    PrefixDec {
+        int(int) => |_ctxt, fb, args, _types, ret| fb.emit_i_decrement(ret, args[0]);
+        uint(uint) => |_ctxt, fb, args, _types, ret| fb.emit_i_decrement(ret, args[0]);
+        float(float) => |_ctxt, fb, args, _types, ret| fb.emit_f_decrement(ret, args[0]);
+        double(double) => |_ctxt, fb, args, _types, ret| fb.emit_f_decrement(ret, args[0]);
+    }
+    PostfixInc {
+        int(int) => |_ctxt, fb, args, _types, ret| fb.emit_i_increment(ret, args[0]);
+        uint(uint) => |_ctxt, fb, args, _types, ret| fb.emit_i_increment(ret, args[0]);
+        float(float) => |_ctxt, fb, args, _types, ret| fb.emit_f_increment(ret, args[0]);
+        double(double) => |_ctxt, fb, args, _types, ret| fb.emit_f_increment(ret, args[0]);
+    }
+    PostfixDec {
+        int(int) => |_ctxt, fb, args, _types, ret| fb.emit_i_decrement(ret, args[0]);
+        uint(uint) => |_ctxt, fb, args, _types, ret| fb.emit_i_decrement(ret, args[0]);
+        float(float) => |_ctxt, fb, args, _types, ret| fb.emit_f_decrement(ret, args[0]);
+        double(double) => |_ctxt, fb, args, _types, ret| fb.emit_f_decrement(ret, args[0]);
     }
 
     //////////////////////////////////////////////////////
@@ -1257,7 +1469,10 @@ builtin_operations! {
     //////////////////////////////////////////////////////
     textureSample {
         gvec4(gtexture1D, sampler, float)   => |_ctxt, fb, args, _types, ret| todo!();
-        gvec4(gtexture2D, sampler, vec2)   => |_ctxt, fb, args, _types, ret| todo!();         // coords
+        gvec4(gtexture2D, sampler, vec2)   => |_ctxt, fb, args, _types, ret|  {
+            let sampled_image = fb.emit_combined_image_sampler(args[0], args[1]);
+            fb.emit_image_sample_implicit_lod(ret, sampled_image.into(), args[2], None)
+        };
         gvec4(gtexture2D, sampler, vec2, ivec2)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,offset
         gvec4(gtexture2DArray, sampler, vec2, int)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index
         gvec4(gtexture2DArray, sampler, vec2, uint)   => |_ctxt, fb, args, _types, ret| todo!();   // coords,array_index

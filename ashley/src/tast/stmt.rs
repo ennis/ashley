@@ -14,10 +14,17 @@ pub struct Stmt {
 
 #[derive(Debug)]
 pub enum StmtKind {
+    // TODO empty statement?
     Select {
         condition: ExprId,
         true_branch: StmtId,
         false_branch: Option<StmtId>,
+    },
+    ForLoop {
+        initializer: Option<StmtId>,
+        condition: Option<ExprId>,
+        loop_expr: Option<ExprId>,
+        stmt: StmtId,
     },
     Local {
         var: LocalVarId,
@@ -60,9 +67,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
         let Some(ast_condition) = if_stmt.condition().and_then(|c| c.expr()) else {
             return StmtKind::Error
         };
-        let Some(condition) = if_stmt.condition().and_then(|c| c.expr()).map(|c| self.typecheck_expr(&c)) else {
-            return StmtKind::Error
-        };
+        let condition = self.typecheck_expr(&ast_condition);
 
         let Some(stmt) = if_stmt.stmt() else {
             return StmtKind::Error
@@ -94,6 +99,61 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             true_branch,
             false_branch,
         }
+    }
+
+    fn typecheck_for_stmt_inner(&mut self, for_stmt: &ast::ForStmt) -> StmtKind {
+        let initializer = if let Some(init) = for_stmt.initializer() {
+            if let Some(stmt) = init.stmt() {
+                Some(self.typecheck_stmt(&stmt))
+            } else {
+                None
+            }
+        } else {
+            return StmtKind::Error;
+        };
+
+        //
+        let condition = if let Some(cond) = for_stmt.condition() {
+            if let Some(cond_expr) = cond.expr() {
+                let c = self.typecheck_expr(&cond_expr);
+                Some(self.add_expr(c))
+            } else {
+                None
+            }
+        } else {
+            return StmtKind::Error;
+        };
+
+        let loop_expr = if let Some(loop_expr) = for_stmt.loop_expr() {
+            if let Some(e) = loop_expr.expr() {
+                let e = self.typecheck_expr(&e);
+                Some(self.add_expr(e))
+            } else {
+                None
+            }
+        } else {
+            return StmtKind::Error;
+        };
+
+        let body = if let Some(body) = for_stmt.body() {
+            self.typecheck_stmt(&body)
+        } else {
+            return StmtKind::Error;
+        };
+
+        StmtKind::ForLoop {
+            initializer,
+            condition,
+            loop_expr,
+            stmt: body,
+        }
+    }
+
+    fn typecheck_for_stmt(&mut self, for_stmt: &ast::ForStmt) -> StmtKind {
+        self.scopes.push(Scope::new());
+        let r = self.typecheck_for_stmt_inner(for_stmt);
+        self.scopes.pop();
+        r
     }
 
     /// Typechecks an expression statement and return the statement kind.
@@ -175,9 +235,7 @@ impl<'a, 'diag> TypeCheckBodyCtxt<'a, 'diag> {
             }
             ast::Stmt::LocalVariable(local) => self.typecheck_local_variable_stmt(local),
             ast::Stmt::IfStmt(if_stmt) => self.typecheck_if_stmt(if_stmt),
-            ast::Stmt::ForStmt(_) => {
-                todo!("for stmt")
-            }
+            ast::Stmt::ForStmt(for_stmt) => self.typecheck_for_stmt(for_stmt),
         };
         self.typed_body.stmts.push(Stmt {
             ast: stmt.clone(),

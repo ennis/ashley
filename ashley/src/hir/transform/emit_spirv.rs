@@ -228,7 +228,7 @@ impl<'a> Ctxt<'a> {
                 id
             }
             TypeData::SampledImage(img_ty) => {
-                let image_type = self.emit_image_type(&img_ty);
+                let image_type = self.emit_type_recursive(img_ty);
                 self.builder.type_sampled_image(image_type)
             }
             TypeData::Image(img_ty) => self.emit_image_type(&img_ty),
@@ -301,7 +301,7 @@ impl<'a> Ctxt<'a> {
 
         let mut labels = IdMap::with_capacity(fdata.blocks.len());
         let mut values = IdMap::with_capacity(fdata.values.len());
-        let mut locals = IdMap::with_capacity(fdata.locals.len());
+        //let mut locals = IdMap::with_capacity(fdata.locals.len());
 
         for (arg, ty) in fdata.arguments.iter().zip(function_type.arg_types.iter()) {
             let arg_ty = self.emit_type_recursive(*ty);
@@ -318,11 +318,12 @@ impl<'a> Ctxt<'a> {
             if ib == 0 {
                 // entry block, add local variables
                 for (local, ldata) in fdata.locals.iter() {
-                    let ty = self.emit_type_recursive(ldata.ty);
-                    let ptr_ty = self.builder.type_pointer(None, StorageClass::Function, ty);
-                    let id = self.builder.variable(ptr_ty, None, StorageClass::Function, None);
+                    let local_ty = fdata.values[ldata.value].ty;
+                    let ty = self.emit_type_recursive(local_ty);
+                    //let ptr_ty = self.builder.type_pointer(None, StorageClass::Function, ty);
+                    let id = self.builder.variable(ty, None, StorageClass::Function, None);
                     self.builder.name(id, &ldata.name);
-                    locals.insert(local, id);
+                    values.insert(ldata.value, id);
                 }
             }
             for inst in bdata.instructions.iter() {
@@ -340,14 +341,14 @@ impl<'a> Ctxt<'a> {
 
                 let mut operands = Vec::with_capacity(inst.operands.len());
                 for op in inst.operands.iter() {
-                    operands.push(self.operand_to_rspirv(op, &values, &locals, &labels));
+                    operands.push(self.operand_to_rspirv(op, &values, &labels));
                 }
                 let spvinst = rspirv::dr::Instruction::new(inst.opcode, result_type, result_id, operands);
                 self.builder.insert_into_block(InsertPoint::End, spvinst).unwrap();
             }
             match bdata.terminator {
                 None => {
-                    panic!("unterminated block")
+                    panic!("unterminated block #{} in function {}", ib, fdata.name);
                 }
                 Some(ref terminator) => match terminator {
                     TerminatingInstruction::Branch(target) => {
@@ -382,7 +383,7 @@ impl<'a> Ctxt<'a> {
                             IdRef::Value(v) => values[*v],
                             IdRef::Constant(c) => self.emit_constant_recursive(*c),
                             IdRef::Global(g) => self.emit_global(*g),
-                            IdRef::Local(l) => locals[*l],
+                            //IdRef::Local(l) => locals[*l],
                             IdRef::Function(_) => panic!("invalid return value"),
                         };
                         self.builder.ret_value(id).unwrap();
@@ -474,11 +475,10 @@ impl<'a> Ctxt<'a> {
         &mut self,
         op: &Operand,
         values: &IdMap<Value, Word>,
-        locals: &IdMap<Local, Word>,
         labels: &IdMap<Block, Word>,
     ) -> rspirv::dr::Operand {
         match *op {
-            Operand::LocalRef(l) => rspirv::dr::Operand::IdRef(locals[l]),
+            //Operand::LocalRef(l) => rspirv::dr::Operand::IdRef(locals[l]),
             Operand::ConstantRef(constant) => rspirv::dr::Operand::IdRef(self.emit_constant_recursive(constant)),
             Operand::LiteralExtInstInteger(i) => rspirv::dr::Operand::LiteralExtInstInteger(i),
             Operand::FunctionRef(function) => rspirv::dr::Operand::IdRef(self.emit_function(function)),

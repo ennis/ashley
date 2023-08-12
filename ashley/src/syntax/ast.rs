@@ -15,6 +15,14 @@ pub enum UnaryOp {
     /// `-`
     Neg,
     // TODO: complement op
+    /// `++`
+    PrefixInc,
+    /// `--`
+    PrefixDec,
+    /// `++`
+    PostfixInc,
+    /// `--`
+    PostfixDec,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -263,23 +271,25 @@ impl_ast_node!(FnDef<FN_DEF>
  token name: Ident]);*/
 
 impl_ast_node!(Condition     <CONDITION>   [node expr: Expr]);
-impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: ExprStmt]);
 impl_ast_node!(ArgList       <ARG_LIST>    [nodes arguments: Expr]);
 impl_ast_node!(ExprStmt      <EXPR_STMT>   [node expr: Expr]);
 impl_ast_node!(ReturnStmt    <RETURN_STMT> [node expr: Expr]);
 impl_ast_node!(BlockStmt     <BLOCK_STMT>  [node block: Block]);
-impl_ast_node!(BreakStmt     <BREAK_STMT> []);
+impl_ast_node!(BreakStmt     <BREAK_STMT>  []);
 impl_ast_node!(ContinueStmt  <CONTINUE_STMT> []);
 impl_ast_node!(DiscardStmt   <DISCARD_STMT> []);
 impl_ast_node!(IfStmt        <IF_STMT>     [node condition: Condition, node stmt: Stmt, node else_branch: ElseBranch]);
 impl_ast_node!(WhileStmt     <WHILE_STMT>  [node condition: Condition, node stmt: Stmt]);
-impl_ast_node!(ForStmt       <FOR_STMT>    [node initializer: ForInit, node condition: Condition, node stmt: Stmt]);
+impl_ast_node!(LoopExpr      <LOOP_EXPR>   [node expr: Expr]); // actually an expression statement
+impl_ast_node!(ForStmt       <FOR_STMT>    [node initializer: ForInit, node condition: Condition, node loop_expr: LoopExpr, node body: Stmt]);
+impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: Stmt]);
 impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node stmt: Stmt]);
 impl_ast_node!(BinExpr       <BIN_EXPR>    []);
 impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
 impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
 impl_ast_node!(CallExpr      <CALL_EXPR>   [node callee: Expr, node arg_list: ArgList]);
 impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
+impl_ast_node!(PostfixExpr   <POSTFIX_EXPR> []);
 impl_ast_node!(FieldExpr     <FIELD_EXPR>  [node expr: Expr, token field: Ident]);
 impl_ast_node!(LitExpr       <LIT_EXPR>    []);
 impl_ast_node!(PathExpr      <PATH_EXPR>   [token ident: Ident]);
@@ -307,9 +317,14 @@ impl_ast_variant_node!(Stmt, [
     IF_STMT => IfStmt,
     FOR_STMT => ForStmt
 ]);
+/*impl_ast_variant_node!(ForInitStmt, [
+    EXPR_STMT => ExprStmt,
+    LOCAL_VARIABLE => LocalVariable
+]);*/
 impl_ast_variant_node!(Expr, [
     BIN_EXPR => BinExpr,
     PREFIX_EXPR => PrefixExpr,
+    POSTFIX_EXPR => PostfixExpr,
     CALL_EXPR => CallExpr,
     INDEX_EXPR => IndexExpr,
     PAREN_EXPR => ParenExpr,
@@ -453,6 +468,28 @@ impl PrefixExpr {
                 let op = match c.kind() {
                     T![-] => UnaryOp::Neg,
                     T![!] => UnaryOp::Not,
+                    T![++] => UnaryOp::PrefixInc,
+                    T![--] => UnaryOp::PrefixDec,
+                    _ => return None,
+                };
+                Some((c, op))
+            })
+    }
+
+    pub fn expr(&self) -> Option<Expr> {
+        self.syntax.children().filter_map(Expr::cast).nth(0)
+    }
+}
+
+impl PostfixExpr {
+    pub fn op_details(&self) -> Option<(SyntaxToken, UnaryOp)> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find_map(|c| {
+                let op = match c.kind() {
+                    T![++] => UnaryOp::PostfixInc,
+                    T![--] => UnaryOp::PostfixDec,
                     _ => return None,
                 };
                 Some((c, op))

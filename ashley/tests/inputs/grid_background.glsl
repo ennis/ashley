@@ -1,11 +1,10 @@
 public uniform vec2 u_resolution;
 public uniform vec2 u_scroll_offset;
 
-public uniform float[10] stride(16) u_zoom;
+public uniform float u_zoom;
 
-
-in vec2 i_position @location(0);
-out vec4 out_color @location(0);
+@location(0) in vec2 i_position;
+@location(0) out vec4 out_color;
 
 public void main() {
     vec2 position = i_position * vec2(1.0, -1.0) * u_resolution * 0.5;

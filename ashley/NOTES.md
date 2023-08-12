@@ -1621,3 +1621,7 @@ Makes sense to do this on HIR.
 5. Back-links from TAST to original syntax
 6. Would be nice to have a syntax highlighter and some IDE integration with LSP
 
+# Should function parameters be pointers in the HIR?
+
+glslang -> SPIR-V does that, since in GLSL parameters are mutable, so they are like variables.
+However, this means that at call sites we must materialize arguments into variables => avoid that

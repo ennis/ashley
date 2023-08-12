@@ -2,7 +2,11 @@ use crate::{
     builtins,
     builtins::{BuiltinOperation, BuiltinSignature, Constructor},
     diagnostic::{AsSourceLocation, SourceLocation},
-    syntax::{ast, ast::AstNode, SyntaxNode},
+    syntax::{
+        ast,
+        ast::{AstNode, UnaryOp},
+        SyntaxNode, SyntaxToken,
+    },
     tast::{
         consteval::ConstantValue,
         def::DefKind,
@@ -109,7 +113,7 @@ pub enum ExprKind {
     },
     //FunctionRef {},
     Index {
-        array: ExprId,
+        array_or_vector: ExprId,
         index: ExprId,
     },
     Field {
@@ -174,7 +178,8 @@ impl TypeCheckBodyCtxt<'_, '_> {
         })
     }*/
 
-    fn typecheck_constructor_components(
+    //
+    /*fn typecheck_constructor_components(
         &mut self,
         arglist: &ast::ArgList,
         target_scalar_type: ScalarType,
@@ -195,7 +200,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
         }
         (args, num_components)
-    }
+    }*/
 
     pub(crate) fn typecheck_constructor_expr(&mut self, expr: &ast::ConstructorExpr) -> Expr {
         let Some(ty) = expr.ty().map(|ty| self.convert_type(ty)) else { return self.error_expr(); };
@@ -210,23 +215,55 @@ impl TypeCheckBodyCtxt<'_, '_> {
 
         let arg_tys = args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>();
 
+        use ScalarType as ST;
         use TypeKind as TK;
+
+        let has_scalar_conversion = |from: &TypeKind, to: &TypeKind| match (from, to) {
+            (TK::Scalar(from_scalar), TK::Scalar(to_scalar)) => match (from_scalar, to_scalar) {
+                (a, b) if a == b => true,
+                (ST::UnsignedInt, ST::Int) => true,
+                (ST::Bool, ST::Int) => true,
+                (ST::Float, ST::Int) => true,
+                (ST::Double, ST::Int) => true,
+                (ST::Int, ST::UnsignedInt) => true,
+                (ST::Bool, ST::UnsignedInt) => true,
+                (ST::Float, ST::UnsignedInt) => true,
+                (ST::Double, ST::UnsignedInt) => true,
+                (ST::Int, ST::Bool) => true,
+                (ST::UnsignedInt, ST::Bool) => true,
+                (ST::Float, ST::Bool) => true,
+                (ST::Double, ST::Bool) => true,
+                (ST::Int, ST::Float) => true,
+                (ST::UnsignedInt, ST::Float) => true,
+                (ST::Bool, ST::Float) => true,
+                (ST::Double, ST::Float) => true,
+                (ST::Int, ST::Double) => true,
+                (ST::UnsignedInt, ST::Double) => true,
+                (ST::Bool, ST::Double) => true,
+                (ST::Float, ST::Double) => true,
+                _ => false,
+            },
+            _ => false,
+        };
 
         match *ty.deref() {
             TK::Scalar(_) | TK::Vector(_, _) | TK::Matrix { .. } => {
                 for &ctor in builtins::CONSTRUCTORS {
-                    // FIXME: scalar conversions?
                     if ctor.ty == *ty
                         && ctor.args.len() == arg_tys.len()
-                        && ctor.args.iter().zip(arg_tys.iter()).all(|(a, b)| *a == **b)
+                        && arg_tys
+                            .iter()
+                            .zip(ctor.args.iter())
+                            .all(|(from, to)| **from == *to || has_scalar_conversion(&*from.0, to))
                     {
-                        return Expr::new(
-                            ExprKind::BuiltinConstructor {
-                                ctor,
-                                args: args.into_iter().map(|arg| self.add_expr(arg)).collect(),
-                            },
-                            ty,
-                        );
+                        let mut conv_args = Vec::with_capacity(arg_tys.len());
+                        for (arg, ctor_arg_tk) in args.into_iter().zip(ctor.args.iter()) {
+                            let ctor_arg_ty = self.sess.tyctxt.ty(ctor_arg_tk.clone());
+                            let arg_loc = arg.syntax.as_ref().map(AsSourceLocation::source_location);
+                            let conv_arg = self.apply_implicit_conversion(arg, arg_loc, ctor_arg_ty);
+                            conv_args.push(self.add_expr(conv_arg));
+                        }
+                        return Expr::new(ExprKind::BuiltinConstructor { ctor, args: conv_args }, ty);
                     }
                 }
                 self.sess
@@ -237,7 +274,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     .emit();
                 self.error_expr()
             }
-            TypeKind::Array { .. } => {
+            TK::Array { .. } => {
                 todo!("array constructors")
             }
             _ => {
@@ -266,6 +303,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 todo!("array expressions")
             }
             ast::Expr::PrefixExpr(prefix_expr) => self.typecheck_prefix_expr(prefix_expr),
+            ast::Expr::PostfixExpr(postfix_expr) => self.typecheck_postfix_expr(postfix_expr),
             ast::Expr::ConstructorExpr(constructor) => self.typecheck_constructor_expr(constructor),
         };
         if let Some(ref syntax) = expr.syntax {
@@ -284,6 +322,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let index = self.typecheck_expr(&index_expr);
 
         let ty = match array.ty.deref() {
+            TypeKind::Vector(scalar_type, _) => self.sess.tyctxt.ty(TypeKind::Scalar(*scalar_type)),
             TypeKind::Array { element_type, .. } | TypeKind::RuntimeArray { element_type, .. } => element_type.clone(),
             _ => {
                 self.sess
@@ -307,10 +346,12 @@ impl TypeCheckBodyCtxt<'_, '_> {
             }
         };
 
+        // TODO check for out of bounds access if
+
         Expr {
             syntax: Some(index_expr.syntax().clone()),
             kind: ExprKind::Index {
-                array: self.add_expr(array),
+                array_or_vector: self.add_expr(array),
                 index: self.add_expr(index),
             },
             ty,
@@ -413,22 +454,54 @@ impl TypeCheckBodyCtxt<'_, '_> {
         }
     }
 
-    fn typecheck_prefix_expr(&mut self, prefix_expr: &ast::PrefixExpr) -> Expr {
-        let Some(op) = prefix_expr.op_details() else {return self.error_expr() };
-        let Some(expr) = prefix_expr.expr() else {return self.error_expr() };
+    fn typecheck_unary_expr(&mut self, syntax: SyntaxNode, token: SyntaxToken, op: UnaryOp, expr: &ast::Expr) -> Expr {
         let value = self.typecheck_expr(&expr);
-        // TODO replace with resolve_overload (typecheck operators as if they were a special kind of function)
-        let operation = match op.1 {
-            ast::UnaryOp::Neg => &builtins::UnaryMinus,
-            ast::UnaryOp::Not => &builtins::Not,
+        let operation;
+        let is_assignment;
+        match op {
+            UnaryOp::Neg => {
+                is_assignment = false;
+                operation = &builtins::UnaryMinus;
+            }
+            UnaryOp::Not => {
+                is_assignment = false;
+                operation = &builtins::Not;
+            }
+            UnaryOp::PrefixInc => {
+                is_assignment = true;
+                operation = &builtins::PrefixInc;
+            }
+            UnaryOp::PrefixDec => {
+                is_assignment = true;
+                operation = &builtins::PrefixDec;
+            }
+            UnaryOp::PostfixInc => {
+                is_assignment = true;
+                operation = &builtins::PostfixInc;
+            }
+            UnaryOp::PostfixDec => {
+                is_assignment = true;
+                operation = &builtins::PostfixDec;
+            }
         };
+
+        if is_assignment {
+            // TODO check that expression is a place
+        }
+
         match self.typecheck_builtin_operation(operation, &[value.ty.clone()]) {
             Ok(overload) => {
-                let conv_expr = self.apply_implicit_conversion(value, None, overload.parameter_types[0].clone());
+                let conv_expr = if is_assignment {
+                    // there are no "implicit conversions" of the value for `value++` and `value--` (and the prefix variants)
+                    value
+                } else {
+                    self.apply_implicit_conversion(value, None, overload.parameter_types[0].clone())
+                };
+
                 Expr {
-                    syntax: Some(prefix_expr.syntax().clone()),
+                    syntax: Some(syntax),
                     kind: ExprKind::Unary {
-                        op: op.1,
+                        op,
                         signature: operation.signatures[overload.index],
                         expr: self.add_expr(conv_expr),
                     },
@@ -436,21 +509,34 @@ impl TypeCheckBodyCtxt<'_, '_> {
                 }
             }
             Err(_) => {
-                // TODO display operand types
+                let op_type = &value.ty;
                 self.sess
                     .diag
-                    .error(format!("no overload for unary operation `{}`", op.0))
-                    .location(&prefix_expr)
+                    .error(format!("no overload for unary operation `{}`", token))
+                    .location(&syntax)
+                    .note(format!("operand has type {op_type}"))
                     .emit();
                 self.error_expr()
             }
         }
     }
 
-    fn typecheck_expr_with_implicit_conversion(&mut self, expr: &ast::Expr, target_ty: Type) -> Expr {
+    fn typecheck_prefix_expr(&mut self, prefix_expr: &ast::PrefixExpr) -> Expr {
+        let Some(op) = prefix_expr.op_details() else {return self.error_expr() };
+        let Some(expr) = prefix_expr.expr() else {return self.error_expr() };
+        self.typecheck_unary_expr(prefix_expr.syntax().clone(), op.0, op.1, &expr)
+    }
+
+    fn typecheck_postfix_expr(&mut self, postfix_expr: &ast::PostfixExpr) -> Expr {
+        let Some(op) = postfix_expr.op_details() else {return self.error_expr() };
+        let Some(expr) = postfix_expr.expr() else {return self.error_expr() };
+        self.typecheck_unary_expr(postfix_expr.syntax().clone(), op.0, op.1, &expr)
+    }
+
+    /*fn typecheck_expr_with_implicit_conversion(&mut self, expr: &ast::Expr, target_ty: Type) -> Expr {
         let e = self.typecheck_expr(expr);
         self.apply_implicit_conversion(e, Some(expr.source_location()), target_ty)
-    }
+    }*/
 
     fn typecheck_path_expr(&mut self, path_expr: &ast::PathExpr) -> Expr {
         let Some(path) = path_expr.ident() else { return self.error_expr(); };
@@ -810,7 +896,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
         let lhs = self.typecheck_expr(&ast_lhs);
         let rhs = self.typecheck_expr(&ast_rhs);
 
-        //eprintln!("")
+        // TODO: check that LHS is a place if this is an assignment
 
         if let Some(operation) = operation {
             match self.typecheck_builtin_operation(operation, &[lhs.ty.clone(), rhs.ty.clone()]) {
@@ -842,10 +928,13 @@ impl TypeCheckBodyCtxt<'_, '_> {
                     }
                 }
                 Err(_) => {
+                    let lhs_ty = &lhs.ty;
+                    let rhs_ty = &rhs.ty;
                     self.sess
                         .diag
                         .error(format!("no overload for binary operation `{op_token}`"))
                         .location(op_token.source_location())
+                        .note(format!("operand types are: {lhs_ty} {op_token} {rhs_ty}"))
                         .emit();
                     self.error_expr()
                 }
@@ -904,7 +993,7 @@ impl TypeCheckBodyCtxt<'_, '_> {
                             syntax: Some(lit_expr.syntax().clone()),
                             ty: self.sess.tyctxt.prim_tys.float.clone(),
                             kind: ExprKind::Literal {
-                                value: ConstantValue::Float(OrderedFloat::from(dbg!(v as f32))),
+                                value: ConstantValue::Float(OrderedFloat::from(v as f32)),
                             },
                         }
                     }

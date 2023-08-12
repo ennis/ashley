@@ -5,5 +5,5 @@ opt-level = 3
 opt-level = 3
 
 [workspace]
-members = ["ashley", "ashley-derive", "codegen"]
+members = ["ashley", "ashley-derive", "codegen", "ashley-lsp"]
 resolver = "2"

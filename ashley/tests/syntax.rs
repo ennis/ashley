@@ -15,6 +15,5 @@ fn test_syntax() {
         let module_syntax = sess.get_ast(pkg).unwrap().module.syntax().clone();
         insta::assert_debug_snapshot!(module_syntax)
     }
-    insta::glob!("inputs/syntax/*.glsl", test_syntax_one);
-    insta::glob!("inputs/*.glsl", test_syntax_one);
+    insta::glob!("inputs/**/*.glsl", test_syntax_one);
 }

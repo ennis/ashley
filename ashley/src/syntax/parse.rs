@@ -241,6 +241,9 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         SyntaxNode::new_root(green_node)
     }
 
+    // TODO parser recovery situations:
+    // - argument lists
+
     //
     // --- Utilities ---
     //
@@ -410,6 +413,27 @@ impl<'a, 'diag> Parser<'a, 'diag> {
             let span = self.span();
             let msg = format!("expected {kind:?}");
             self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+            false
+        } else {
+            self.eat();
+            true
+        }
+    }
+
+    /// Expects a token. If the token is not there, skip until the token is found.
+    ///
+    /// TODO stop recovery when encountering a closing terminator
+    fn expect_recover(&mut self, kind: SyntaxKind) -> bool {
+        if self.next() != Some(kind) {
+            let span = self.span();
+            let msg = format!("expected {kind:?}");
+            self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+            while let Some(tk) = self.next() {
+                self.eat();
+                if tk == kind {
+                    break;
+                }
+            }
             false
         } else {
             self.eat();
@@ -773,7 +797,7 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 self.eat();
                 continue;
             }
-            self.expect(R_PAREN);
+            self.expect_recover(R_PAREN);
             break;
         }
 
@@ -871,10 +895,10 @@ impl<'a, 'diag> Parser<'a, 'diag> {
                 let cur_span = self.span();
                 self.sess
                     .diag
-                    .error("syntax error (TODO parse_type)")
+                    .error("syntax error")
                     .primary_label_opt(cur_span, "")
                     .emit();
-                // FIXME: forward progress bump
+                // forward progress bump
                 self.eat();
             }
         }
@@ -1167,21 +1191,26 @@ impl<'a, 'diag> Parser<'a, 'diag> {
         self.expect(FOR_KW);
         self.expect(T!['(']);
         self.start_node(FOR_INIT);
-        if self.next_is_type() {
-            self.parse_local_variable_stmt();
-        } else {
-            self.parse_expr_stmt();
+        if self.next() != Some(T![;]) {
+            if self.next_is_type() {
+                self.parse_local_variable_stmt();
+            } else {
+                self.parse_expr_stmt();
+            }
         }
         self.finish_node(); // finish FOR_INIT
         self.start_node(CONDITION);
         if self.next() != Some(T![;]) {
             self.parse_expr();
         }
+        self.expect_recover(T![;]);
         self.finish_node(); // finish CONDITION
+        self.start_node(LOOP_EXPR);
         if self.next() != Some(T![')']) {
             self.parse_expr();
         }
-        self.expect(T![')']);
+        self.finish_node(); // finish LOOP_EXPR
+        self.expect_recover(T![')']);
         self.parse_stmt();
         self.finish_node(); // finish FOR_STMT
     }

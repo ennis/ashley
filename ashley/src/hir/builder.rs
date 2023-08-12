@@ -2,6 +2,7 @@ use crate::hir::{
     Block, BlockData, Constant, ExtInstSet, FunctionData, GlobalVariable, IdRef, InstructionData, Local, LocalData,
     Module, Operand, TerminatingInstruction, Type, Value, ValueData, ValueOrConstant,
 };
+use ashley::hir::ConstantData;
 use rspirv::spirv;
 use smallvec::{smallvec, SmallVec};
 use spirv::Op;
@@ -163,6 +164,7 @@ impl IntoOperand for ImageOperands {
     }
 }
 
+#[derive(Default)]
 pub struct LoopControl {
     pub unroll: bool,
     pub dont_unroll: bool,
@@ -251,8 +253,13 @@ impl<'a> FunctionBuilder<'a> {
         result
     }
 
-    pub fn add_local(&mut self, ty: Type, name: impl Into<String>) -> Local {
-        self.function.locals.alloc(LocalData { name: name.into(), ty })
+    pub fn add_local(&mut self, ty: Type, name: impl Into<String>) -> Value {
+        let value = self.function.values.alloc(ValueData { ty });
+        self.function.locals.alloc(LocalData {
+            name: name.into(),
+            value,
+        });
+        value
     }
 
     /// Creates a new block without switching the current one.
@@ -304,14 +311,19 @@ impl<'a> FunctionBuilder<'a> {
         self.append_inst(i).unwrap()
     }
 
-    /// Returns the type of the specified value.
-    pub fn ty(&self, v: Value) -> Type {
-        self.function.values[v].ty
-    }
-
-    /// Returns the type of the specified local variable.
-    pub fn local_type(&self, l: Local) -> Type {
-        self.function.locals[l].ty
+    /// Returns the type of the specified value (in the current function) or global (the type after dereference).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ID refers to a constant or a function.
+    pub fn type_of(&self, v: IdRef) -> Type {
+        match v {
+            IdRef::Value(v) => self.function.values[v].ty,
+            IdRef::Global(g) => self.globals[g].ty,
+            IdRef::Function(_) | IdRef::Constant(_) => {
+                panic!("unexpected ID kind")
+            }
+        }
     }
 
     /// Switch to the specified block in the current function.

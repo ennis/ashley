@@ -238,16 +238,6 @@ impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
             self.hir.remove_global(var);
         }
 
-        // recompute shader interfaces
-        // TODO: do that in `finish()`
-        // temporarily move them out so we can modify them without borrow-locking the module
-        let mut entry_points = mem::take(&mut self.hir.entry_points);
-        for (_, epdata) in entry_points.iter_mut() {
-            let shader_interface = self.hir.shader_interface(epdata.function);
-            epdata.shader_interface = shader_interface;
-        }
-        self.hir.entry_points = entry_points;
-
         Ok(())
     }
 
@@ -265,8 +255,23 @@ impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
         todo!()
     }
 
-    pub fn provide_texture(&mut self, set: usize, binding: usize, name: &str) {
-        todo!()
+    pub fn provide_texture(&mut self, set: u32, binding: u32, name: &str) {
+        // find a matching image uniform
+        // TODO combined image sampler inputs
+
+        let tex_match = self
+            .hir
+            .interface_variables()
+            .find(|(g, gdata)| self.hir.types[gdata.ty].is_image() && gdata.name == *name)
+            .map(|(g, gdata)| g);
+
+        if let Some(tex) = tex_match {
+            // just add set + binding decoration and we're good to go
+            // FIXME this assumes that the uniform doesn't already have a decoration
+            self.hir.globals[tex]
+                .decorations
+                .extend([Decoration::DescriptorSet(set), Decoration::Binding(binding)]);
+        }
     }
 
     /*/// Iterates over unbound uniform variables.
@@ -289,7 +294,16 @@ impl<'a, 'diag> ShaderInterfaceTransform<'a, 'diag> {
         })
     }*/
 
-    pub fn finish(self) {}
+    pub fn finish(self) {
+        // recompute shader interfaces
+        // temporarily move them out so we can modify them without borrow-locking the module
+        let mut entry_points = mem::take(&mut self.hir.entry_points);
+        for (_, epdata) in entry_points.iter_mut() {
+            let shader_interface = self.hir.shader_interface(epdata.function);
+            epdata.shader_interface = shader_interface;
+        }
+        self.hir.entry_points = entry_points;
+    }
 
     /*/// Iterates over images (textures & storage images)
     pub fn images(&self) -> impl Iterator<Item = (GlobalVariable, &'_ GlobalVariableData)> + '_ {

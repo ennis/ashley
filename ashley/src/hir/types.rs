@@ -212,10 +212,12 @@ pub enum TypeData<'a> {
     },
     /// Structure type (array of (offset, type) tuples).
     Struct(StructType<'a>),
-    /// Sampled image type (e.g. `texture2D`).
-    SampledImage(ImageType),
-    /// Unsampled image type (e.g. `image2D`).
+    /// Image type (e.g. `image2D`, `texture2D`).
     Image(ImageType),
+    /// Combined image-sampler image type (e.g. `sampler2D`).
+    ///
+    /// The inner type must be an `Image`.
+    SampledImage(Type),
     /// Pointer.
     Pointer {
         pointee_type: Type,
@@ -284,6 +286,14 @@ impl<'a> TypeData<'a> {
         }
     }
 
+    ///
+    pub fn as_image(&self) -> Option<&ImageType> {
+        match self {
+            TypeData::Image(img) => Some(img),
+            _ => None,
+        }
+    }
+
     /// Returns whether this is a storage image type.
     pub fn is_storage_image(&self) -> bool {
         match self {
@@ -321,7 +331,7 @@ impl<'a> TypeData<'a> {
     }
 }
 
-fn print_image_type(img: &ImageType, f: &mut fmt::Formatter, is_sampled: bool) -> fmt::Result {
+fn print_image_type(img: &ImageType, f: &mut fmt::Formatter, is_combined_image_sampler: bool) -> fmt::Result {
     let prefix = match img.sampled_type {
         ScalarType::Int => "i",
         ScalarType::UnsignedInt => "u",
@@ -329,7 +339,15 @@ fn print_image_type(img: &ImageType, f: &mut fmt::Formatter, is_sampled: bool) -
         ScalarType::Bool => "b",
         _ => panic!("invalid image sampled type"),
     };
-    let image = if is_sampled { "texture" } else { "image" };
+    let image = if is_combined_image_sampler {
+        "combinedImageSampler"
+    } else {
+        match img.sampled {
+            ImageSampling::Unknown => "texture",
+            ImageSampling::Sampled => "texture",
+            ImageSampling::ReadWrite => "image",
+        }
+    };
     let dim = match img.dim {
         Dim::Dim1D => "1D",
         Dim::Dim2D => "2D",
@@ -419,7 +437,7 @@ impl<'a> fmt::Debug for TypeDataDebug<'a> {
             TypeData::RuntimeArray { element_type, stride } => {
                 let td = self.0.debug_type(*element_type);
                 if let Some(stride) = *stride {
-                    write!(f, "@stride({stride}) {td:?}[]")?;
+                    write!(f, "{td:?}[] stride({stride}) ")?;
                 } else {
                     write!(f, "{td:?}[]")?;
                 }
@@ -428,7 +446,11 @@ impl<'a> fmt::Debug for TypeDataDebug<'a> {
                 print_struct_type(self.0, s, f)?;
             }
             TypeData::SampledImage(img) => {
-                print_image_type(img, f, true)?;
+                if let Some(img) = self.0.types[*img].as_image() {
+                    print_image_type(img, f, true)?;
+                } else {
+                    write!(f, "<malformed SampledImage>")?;
+                }
             }
             TypeData::Image(img) => {
                 print_image_type(img, f, false)?;

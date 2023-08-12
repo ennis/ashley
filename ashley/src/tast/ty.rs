@@ -369,6 +369,18 @@ impl TypeKind {
         matches!(self, TypeKind::Struct { .. })
     }
 
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, TypeKind::Pointer { .. })
+    }
+
+    pub fn storage_class(&self) -> Option<spirv::StorageClass> {
+        if let TypeKind::Pointer { storage_class, .. } = self {
+            Some(*storage_class)
+        } else {
+            None
+        }
+    }
+
     pub fn is_opaque(&self) -> bool {
         match self {
             TypeKind::Image(_)

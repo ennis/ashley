@@ -28,7 +28,7 @@ use crate::{
     diagnostic::Diagnostics,
     session::{PackageId, QueryError},
     syntax::ast,
-    tast::{stmt::Stmt, ty::convert_type},
+    tast::{scope::Res, stmt::Stmt, ty::convert_type},
     utils::{Id, TypedVec},
     Session,
 };
@@ -317,13 +317,16 @@ pub(crate) fn typecheck_body(sess: &mut Session, def: DefId) -> Result<TypedBody
             if let Some(ref ast) = func.ast {
                 if let Some(ref body) = ast.block() {
                     // create local vars for function parameters
+                    let mut param_scope = Scope::new();
                     for param in func.parameters.iter() {
                         let id = ctxt.typed_body.local_vars.push(LocalVar {
                             name: param.name.clone(),
                             ty: param.ty.clone(),
                         });
+                        param_scope.add(param.name.clone(), Res::Local(id));
                         ctxt.typed_body.params.push(id);
                     }
+                    ctxt.scopes.push(param_scope);
                     // typecheck main block
                     let entry_block = ctxt.typecheck_block(body);
                     ctxt.typed_body.entry_block = Some(entry_block);

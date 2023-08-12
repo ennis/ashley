@@ -158,16 +158,16 @@ pub enum SyntaxKind {
     #[regex(r#"[a-zA-Z_][a-zA-Z0-9_]*"#)]
     IDENT,
 
-    #[regex(r"0b[0-1_]*[0-1][0-1_]*")]
-    #[regex(r"0o[0-7_]*[0-7][0-7_]*")]
-    #[regex(r"[0-9][0-9_]*")]
-    #[regex(r"0[xX][0-9A-Fa-f_]*[0-9A-Fa-f][0-9A-Fa-f_]*")]
+    #[regex(r"0b[0-1]+")]
+    #[regex(r"0o[0-7]+")]
+    #[regex(r"[0-9]+")]
+    #[regex(r"0[xX][0-9A-Fa-f]+")]
     INT_NUMBER,
     #[regex(r#""([^\\"]*)""#)]
     STRING,
-    #[regex("[0-9][0-9_]*[.]")]
-    #[regex("[0-9][0-9_]*(?:[eE][+-]?[0-9_]*[0-9][0-9_]*)")]
-    #[regex("[0-9][0-9_]*[.][0-9][0-9_]*(?:[eE][+-]?[0-9_]*[0-9][0-9_]*)?")]
+    #[regex("[0-9]+[.]")]
+    #[regex("[0-9]+(?:[eE][+-]?[0-9]+)")]
+    #[regex("[0-9]*[.][0-9]+(?:[eE][+-]?[0-9]+)?")]
     //#[regex("[+-]?[0-9][0-9_]*([.][0-9][0-9_]*)?(?:[eE][+-]?[0-9_]*[0-9][0-9_]*)?(f32|f64)")]
     FLOAT_NUMBER,
 
@@ -237,6 +237,7 @@ pub enum SyntaxKind {
     FOR_INIT,
     IF_STMT,
     CONDITION,
+    LOOP_EXPR,
     ELSE_BRANCH,
     RETURN_STMT,
     BLOCK_STMT,

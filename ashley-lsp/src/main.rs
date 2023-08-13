@@ -1,9 +1,10 @@
+use tokio::sync::Mutex;
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService, Server};
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
-    session: ashley::Session,
+    session: Mutex<ashley::Session>,
 }
 
 #[tower_lsp::async_trait]
@@ -26,6 +27,9 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| Backend { client });
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        session: Mutex::new(ashley::Session::new()),
+    });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

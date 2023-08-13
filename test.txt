@@ -1,0 +1,27 @@
+Input: 
+List of strokes (instead of polygons)
+Strokes are inflated to polygons in a geometry shader (or mesh shader, most likely). They
+
+Q: representation of strokes? Polylines?
+
+In a first pass, the strokes are rasterized in a low-res target, each pixel represents a "tile" (16x16 px) containing the list of strokes hitting the tile.
+Q: How to represent this list of strokes? A list of IDs.
+
+
+
+In a second pass, for each tile, for each pixel in the tile,
+evaluate the value of the pixel by accumulating the contribution of all strokes.
+
+Q: how does a stroke contribute to a pixel?
+A: Each stroke is a distance field to a polyline, with color attributes
+
+
+
+Issues:
+Shadows? You can't derive visibility information from strokes only (they may not be fully covering the object), and in this scheme there's no b-rep of the object. 
+=> Shadow maps are not pixels, but projected strokes
+
+
+Options for rendering bezier curves:
+- subdivision (fixed amount)
+	- then it's a softmin of segments 

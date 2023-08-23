@@ -1,5 +1,8 @@
 use crate::{
-    syntax::{ast, ast::AstNode},
+    syntax::{
+        ast,
+        ast::{AstNode, AstPtr},
+    },
     tast::{
         scope::{Res, Scope},
         Block, BlockId, Expr, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt,
@@ -8,7 +11,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Stmt {
-    pub ast: ast::Stmt,
+    pub ast: AstPtr<ast::Stmt>,
     pub kind: StmtKind,
 }
 
@@ -238,7 +241,7 @@ impl<'a> TypeCheckBodyCtxt<'a> {
             ast::Stmt::ForStmt(for_stmt) => self.typecheck_for_stmt(for_stmt),
         };
         self.typed_body.stmts.push(Stmt {
-            ast: stmt.clone(),
+            ast: AstPtr::new(stmt),
             kind,
         })
     }

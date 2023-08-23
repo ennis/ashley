@@ -2,12 +2,13 @@ use crate::{
     builtins::BuiltinSignature,
     diagnostic::{Diagnostics, SourceLocation},
     hir::Interpolation,
-    syntax::ast,
+    syntax::{ast, SyntaxNodePtr},
     tast::{
         attributes::{KnownAttribute, KnownAttributeKind},
         ty::Type,
     },
 };
+use rowan::ast::AstPtr;
 use std::fmt;
 
 /// Describes the kind of a global program variable.
@@ -52,13 +53,13 @@ impl fmt::Display for Qualifier {
 
 #[derive(Debug)]
 pub struct StructDef {
-    pub ast: Option<ast::StructDef>,
+    pub ast: Option<AstPtr<ast::StructDef>>,
     pub ty: Type,
 }
 
 #[derive(Debug)]
 pub struct FunctionParam {
-    pub ast: Option<ast::FnParam>,
+    pub ast: Option<AstPtr<ast::FnParam>>,
     pub ty: Type,
     /// Can be empty.
     pub name: String,
@@ -116,7 +117,8 @@ impl FunctionQualifiers {
 /// A function definition or declaration.
 #[derive(Debug)]
 pub struct FunctionDef {
-    pub ast: Option<ast::FnDef>,
+    pub ast: Option<ast::AstPtr<ast::FnDef>>,
+    pub has_body: bool,
     pub linkage: Option<spirv::LinkageType>,
     pub function_control: spirv::FunctionControl,
     pub function_type: Type,
@@ -127,7 +129,7 @@ pub struct FunctionDef {
 
 #[derive(Debug)]
 pub struct GlobalDef {
-    pub ast: Option<ast::Global>,
+    pub ast: Option<ast::AstPtr<ast::Global>>,
     pub linkage: Option<spirv::LinkageType>,
     pub ty: Type,
     pub qualifier: Option<Qualifier>,

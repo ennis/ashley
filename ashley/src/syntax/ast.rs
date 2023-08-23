@@ -1,9 +1,12 @@
 use crate::{
     diagnostic::{AsSourceLocation, SourceId, SourceLocation},
-    syntax::{SyntaxKind, SyntaxNode, SyntaxToken},
+    syntax::{Lang, SyntaxKind, SyntaxNode, SyntaxToken},
     tast, T,
 };
+use rowan::Language;
 use std::num::{ParseFloatError, ParseIntError};
+
+pub use rowan::ast::{AstNode, AstPtr};
 
 //--------------------------------------------------------------------------------------------------
 // Operators
@@ -66,13 +69,13 @@ pub enum ArithOp {
 //--------------------------------------------------------------------------------------------------
 // AST nodes
 
-pub trait AstNode {
+/*pub trait AstNode {
     fn cast(syntax: SyntaxNode) -> Option<Self>
     where
         Self: Sized;
 
     fn syntax(&self) -> &SyntaxNode;
-}
+}*/
 
 pub trait AstToken {
     fn cast(syntax: SyntaxToken) -> Option<Self>
@@ -137,10 +140,21 @@ macro_rules! impl_ast_node {
         }
 
         impl AstNode for $name {
+            type Language = Lang;
+
+            fn can_cast(kind: SyntaxKind) -> bool
+            {
+                match kind {
+                    SyntaxKind::$syntax_kind => true,
+                    _ => false,
+                }
+            }
+
             fn cast(syntax: SyntaxNode) -> Option<Self> {
-                match syntax.kind() {
-                    SyntaxKind::$syntax_kind => Some($name { syntax }),
-                    _ => None,
+                if Self::can_cast(syntax.kind()) {
+                    Some($name { syntax })
+                } else {
+                    None
                 }
             }
 
@@ -183,6 +197,15 @@ macro_rules! impl_ast_variant_node {
         }
 
         impl AstNode for $name {
+            type Language = Lang;
+
+            fn can_cast(kind: SyntaxKind) -> bool {
+                match kind {
+                    $(SyntaxKind::$kind => true,)*
+                    _ => false,
+                }
+            }
+
             fn cast(syntax: SyntaxNode) -> Option<Self> {
                 match syntax.kind() {
                     $(SyntaxKind::$kind => Some(Self::$variant($variant::cast(syntax).unwrap())),)*

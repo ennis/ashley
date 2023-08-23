@@ -1,18 +1,18 @@
 //! Compilation cache
 use crate::{
-    diagnostic::{DiagnosticSink, Diagnostics, SourceFileProvider, TermDiagnosticSink},
+    diagnostic::{DiagnosticSink, Diagnostics, SourceFileProvider, SourceId, TermDiagnosticSink},
     hir, syntax,
-    syntax::ast,
+    syntax::{ast, AstNode, Lang, SyntaxNode, SyntaxNodePtr},
     tast,
     tast::{
-        typecheck_body, typecheck_items, Attribute, AttributeChecker, AttributeCheckerImpl, AttributeMultiplicity,
-        AttributeTarget, Def, DefId, LocalDefId, TypeCtxt,
+        lower_to_hir, typecheck_body, typecheck_items, Attribute, AttributeChecker, AttributeCheckerImpl,
+        AttributeMultiplicity, AttributeTarget, Def, DefId, LocalDefId, TypeCtxt,
     },
     termcolor,
     utils::{Id, TypedIndexMap, TypedVecMap},
 };
-use ashley::tast::lower_to_hir;
 use codespan_reporting::term;
+use rowan::{ast::AstPtr, GreenNode};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -206,13 +206,20 @@ pub enum PackageStatus {
     Checked,
 }
 
+pub struct PackageSyntax {
+    source_id: SourceId,
+    green_node: GreenNode,
+    root: SyntaxNodePtr,
+}
+
 pub struct PackageCacheEntry {
-    /// AST of the package.
-    pub(crate) ast: Option<ast::Root>,
+    /// AST of the package (green tree + root node).
+    pub(crate) syntax: Option<PackageSyntax>,
     pub(crate) status: PackageStatus,
+    /// Type-checked package module (not including bodies).
     pub(crate) module: Option<tast::Module>,
+    /// Type-checked definition bodies.
     pub(crate) bodies: TypedVecMap<LocalDefId, tast::TypedBody>,
-    //pub(crate) hir: Option<hir::Module>,
 }
 
 pub type PackageId = Id<PackageCacheEntry>;
@@ -266,7 +273,7 @@ pub(crate) struct AttributeRegistration {
     pub(crate) valid_targets: AttributeTarget,
     pub(crate) multiplicity: AttributeMultiplicity,
     pub(crate) mutually_exclusive: Vec<String>,
-    pub(crate) checker: Box<dyn AttributeChecker>,
+    pub(crate) checker: Box<dyn AttributeChecker + Send>,
 }
 
 /// Compilation session.
@@ -278,7 +285,7 @@ pub struct Session {
     /// Packages & associated modules and definitions.
     pub pkgs: Pkgs,
     pub(crate) source_files: SourceFileProvider,
-    resolver: Arc<dyn PackageResolver>,
+    resolver: Arc<dyn PackageResolver + Sync + Send>,
 
     /// Registered custom attributes.
     pub(crate) custom_attributes: HashMap<String, AttributeRegistration>,
@@ -303,7 +310,7 @@ impl Session {
     }
 
     /// Sets the package resolver.
-    pub fn with_package_resolver(mut self, resolver: impl PackageResolver + 'static) -> Session {
+    pub fn with_package_resolver(mut self, resolver: impl PackageResolver + Sync + Send + 'static) -> Session {
         self.resolver = Arc::new(resolver);
         self
     }
@@ -311,7 +318,7 @@ impl Session {
     /// Sets a diagnostic sink.
     ///
     /// This overrides any previously set diagnostic sink.
-    pub fn set_diagnostic_sink(&mut self, sink: impl DiagnosticSink + 'static) {
+    pub fn set_diagnostic_sink(&mut self, sink: impl DiagnosticSink + Send + 'static) {
         self.diag.clear_sinks();
         self.diag.add_sink(sink)
     }
@@ -323,7 +330,7 @@ impl Session {
         targets: AttributeTarget,
         multiplicity: AttributeMultiplicity,
     ) -> Result<(), SessionError> {
-        let checker: Box<dyn AttributeChecker> = Box::new(AttributeCheckerImpl::<T>(PhantomData));
+        let checker: Box<dyn AttributeChecker + Send> = Box::new(AttributeCheckerImpl::<T>(PhantomData));
         if self.custom_attributes.contains_key(name) {
             return Err(SessionError::AttributeAlreadyExists);
         }
@@ -357,7 +364,7 @@ impl Session {
         let (id, _) = self.pkgs.packages.insert_full(
             name,
             PackageCacheEntry {
-                ast: None,
+                syntax: None,
                 status: PackageStatus::Unparsed,
                 module: None,
                 bodies: TypedVecMap::new(),
@@ -407,7 +414,12 @@ impl Session {
     ///
     /// Panics if the id doesn't refer to a source package.
     pub fn get_ast(&self, id: PackageId) -> Result<ast::Root, QueryError> {
-        self.pkgs.packages[id].ast.clone().ok_or(QueryError::NoSource)
+        let syntax = self.pkgs.packages[id].syntax.as_ref().ok_or(QueryError::NoSource)?;
+        let syntax_node = SyntaxNode::new_root(syntax.green_node.clone());
+        Ok(ast::Root {
+            source_id: syntax.source_id,
+            module: ast::Module::cast(syntax_node).expect("invalid AST"),
+        })
     }
 
     /// Returns the typed AST module for the given package.
@@ -475,6 +487,15 @@ impl Session {
             .ok_or(QueryError::NotInCache)
     }
 
+    pub(crate) fn get_ast_node<N: AstNode<Language = Lang>>(
+        &self,
+        package_id: PackageId,
+        ptr: &AstPtr<N>,
+    ) -> Result<N, QueryError> {
+        let package_syntax = self.get_ast(package_id)?;
+        Ok(ptr.to_node(package_syntax.module.syntax()))
+    }
+
     /// Compiles the package to HIR (in-memory SPIR-V).
     pub fn compile_to_hir(&mut self, package: PackageId) -> Result<hir::Module, QueryError> {
         lower_to_hir(self, package)
@@ -510,8 +531,13 @@ impl Session {
         assert!(matches!(self.pkgs.packages[package_id].status, PackageStatus::Unparsed));
         self.pkgs.packages[package_id].status = PackageStatus::Parsing;
         let source_id = self.source_files.register_source(file_name, source);
-        let root = syntax::parse(self, source, source_id);
-        self.pkgs.packages[package_id].ast = Some(root.clone());
+        let green_node = syntax::parse(self, source, source_id);
+        let root = SyntaxNode::new_root(green_node.clone());
+        self.pkgs.packages[package_id].syntax = Some(PackageSyntax {
+            source_id,
+            green_node,
+            root: SyntaxNodePtr::new(&root),
+        });
         self.pkgs.packages[package_id].status = PackageStatus::Parsed;
         package_id
     }

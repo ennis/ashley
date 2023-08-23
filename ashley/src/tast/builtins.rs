@@ -49,6 +49,7 @@ impl TypeCheckItemCtxt<'_> {
                             visibility: Visibility::Public,
                             kind: DefKind::Function(FunctionDef {
                                 ast: None,
+                                has_body: false,
                                 linkage: None,
                                 function_control: spirv::FunctionControl::NONE,
                                 function_type,

@@ -314,8 +314,9 @@ pub(crate) fn typecheck_body(sess: &mut Session, def: DefId) -> Result<TypedBody
 
     match ctxt.sess.pkgs.def(def).kind {
         DefKind::Function(ref func) => {
-            if let Some(ref ast) = func.ast {
-                if let Some(ref body) = ast.block() {
+            if let Some(ref ast_ptr) = func.ast {
+                let func_ast = ctxt.sess.get_ast_node(def.package, ast_ptr)?;
+                if let Some(ref body) = func_ast.block() {
                     // create local vars for function parameters
                     let mut param_scope = Scope::new();
                     for param in func.parameters.iter() {
@@ -334,8 +335,9 @@ pub(crate) fn typecheck_body(sess: &mut Session, def: DefId) -> Result<TypedBody
             }
         }
         DefKind::Global(ref global) => {
-            if let Some(ref ast) = global.ast {
-                if let Some(ref initializer) = ast.initializer() {
+            if let Some(ref ast_ptr) = global.ast {
+                let global_ast = ctxt.sess.get_ast_node(def.package, ast_ptr)?;
+                if let Some(ref initializer) = global_ast.initializer() {
                     if let Some(ref expr) = initializer.expr() {
                         let expr = ctxt.typecheck_expr(expr);
                         ctxt.add_expr(expr);

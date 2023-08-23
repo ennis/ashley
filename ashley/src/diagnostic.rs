@@ -211,7 +211,7 @@ impl DiagnosticSink for TermDiagnosticSink {
 }
 
 struct DiagnosticsInner {
-    sinks: Vec<Box<dyn DiagnosticSink + 'static>>,
+    sinks: Vec<Box<dyn DiagnosticSink + Send + 'static>>,
     bug_count: usize,
     error_count: usize,
     warning_count: usize,
@@ -243,7 +243,7 @@ impl Diagnostics {
     }
 
     /// Adds a diagnostic sink.
-    pub fn add_sink(&mut self, sink: impl DiagnosticSink + 'static) {
+    pub fn add_sink(&mut self, sink: impl DiagnosticSink + Send + 'static) {
         self.inner.sinks.push(Box::new(sink))
     }
 

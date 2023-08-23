@@ -22,6 +22,6 @@ Shadows? You can't derive visibility information from strokes only (they may not
 => Shadow maps are not pixels, but projected strokes
 
 
-Options for rendering bezier curves:
+Options for rendering Bézier curves:
 - subdivision (fixed amount)
 	- then it's a softmin of segments 

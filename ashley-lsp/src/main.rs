@@ -1,7 +1,6 @@
 use tokio::sync::Mutex;
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService, Server};
 
-#[derive(Debug)]
 struct Backend {
     client: Client,
     session: Mutex<ashley::Session>,

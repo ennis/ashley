@@ -8,8 +8,10 @@ use self::syntax_kind::SyntaxKind::*;
 use crate::{
     diagnostic::{AsSourceLocation, SourceId, SourceLocation},
     session::Session,
-    syntax::{ast::AstNode, parse::parse_raw},
+    syntax::parse::parse_raw,
 };
+pub use rowan::ast::AstNode;
+use rowan::GreenNode;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -28,6 +30,7 @@ impl rowan::Language for Lang {
 }
 
 pub type SyntaxNode = rowan::SyntaxNode<Lang>;
+pub type SyntaxNodePtr = rowan::ast::SyntaxNodePtr<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 
 impl AsSourceLocation for SyntaxToken {
@@ -43,12 +46,8 @@ impl AsSourceLocation for SyntaxNode {
 }
 
 /// Main entry point for parsing.
-pub fn parse(session: &mut Session, text: &str, file: SourceId) -> ast::Root {
-    let node = parse_raw(session, text, file);
-    ast::Root {
-        source_id: file,
-        module: ast::Module::cast(node).unwrap(),
-    }
+pub fn parse(session: &mut Session, text: &str, file: SourceId) -> GreenNode {
+    parse_raw(session, text, file)
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -71,7 +70,7 @@ mod tests {
         let mut sess = Session::new();
         let (package, _) = sess.get_or_create_package("test");
         let package = sess.create_source_package("test", "test", text);
-        sess.get_ast(package).module.syntax().clone()
+        sess.get_ast(package).unwrap().module.syntax().clone()
     }
 
     fn expr(expr: &str) -> SyntaxNode {

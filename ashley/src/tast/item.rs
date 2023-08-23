@@ -17,6 +17,7 @@ use crate::{
     },
     utils::round_up,
 };
+use rowan::ast::AstPtr;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -148,7 +149,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
             name: name.clone(),
             visibility,
             kind: DefKind::Global(GlobalDef {
-                ast: Some(global.clone()),
+                ast: Some(ast::AstPtr::new(global)),
                 linkage,
                 ty,
                 qualifier,
@@ -188,7 +189,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
                     .unwrap_or_else(|| self.sess.tyctxt.error.clone());
                 arg_types.push(ty.clone());
                 params.push(FunctionParam {
-                    ast: Some(param.clone()),
+                    ast: Some(AstPtr::new(&param)),
                     name: param.ident().map(|id| id.text().to_string()).unwrap_or_default(),
                     ty,
                 });
@@ -249,7 +250,8 @@ impl<'a> TypeCheckItemCtxt<'a> {
             name: name.clone(),
             visibility,
             kind: DefKind::Function(FunctionDef {
-                ast: Some(fn_def.clone()),
+                ast: Some(ast::AstPtr::new(fn_def)),
+                has_body: fn_def.block().is_some(),
                 linkage,
                 function_control: spirv::FunctionControl::NONE,
                 function_type: func_type.clone(),
@@ -319,7 +321,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
             name,
             visibility,
             kind: DefKind::Struct(StructDef {
-                ast: Some(struct_def.clone()),
+                ast: Some(AstPtr::new(struct_def)),
                 ty,
             }),
         });

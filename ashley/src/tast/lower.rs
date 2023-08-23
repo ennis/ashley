@@ -721,10 +721,10 @@ impl<'a> LowerCtxt<'a> {
             return_type: hir_return_type,
         }));
 
-        let ast = function_def.ast.clone().expect("expected function ast");
+        //let ast = function_def.ast.clone().expect("expected function ast");
 
         // if there's a block, then it's a function definition, otherwise it's just a declaration
-        let func_data = if let Some(_) = ast.block() {
+        let func_data = if function_def.has_body {
             // get the typechecked body
             let typed_body = self
                 .sess

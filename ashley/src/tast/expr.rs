@@ -4,8 +4,8 @@ use crate::{
     diagnostic::{AsSourceLocation, SourceLocation},
     syntax::{
         ast,
-        ast::{AstNode, UnaryOp},
-        SyntaxNode, SyntaxToken,
+        ast::{AstNode, AstPtr, UnaryOp},
+        SyntaxNode, SyntaxNodePtr, SyntaxToken,
     },
     tast::{
         consteval::ConstantValue,
@@ -24,7 +24,7 @@ use std::ops::Deref;
 /// Represents an expression with its inferred type.
 #[derive(Clone, Debug)]
 pub struct Expr {
-    pub syntax: Option<SyntaxNode>,
+    pub syntax: Option<AstPtr<ast::Expr>>,
     pub ty: Type,
     pub kind: ExprKind,
 }
@@ -206,14 +206,14 @@ impl TypeCheckBodyCtxt<'_> {
         let Some(ty) = expr.ty().map(|ty| self.convert_type(ty)) else { return self.error_expr(); };
         let Some(ast_args) = expr.args() else { return self.error_expr(); };
 
-        let mut arg_loc = vec![];
+        let mut arg_locations = vec![];
         let mut args = vec![];
         for arg in ast_args.arguments() {
-            arg_loc.push(arg.source_location());
+            arg_locations.push(arg.source_location());
             args.push(self.typecheck_expr(&arg));
         }
 
-        let arg_tys = args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>();
+        // collect arg types in a vector to simpli
 
         use ScalarType as ST;
         use TypeKind as TK;
@@ -250,22 +250,24 @@ impl TypeCheckBodyCtxt<'_> {
             TK::Scalar(_) | TK::Vector(_, _) | TK::Matrix { .. } => {
                 for &ctor in builtins::CONSTRUCTORS {
                     if ctor.ty == *ty
-                        && ctor.args.len() == arg_tys.len()
-                        && arg_tys
+                        && ctor.args.len() == args.len()
+                        && args
                             .iter()
                             .zip(ctor.args.iter())
-                            .all(|(from, to)| **from == *to || has_scalar_conversion(&*from.0, to))
+                            .all(|(from, to)| *from.ty == *to || has_scalar_conversion(&*from.ty, to))
                     {
-                        let mut conv_args = Vec::with_capacity(arg_tys.len());
-                        for (arg, ctor_arg_tk) in args.into_iter().zip(ctor.args.iter()) {
-                            let ctor_arg_ty = self.sess.tyctxt.ty(ctor_arg_tk.clone());
-                            let arg_loc = arg.syntax.as_ref().map(AsSourceLocation::source_location);
-                            let conv_arg = self.apply_implicit_conversion(arg, arg_loc, ctor_arg_ty);
+                        let mut conv_args = Vec::with_capacity(args.len());
+                        for (i, arg) in args.into_iter().enumerate() {
+                            let ctor_arg_ty = self.sess.tyctxt.ty(ctor.args[i].clone());
+                            let arg_loc = arg_locations[i];
+                            let conv_arg = self.apply_implicit_conversion(arg, Some(arg_loc), ctor_arg_ty);
                             conv_args.push(self.add_expr(conv_arg));
                         }
                         return Expr::new(ExprKind::BuiltinConstructor { ctor, args: conv_args }, ty);
                     }
                 }
+
+                let arg_tys = args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>();
                 self.sess
                     .diag
                     .error(format!("no matching constructor for `{ty}`"))
@@ -284,8 +286,8 @@ impl TypeCheckBodyCtxt<'_> {
         }
     }
 
-    pub(crate) fn typecheck_expr(&mut self, expr: &ast::Expr) -> Expr {
-        let expr = match expr {
+    pub(crate) fn typecheck_expr(&mut self, expr_ast: &ast::Expr) -> Expr {
+        let mut expr = match expr_ast {
             ast::Expr::BinExpr(bin_expr) => self.typecheck_bin_expr(bin_expr),
             ast::Expr::CallExpr(call_expr) => self.typecheck_call_expr(call_expr),
             ast::Expr::IndexExpr(index_expr) => self.typecheck_index_expr(index_expr),
@@ -306,11 +308,15 @@ impl TypeCheckBodyCtxt<'_> {
             ast::Expr::PostfixExpr(postfix_expr) => self.typecheck_postfix_expr(postfix_expr),
             ast::Expr::ConstructorExpr(constructor) => self.typecheck_constructor_expr(constructor),
         };
-        if let Some(ref syntax) = expr.syntax {
-            eprintln!("typecheck_expr {} : {}", syntax.text(), expr.ty);
-        } else {
-            eprintln!("typecheck_expr : {}", expr.ty);
-        }
+        // set syntax ptr
+        expr.syntax = Some(AstPtr::new(expr_ast));
+
+        //if let Some(ref syntax) = expr_ast {
+        eprintln!("typecheck_expr {} : {}", expr_ast.syntax().text(), expr.ty);
+        //} else {
+        //  eprintln!("typecheck_expr : {}", expr.ty);
+        //}
+
         expr
     }
 
@@ -349,7 +355,7 @@ impl TypeCheckBodyCtxt<'_> {
         // TODO check for out of bounds access if
 
         Expr {
-            syntax: Some(index_expr.syntax().clone()),
+            syntax: None, // set by typecheck_expr
             kind: ExprKind::Index {
                 array_or_vector: self.add_expr(array),
                 index: self.add_expr(index),
@@ -412,7 +418,7 @@ impl TypeCheckBodyCtxt<'_> {
                     .collect();
 
                 Expr {
-                    syntax: Some(call_expr.syntax().clone()),
+                    syntax: None, // set by typecheck_expr
                     kind: ExprKind::Call {
                         function: overloads[candidate.index],
                         args,
@@ -499,7 +505,7 @@ impl TypeCheckBodyCtxt<'_> {
                 };
 
                 Expr {
-                    syntax: Some(syntax),
+                    syntax: None,
                     kind: ExprKind::Unary {
                         op,
                         signature: operation.signatures[overload.index],
@@ -567,7 +573,7 @@ impl TypeCheckBodyCtxt<'_> {
                             }
                         };
                         Expr {
-                            syntax: Some(path_expr.syntax().clone()),
+                            syntax: None,
                             kind: ExprKind::GlobalVar { var: def },
                             ty,
                         }
@@ -575,7 +581,7 @@ impl TypeCheckBodyCtxt<'_> {
                     Res::Local(local) => {
                         let ty = self.typed_body.local_vars[local].ty.clone();
                         Expr {
-                            syntax: Some(path_expr.syntax().clone()),
+                            syntax: None,
                             kind: ExprKind::LocalVar { var: local },
                             ty,
                         }
@@ -611,7 +617,7 @@ impl TypeCheckBodyCtxt<'_> {
                     let ty = fields[field_index].ty.clone();
                     // base expression is not a place
                     Expr {
-                        syntax: Some(field_expr.syntax().clone()),
+                        syntax: None,
                         kind: ExprKind::Field {
                             expr: self.add_expr(base),
                             index: field_index,
@@ -648,7 +654,7 @@ impl TypeCheckBodyCtxt<'_> {
                         });
                         // base expression is not a place
                         Expr {
-                            syntax: Some(field_expr.syntax().clone()),
+                            syntax: None,
                             kind: ExprKind::ComponentAccess {
                                 expr: self.add_expr(base),
                                 components,
@@ -905,7 +911,7 @@ impl TypeCheckBodyCtxt<'_> {
                     let rhs_conv = self.apply_implicit_conversion(rhs, None, overload.parameter_types[1].clone());
                     if is_assignment {
                         Expr {
-                            syntax: Some(bin_expr.syntax().clone()),
+                            syntax: None,
                             kind: ExprKind::BinaryAssign {
                                 op: ast_operator,
                                 signature: operation.signatures[overload.index],
@@ -916,7 +922,7 @@ impl TypeCheckBodyCtxt<'_> {
                         }
                     } else {
                         Expr {
-                            syntax: Some(bin_expr.syntax().clone()),
+                            syntax: None,
                             kind: ExprKind::Binary {
                                 op: ast_operator,
                                 signature: operation.signatures[overload.index],
@@ -942,7 +948,7 @@ impl TypeCheckBodyCtxt<'_> {
         } else {
             let rhs_conv = self.apply_implicit_conversion(rhs, Some(rhs_loc), lhs.ty.clone());
             Expr {
-                syntax: Some(bin_expr.syntax().clone()),
+                syntax: None,
                 kind: ExprKind::Assign {
                     lhs: self.add_expr(lhs),
                     rhs: self.add_expr(rhs_conv),
@@ -964,7 +970,7 @@ impl TypeCheckBodyCtxt<'_> {
                         // TODO warn about overflow
                         // TODO unsigned suffixes
                         Expr {
-                            syntax: Some(lit_expr.syntax().clone()),
+                            syntax: None,
                             ty: self.sess.tyctxt.prim_tys.int.clone(),
                             kind: ExprKind::Literal {
                                 value: ConstantValue::Int(v as i32),
@@ -978,7 +984,7 @@ impl TypeCheckBodyCtxt<'_> {
                             .location(&v)
                             .emit();
                         Expr {
-                            syntax: Some(lit_expr.syntax().clone()),
+                            syntax: None,
                             ty: self.sess.tyctxt.prim_tys.int.clone(),
                             kind: ExprKind::Undef,
                         }
@@ -990,7 +996,7 @@ impl TypeCheckBodyCtxt<'_> {
                     Ok(v) => {
                         // TODO warn about non-representable floats
                         Expr {
-                            syntax: Some(lit_expr.syntax().clone()),
+                            syntax: None,
                             ty: self.sess.tyctxt.prim_tys.float.clone(),
                             kind: ExprKind::Literal {
                                 value: ConstantValue::Float(OrderedFloat::from(v as f32)),
@@ -1004,7 +1010,7 @@ impl TypeCheckBodyCtxt<'_> {
                             .location(&v)
                             .emit();
                         Expr {
-                            syntax: Some(lit_expr.syntax().clone()),
+                            syntax: None,
                             ty: self.sess.tyctxt.prim_tys.float.clone(),
                             kind: ExprKind::Undef,
                         }
@@ -1012,7 +1018,7 @@ impl TypeCheckBodyCtxt<'_> {
                 }
             }
             ast::LiteralKind::Bool(v) => Expr {
-                syntax: Some(lit_expr.syntax().clone()),
+                syntax: None,
                 ty: self.sess.tyctxt.prim_tys.bool.clone(),
                 kind: ExprKind::Literal {
                     value: ConstantValue::Bool(v),

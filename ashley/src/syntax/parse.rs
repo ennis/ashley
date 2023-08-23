@@ -6,7 +6,7 @@ use crate::{
     },
     Session, T,
 };
-use rowan::{Checkpoint, GreenNodeBuilder, TextRange, TextSize};
+use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextRange, TextSize};
 use std::{
     collections::{HashSet, VecDeque},
     ops::Range,
@@ -178,7 +178,7 @@ const BUILTIN_TYPE_NAMES: &[&str] = &[
     "usubpassInputMS",
 ];
 
-pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> SyntaxNode {
+pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> GreenNode {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let mut lookahead = VecDeque::default();
@@ -231,14 +231,13 @@ impl Default for Progress {
 }
 
 impl<'a> Parser<'a> {
-    fn parse(mut self) -> SyntaxNode {
+    fn parse(mut self) -> GreenNode {
         // Don't skip whitespace for the root module
         self.b.start_node(MODULE.into());
         self.parse_items();
         self.eat_ws();
         self.b.finish_node();
-        let green_node = self.b.finish();
-        SyntaxNode::new_root(green_node)
+        self.b.finish()
     }
 
     // TODO parser recovery situations:

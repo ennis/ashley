@@ -1625,3 +1625,4 @@ Makes sense to do this on HIR.
 
 glslang -> SPIR-V does that, since in GLSL parameters are mutable, so they are like variables.
 However, this means that at call sites we must materialize arguments into variables => avoid that
+

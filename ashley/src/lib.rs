@@ -5,6 +5,7 @@ extern crate tracing;
 pub mod builtins;
 pub mod diagnostic;
 pub mod hir;
+pub mod query;
 mod session;
 pub mod syntax;
 pub mod tast;

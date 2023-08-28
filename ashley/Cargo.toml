@@ -26,6 +26,9 @@ rspirv = "0.11.0"
 anyhow = "1.0.69"
 bitflags = "2.2.1"
 bytemuck = {version="1.13.1", features=["derive"]}
+memo-map = { git = "https://github.com/ennis/memo-map" }
+dashmap = "5.4.0"
+boxcar = "0.2.2"
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }

@@ -9,7 +9,7 @@ use crate::{
         AttributeMultiplicity, AttributeTarget, Def, DefId, LocalDefId, TypeCtxt,
     },
     termcolor,
-    utils::{Id, TypedIndexMap, TypedVecMap},
+    utils::{Id, IndexMap, IndexVecMap},
 };
 use codespan_reporting::term;
 use rowan::{ast::AstPtr, GreenNode};
@@ -219,7 +219,7 @@ pub struct PackageCacheEntry {
     /// Type-checked package module (not including bodies).
     pub(crate) module: Option<tast::Module>,
     /// Type-checked definition bodies.
-    pub(crate) bodies: TypedVecMap<LocalDefId, tast::TypedBody>,
+    pub(crate) bodies: IndexVecMap<LocalDefId, tast::TypedBody>,
 }
 
 pub type PackageId = Id<PackageCacheEntry>;
@@ -237,7 +237,7 @@ impl<'a> fmt::Debug for DefDebug<'a> {
 }
 
 pub struct Pkgs {
-    packages: TypedIndexMap<PackageName<'static>, PackageCacheEntry>,
+    packages: IndexMap<PackageName<'static>, PackageCacheEntry, PackageId>,
 }
 
 impl Pkgs {
@@ -303,7 +303,7 @@ impl Session {
             source_files,
             resolver: Arc::new(DummyPackageResolver),
             pkgs: Pkgs {
-                packages: TypedIndexMap::new(),
+                packages: IndexMap::new(),
             },
             custom_attributes: Default::default(),
         }
@@ -367,7 +367,7 @@ impl Session {
                 syntax: None,
                 status: PackageStatus::Unparsed,
                 module: None,
-                bodies: TypedVecMap::new(),
+                bodies: IndexVecMap::new(),
                 //hir: None,
             },
         );
@@ -557,6 +557,11 @@ impl Session {
         Ok(())
     }*/
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Query system
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

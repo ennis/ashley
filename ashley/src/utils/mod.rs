@@ -7,10 +7,9 @@ mod typed_vec;
 
 pub use ashley_derive::MemoryLayout;
 pub use memory_layout::{MemoryLayout, Std140Float, Std140IVec4, Std140Int, Std140Vec4};
-//pub(crate) use interner::UniqueArena;
-pub(crate) use typed_vec::{Id, TypedIndexMap, TypedIndexSet, TypedVec, TypedVecMap};
+pub use typed_vec::{Id, Idx, IndexMap, IndexVec, IndexVecMap};
 
-///
+/// Rounds up the value to the specified multiple.
 pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     if multiple == 0 {
         return value;
@@ -133,6 +132,9 @@ impl<Id: ArenaBehavior, T> Index<Id::Id> for IdMap<Id, T> {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Utility for displaying a comma-separated list of `Display`-able elements.
 pub struct DisplayCommaSeparated<'a, T>(pub &'a [T]);
 
 // fmt::Display for DisplayCommaSeparated<'a, T>

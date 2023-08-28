@@ -29,7 +29,7 @@ use crate::{
     session::{PackageId, QueryError},
     syntax::ast,
     tast::{scope::Res, stmt::Stmt, ty::convert_type},
-    utils::{Id, TypedVec},
+    utils::{Id, IndexVec},
     Session,
 };
 use std::{
@@ -90,10 +90,10 @@ impl Block {
 
 #[derive(Debug)]
 pub struct TypedBody {
-    pub stmts: TypedVec<Stmt>,
-    pub exprs: TypedVec<Expr>,
-    pub local_vars: TypedVec<LocalVar>,
-    pub blocks: TypedVec<Block>,
+    pub stmts: IndexVec<Stmt>,
+    pub exprs: IndexVec<Expr>,
+    pub local_vars: IndexVec<LocalVar>,
+    pub blocks: IndexVec<Block>,
     pub params: Vec<LocalVarId>,
     pub errors: usize,
     pub entry_block: Option<BlockId>,
@@ -102,10 +102,10 @@ pub struct TypedBody {
 impl TypedBody {
     pub fn new() -> TypedBody {
         TypedBody {
-            stmts: TypedVec::new(),
-            exprs: TypedVec::new(),
-            local_vars: TypedVec::new(),
-            blocks: TypedVec::new(),
+            stmts: IndexVec::new(),
+            exprs: IndexVec::new(),
+            local_vars: IndexVec::new(),
+            blocks: IndexVec::new(),
             params: vec![],
             entry_block: None,
             errors: 0,
@@ -143,7 +143,7 @@ pub struct Module {
     /// Imported packages.
     pub imported_packages: Vec<PackageId>,
     /// All definitions in this module.
-    pub defs: TypedVec<Def>,
+    pub defs: IndexVec<Def>,
     // TODO errors?
 }
 

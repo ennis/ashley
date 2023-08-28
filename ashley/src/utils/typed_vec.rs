@@ -1,4 +1,3 @@
-use indexmap::{IndexMap, IndexSet};
 use std::{
     borrow::Borrow,
     cmp::Ordering,
@@ -10,11 +9,13 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-/// A trait for a type that can be used to index a TypedVec.
-pub trait TypedIndex: Copy + Clone + Eq + PartialEq + Hash + Ord + PartialOrd {
+/// A trait for a type that is equivalent to an index.
+pub trait Idx: Copy + Clone + Eq + PartialEq + Hash + Ord + PartialOrd {
     fn index(&self) -> usize;
     fn from_index(index: usize) -> Self;
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Strongly-typed ID.
 #[repr(transparent)]
@@ -74,7 +75,7 @@ impl<T> Hash for Id<T> {
     }
 }
 
-impl<T> TypedIndex for Id<T> {
+impl<T> Idx for Id<T> {
     fn index(&self) -> usize {
         self.index()
     }
@@ -86,30 +87,73 @@ impl<T> TypedIndex for Id<T> {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// Creates a new index type (u32-sized) that implements `Idx`,
+/// and is usable as an index for `IndexVec`.
+///
+/// It also derives `From<u32>` and `From<usize>` implementations.
+///
+/// # Example
+///```
+///new_index! {
+///    pub struct MyIndex;    // Implements Idx
+///}
+///```
+#[macro_export]
+macro_rules! new_index {
+    ($(#[$m:meta])* $v:vis struct $name:ident;) => {
+        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+        #[repr(transparent)]
+        $(#[$m])* $v struct $name(u32);
+
+        impl $crate::utils::Idx for $name {
+            fn index(&self) -> usize {
+                self.0 as usize
+            }
+            fn from_index(index: usize) -> Self {
+                $name(index as u32)
+            }
+        }
+
+        impl From<usize> for $name {
+            fn from(v: usize) -> $name {
+                <$name as $crate::utils::Idx>::from_index(v)
+            }
+        }
+
+        impl From<u32> for $name {
+            fn from(v: u32) -> $name {
+                <$name as $crate::utils::Idx>::from_index(v as usize)
+            }
+        }
+    };
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 /// Vector with strongly-typed indices.
 #[derive(Debug)]
-pub struct TypedVec<T, I = Id<T>> {
+pub struct IndexVec<T, I = Id<T>> {
     items: Vec<T>,
     _phantom: PhantomData<fn() -> I>,
 }
 
-impl<T, I> Default for TypedVec<T, I> {
+impl<T, I> Default for IndexVec<T, I> {
     fn default() -> Self {
-        TypedVec::new()
+        IndexVec::new()
     }
 }
 
-impl<T, I> TypedVec<T, I> {
+impl<T, I> IndexVec<T, I> {
     /// Creates a new empty vector.
-    pub fn new() -> TypedVec<T, I> {
-        TypedVec {
+    pub fn new() -> IndexVec<T, I> {
+        IndexVec {
             items: vec![],
             _phantom: PhantomData,
         }
     }
 }
 
-impl<T, I: TypedIndex> TypedVec<T, I> {
+impl<T, I: Idx> IndexVec<T, I> {
     /// Inserts an item and returns its ID.
     pub fn push(&mut self, item: T) -> I {
         self.items.push(item);
@@ -160,7 +204,7 @@ impl<T, I: TypedIndex> TypedVec<T, I> {
     }
 }
 
-impl<T, I: TypedIndex> Index<I> for TypedVec<T> {
+impl<T, I: Idx> Index<I> for IndexVec<T, I> {
     type Output = T;
 
     fn index(&self, id: I) -> &Self::Output {
@@ -168,7 +212,7 @@ impl<T, I: TypedIndex> Index<I> for TypedVec<T> {
     }
 }
 
-impl<T, I: TypedIndex> IndexMut<I> for TypedVec<T> {
+impl<T, I: Idx> IndexMut<I> for IndexVec<T, I> {
     fn index_mut(&mut self, id: I) -> &mut Self::Output {
         &mut self.items[id.index()]
     }
@@ -179,25 +223,25 @@ impl<T, I: TypedIndex> IndexMut<I> for TypedVec<T> {
 /// Flat map using strongly-typed indices as keys.
 ///
 /// The map is backed by a vector.
-pub struct TypedVecMap<K, V> {
+pub struct IndexVecMap<I, V> {
     items: Vec<Option<V>>,
-    _phantom: PhantomData<fn() -> K>,
+    _phantom: PhantomData<fn() -> I>,
 }
 
-impl<K, V> TypedVecMap<K, V> {
-    pub fn new() -> TypedVecMap<K, V> {
-        TypedVecMap {
+impl<I, V> IndexVecMap<I, V> {
+    pub fn new() -> IndexVecMap<I, V> {
+        IndexVecMap {
             items: vec![],
             _phantom: PhantomData,
         }
     }
 }
 
-impl<K: TypedIndex, V> TypedVecMap<K, V> {
+impl<I: Idx, V> IndexVecMap<I, V> {
     /// Inserts an element in the map.
     ///
     /// Returns the previous value if any.
-    pub fn insert(&mut self, id: K, item: V) -> Option<V> {
+    pub fn insert(&mut self, id: I, item: V) -> Option<V> {
         let index = id.index();
         if index >= self.items.len() {
             self.items.resize_with(index + 1, || None);
@@ -206,7 +250,7 @@ impl<K: TypedIndex, V> TypedVecMap<K, V> {
     }
 
     /// Removes an element from the map.
-    pub fn remove(&mut self, id: K) -> Option<V> {
+    pub fn remove(&mut self, id: I) -> Option<V> {
         let index = id.index();
         if index < self.items.len() {
             self.items[index].take()
@@ -216,7 +260,7 @@ impl<K: TypedIndex, V> TypedVecMap<K, V> {
     }
 
     /// Returns the element at the given index.
-    pub fn get(&self, id: K) -> Option<&V> {
+    pub fn get(&self, id: I) -> Option<&V> {
         let index = id.index();
         if index < self.items.len() {
             self.items[index].as_ref()
@@ -226,7 +270,7 @@ impl<K: TypedIndex, V> TypedVecMap<K, V> {
     }
 
     /// Returns a mutable reference to the element at the given index.
-    pub fn get_mut(&mut self, id: K) -> Option<&mut V> {
+    pub fn get_mut(&mut self, id: I) -> Option<&mut V> {
         let index = id.index();
         if index < self.items.len() {
             self.items[index].as_mut()
@@ -236,24 +280,24 @@ impl<K: TypedIndex, V> TypedVecMap<K, V> {
     }
 
     /// Returns an iterator over the items.
-    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (I, &V)> + '_ {
         self.items
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| v.as_ref().map(|v| (K::from_index(i), v)))
+            .filter_map(|(i, v)| v.as_ref().map(|v| (I::from_index(i), v)))
     }
 
     /// Returns a mutable iterator over the items.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> + '_ {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (I, &mut V)> + '_ {
         self.items
             .iter_mut()
             .enumerate()
-            .filter_map(|(i, v)| v.as_mut().map(|v| (K::from_index(i), v)))
+            .filter_map(|(i, v)| v.as_mut().map(|v| (I::from_index(i), v)))
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
+/*
 ///
 #[derive(Debug)]
 pub struct TypedIndexSet<T> {
@@ -277,24 +321,29 @@ impl<T> Index<Id<T>> for TypedIndexSet<T> {
     fn index(&self, id: Id<T>) -> &Self::Output {
         &self.set[id.index()]
     }
-}
+}*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-///
+/// A wrapper over an `indexmap::IndexMap`, except with a strongly-typed index type `I`.
 #[derive(Debug)]
-pub struct TypedIndexMap<K, V> {
-    map: IndexMap<K, V>,
+pub struct IndexMap<K, V, I: Idx> {
+    map: indexmap::IndexMap<K, V>,
+    _phantom: PhantomData<fn() -> I>,
 }
 
-impl<K, V> TypedIndexMap<K, V> {
-    pub fn new() -> TypedIndexMap<K, V> {
-        TypedIndexMap { map: IndexMap::new() }
+impl<K, V, I: Idx> IndexMap<K, V, I> {
+    pub fn new() -> IndexMap<K, V, I> {
+        IndexMap {
+            map: indexmap::IndexMap::new(),
+            _phantom: Default::default(),
+        }
     }
 }
 
-impl<K, V> TypedIndexMap<K, V>
+impl<K, V, I> IndexMap<K, V, I>
 where
+    I: Idx,
     K: Hash + Eq,
 {
     pub fn insert_full(&mut self, key: K, item: V) -> (Id<V>, Option<V>) {
@@ -303,7 +352,7 @@ where
     }
 }
 
-impl<K, V> TypedIndexMap<K, V> {
+impl<K, V, I: Idx> IndexMap<K, V, I> {
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         Q: Eq + Hash + ?Sized,
@@ -320,28 +369,29 @@ impl<K, V> TypedIndexMap<K, V> {
         self.map.get_mut(key)
     }
 
-    pub fn get_full<Q>(&self, key: &Q) -> Option<(Id<V>, &K, &V)>
+    pub fn get_full<Q>(&self, key: &Q) -> Option<(I, &K, &V)>
     where
         K: Borrow<Q> + Eq + Hash,
         Q: Eq + Hash + ?Sized,
     {
         let (i, k, v) = self.map.get_full(key)?;
-        Some((Id::from_index(i), k, v))
+        Some((I::from_index(i), k, v))
     }
 
-    pub fn get_full_mut<Q>(&mut self, key: &Q) -> Option<(Id<V>, &K, &mut V)>
+    pub fn get_full_mut<Q>(&mut self, key: &Q) -> Option<(I, &K, &mut V)>
     where
         K: Borrow<Q> + Eq + Hash,
         Q: Eq + Hash + ?Sized,
     {
         let (i, k, v) = self.map.get_full_mut(key)?;
-        Some((Id::from_index(i), k, v))
+        Some((I::from_index(i), k, v))
     }
 }
 
-/// Indexing with the key
-impl<K, V, Q> Index<&Q> for TypedIndexMap<K, V>
+/*/// Indexing with the key
+impl<K, V, Q, I> Index<&Q> for IndexMap<K, V, I>
 where
+    I: Idx,
     K: Borrow<Q> + Eq + Hash,
     Q: Eq + Hash + ?Sized,
 {
@@ -353,28 +403,29 @@ where
 }
 
 /// Indexing with the key
-impl<K, V, Q> IndexMut<&Q> for TypedIndexMap<K, V>
+impl<K, V, Q, I> IndexMut<&Q> for IndexMap<K, V, I>
 where
+    I: Idx,
     K: Borrow<Q> + Eq + Hash,
     Q: Eq + Hash + ?Sized,
 {
     fn index_mut(&mut self, key: &Q) -> &mut V {
         self.map.get_mut(key).expect("IndexMap: key not found")
     }
-}
+}*/
 
 /// Indexing with the index
-impl<K, V> Index<Id<V>> for TypedIndexMap<K, V> {
+impl<K, V, I: Idx> Index<I> for IndexMap<K, V, I> {
     type Output = V;
 
-    fn index(&self, id: Id<V>) -> &V {
+    fn index(&self, id: I) -> &V {
         self.map.get_index(id.index()).unwrap().1
     }
 }
 
 /// Indexing with the index
-impl<K, V> IndexMut<Id<V>> for TypedIndexMap<K, V> {
-    fn index_mut(&mut self, id: Id<V>) -> &mut V {
+impl<K, V, I: Idx> IndexMut<I> for IndexMap<K, V, I> {
+    fn index_mut(&mut self, id: I) -> &mut V {
         self.map.get_index_mut(id.index()).unwrap().1
     }
 }

@@ -1,4 +1,4 @@
-use crate::tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCheckItemCtxt, TypeCtxt};
+use crate::tast::{def::DefKind, Def, DefId, LocalVarId, Type, TypeCheckBodyCtxt, TypeCtxt};
 use std::{collections::HashMap, sync::Arc};
 
 /// Result of scope resolution.
@@ -86,11 +86,36 @@ impl Scope {
 impl TypeCheckBodyCtxt<'_> {
     /// Resolves a name in the current scope
     pub(crate) fn resolve_name(&self, name: &str) -> Option<Res> {
-        resolve_name(&self.sess.tyctxt, name, &self.scopes)
+        resolve_name(&self.compiler.tyctxt(), name, &self.scopes)
+    }
+}
+
+#[allow(dead_code)]
+fn dump_scope_stack(scopes: &[Scope]) {
+    eprintln!("====== dumping scopes ======");
+    for (i, s) in scopes.iter().rev().enumerate() {
+        eprintln!("Scope {i}:");
+        for (k, res) in s.items.iter() {
+            match res {
+                Res::OverloadSet(_) => {
+                    eprintln!("\t{k} -> overload set");
+                }
+                Res::Global(_) => {
+                    eprintln!("\t{k} -> global");
+                }
+                Res::Local(_) => {
+                    eprintln!("\t{k} -> local");
+                }
+                Res::PrimTy(_) => {
+                    eprintln!("\t{k} -> primitive ty");
+                }
+            }
+        }
     }
 }
 
 pub(crate) fn resolve_name(tyctxt: &TypeCtxt, name: &str, scopes: &[Scope]) -> Option<Res> {
+    //dump_scope_stack(scopes);
     for scope in scopes.iter().rev() {
         if let Some(var) = scope.items.get(name) {
             return Some(var.clone());

@@ -6,8 +6,8 @@ mod syntax_kind;
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{
-    diagnostic::{AsSourceLocation, SourceId, SourceLocation},
-    session::Session,
+    diagnostic::{AsSourceLocation, SourceLocation},
+    session::{CompilerDb, SourceFileId},
     syntax::parse::parse_raw,
 };
 pub use rowan::ast::AstNode;
@@ -46,8 +46,8 @@ impl AsSourceLocation for SyntaxNode {
 }
 
 /// Main entry point for parsing.
-pub fn parse(session: &mut Session, text: &str, file: SourceId) -> GreenNode {
-    parse_raw(session, text, file)
+pub fn parse(compiler: &dyn CompilerDb, text: &str, file: SourceFileId) -> GreenNode {
+    parse_raw(compiler, text, file)
 }
 
 //--------------------------------------------------------------------------------------------------

@@ -1,9 +1,4 @@
 //! Utilities to compute the std140 GLSL layout of types.
-use crate::{
-    hir::{types::ScalarType, Module, Type, TypeData},
-    utils::round_up,
-};
-use thiserror::Error;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Layout

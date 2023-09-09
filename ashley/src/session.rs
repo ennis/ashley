@@ -1,24 +1,27 @@
 //! Compilation cache
 use crate::{
-    diagnostic::{DiagnosticSink, Diagnostics, SourceFileProvider, SourceId, TermDiagnosticSink},
-    hir, syntax,
+    diagnostic::{Diagnostic, DiagnosticBuilder, DiagnosticSink, Diagnostics, TermDiagnosticSink},
+    hir,
+    resolver::{DummyPackageResolver, PackageResolver},
+    syntax,
     syntax::{ast, AstNode, Lang, SyntaxNode, SyntaxNodePtr},
     tast,
     tast::{
         lower_to_hir, typecheck_body, typecheck_items, Attribute, AttributeChecker, AttributeCheckerImpl,
-        AttributeMultiplicity, AttributeTarget, Def, DefId, LocalDefId, TypeCtxt,
+        AttributeMultiplicity, AttributeTarget, Def, Module, TypeCtxt, TypedBody,
     },
-    termcolor,
-    utils::{Id, IndexMap, IndexVecMap},
+    SourceFile,
 };
-use codespan_reporting::term;
+use ashley_db::{
+    define_database_tables, new_key_type, table::HasTables, Database, DatabaseExt, DbIndex, Revision, Runtime, TableOps,
+};
+use codespan_reporting::{diagnostic::Severity, term};
 use rowan::{ast::AstPtr, GreenNode};
 use std::{
-    borrow::Cow,
+    cell::RefCell,
     collections::{HashMap, HashSet},
-    fmt, fs,
+    fmt,
     marker::PhantomData,
-    path::PathBuf,
     sync::Arc,
 };
 
@@ -32,287 +35,412 @@ pub enum QueryError {
     NotInCache,
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/// Arguments of a package name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PackageArg<'a> {
-    /// String argument.
-    String(Cow<'a, str>),
-    /// Integer argument.
-    Int(i32),
-}
-
-impl fmt::Display for PackageArg<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PackageArg::String(s) => write!(f, "{s:?}"),
-            PackageArg::Int(i) => write!(f, "{i}"),
-        }
-    }
-}
-
-impl<'a> From<&'a str> for PackageArg<'a> {
-    fn from(s: &'a str) -> Self {
-        PackageArg::String(Cow::Borrowed(s))
-    }
-}
-
-impl From<String> for PackageArg<'_> {
-    fn from(s: String) -> Self {
-        PackageArg::String(Cow::Owned(s))
-    }
-}
-
-impl From<i32> for PackageArg<'_> {
-    fn from(i: i32) -> Self {
-        PackageArg::Int(i)
-    }
-}
-
-/// Package name. Composed of a base name and a list of arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PackageName<'a> {
-    pub base_name: Cow<'a, str>,
-
-    //pub args: SmallVec<[PackageArg<'a>; 2]>,
-    // can't use SmallVec because of a variance issue: https://github.com/servo/rust-smallvec/issues/146
-    // at least it won't allocate by default
-    pub args: Vec<PackageArg<'a>>,
-}
-
-impl fmt::Display for PackageName<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}(", self.base_name)?;
-        for (i, arg) in self.args.iter().enumerate() {
-            if i > 0 {
-                write!(f, ",")?;
-            }
-            write!(f, "{}", arg)?;
-        }
-        write!(f, ")")?;
-        Ok(())
-    }
-}
-
-impl<'a> PackageName<'a> {
-    pub fn new(base_name: impl Into<Cow<'a, str>>) -> Self {
-        // TODO: validate name
-        Self {
-            base_name: base_name.into(),
-            args: vec![],
-        }
-    }
-
-    pub fn arg(mut self, arg: impl Into<PackageArg<'a>>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    pub fn into_static(self) -> PackageName<'static> {
-        PackageName {
-            base_name: Cow::Owned(self.base_name.into_owned()),
-            args: self
-                .args
-                .into_iter()
-                .map(|arg| match arg {
-                    PackageArg::String(s) => PackageArg::String(Cow::Owned(s.into_owned())),
-                    PackageArg::Int(i) => PackageArg::Int(i),
-                })
-                .collect(),
-        }
-    }
-}
-
-impl<'a> From<&'a str> for PackageName<'a> {
-    fn from(s: &'a str) -> Self {
-        Self::new(s)
-    }
-}
-
-impl From<String> for PackageName<'_> {
-    fn from(s: String) -> Self {
-        Self::new(s)
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("package resolution error")]
-pub struct PackageResolutionError(#[from] anyhow::Error);
-
-/// The API is simply name (+arguments) -> Package (set of definitions).
-///
-/// The resolver is responsible for looking up the package name in the filesystem, or other sources
-/// (it could be a procedurally generated package).
-pub trait PackageResolver {
-    /// Resolves the package by name.
-    fn resolve(&self, cache: &mut Session, name: &PackageName) -> Result<PackageId, PackageResolutionError>;
-}
-
-/// A package resolver that does nothing.
-pub struct DummyPackageResolver;
-
-impl PackageResolver for DummyPackageResolver {
-    fn resolve(&self, _session: &mut Session, _name: &PackageName) -> Result<PackageId, PackageResolutionError> {
-        Err(PackageResolutionError(anyhow::anyhow!(
-            "dummy resolver could not resolve package"
-        )))
-    }
-}
-
-pub struct FileSystemPackageResolver {
-    paths: Vec<PathBuf>,
-}
-
-impl FileSystemPackageResolver {
-    pub fn new(paths: Vec<PathBuf>) -> Self {
-        Self { paths }
-    }
-}
-
-impl PackageResolver for FileSystemPackageResolver {
-    fn resolve(&self, session: &mut Session, name: &PackageName) -> Result<PackageId, PackageResolutionError> {
-        let mut path = PathBuf::new();
-        path.push(name.base_name.as_ref());
-        path.push(".glsl");
-        for p in self.paths.iter() {
-            let mut full_path = p.clone();
-            full_path.push(&path);
-            if full_path.exists() {
-                let source_path = full_path.to_string_lossy().into_owned();
-                let source_text =
-                    fs::read_to_string(&full_path).map_err(|e| PackageResolutionError(anyhow::Error::new(e)))?;
-                let package = session.create_source_package(name.clone(), &source_path, source_text.as_str());
-                return Ok(package);
-            }
-        }
-        Err(PackageResolutionError(anyhow::anyhow!(
-            "could not find package `{}` in paths",
-            name
-        )))
-    }
-}
-
-pub enum PackageStatus {
-    /// AST not parsed yet.
-    Unparsed,
-    /// Currently parsing the AST.
-    Parsing,
-    /// AST parsed, but not type-checked yet.
-    Parsed,
-    /// Currently type-checking the AST.
-    Checking,
-    /// AST type-checked.
-    Checked,
-}
-
-pub struct PackageSyntax {
-    source_id: SourceId,
-    green_node: GreenNode,
-    root: SyntaxNodePtr,
-}
-
-pub struct PackageCacheEntry {
-    /// AST of the package (green tree + root node).
-    pub(crate) syntax: Option<PackageSyntax>,
-    pub(crate) status: PackageStatus,
-    /// Type-checked package module (not including bodies).
-    pub(crate) module: Option<tast::Module>,
-    /// Type-checked definition bodies.
-    pub(crate) bodies: IndexVecMap<LocalDefId, tast::TypedBody>,
-}
-
-pub type PackageId = Id<PackageCacheEntry>;
-
-pub struct DefDebug<'a>(DefId, &'a Def);
-
-impl<'a> fmt::Debug for DefDebug<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "DefId({:04x}:{:04x} `{}`)",
-            self.0.package.0, self.0.local_def.0, self.1.name
-        )
-    }
-}
-
-pub struct Pkgs {
-    packages: IndexMap<PackageName<'static>, PackageCacheEntry, PackageId>,
-}
-
-impl Pkgs {
-    /// Resolves a definition by ID.
-    pub fn def(&self, id: DefId) -> &Def {
-        if let Some(ref tast) = self.packages[id.package].module {
-            tast.defs.get(id.local_def).expect("invalid DefId")
-        } else {
-            todo!("typecheck module")
-        }
-    }
-
-    /// Returns a debug proxy for the definition.
-    pub fn debug_def(&self, id: DefId) -> DefDebug {
-        DefDebug(id, self.def(id))
-    }
-
-    /// Returns the typed ast for the specified package.
-    pub fn module(&self, id: PackageId) -> Option<&tast::Module> {
-        self.packages[id].module.as_ref()
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("an attribute with the same name already exists")]
     AttributeAlreadyExists,
 }
 
-/// Registered attribute.
-pub(crate) struct AttributeRegistration {
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Clone, PartialEq)]
+pub struct SyntaxTree {
+    pub green_node: GreenNode,
+    pub root: SyntaxNodePtr,
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ATTRIBUTE REGISTRATION
+
+/// Attribute registration information.
+pub struct AttributeRegistration {
+    /// Name of the attribute.
     pub(crate) name: String,
+    /// Valid target items for the attribute.
     pub(crate) valid_targets: AttributeTarget,
+    /// Whether this attribute can appear more than once on an item.
     pub(crate) multiplicity: AttributeMultiplicity,
+    /// The list of attributes that are mutually exclusive with this one.
     pub(crate) mutually_exclusive: Vec<String>,
+    /// User-provided closure to further verify the syntax of the attribute.
     pub(crate) checker: Box<dyn AttributeChecker + Send>,
 }
 
-/// Compilation session.
-pub struct Session {
-    /// Diagnostics output
-    pub diag: Diagnostics,
-    /// Types
-    pub tyctxt: TypeCtxt,
-    /// Packages & associated modules and definitions.
-    pub pkgs: Pkgs,
-    pub(crate) source_files: SourceFileProvider,
-    resolver: Arc<dyn PackageResolver + Sync + Send>,
+pub type CustomAttributes = HashMap<String, AttributeRegistration>;
 
-    /// Registered custom attributes.
-    pub(crate) custom_attributes: HashMap<String, AttributeRegistration>,
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+new_key_type! {
+    /// Uniquely identifies a module.
+    pub struct ModuleId;
 }
 
-impl Session {
-    /// Creates a new session with a dummy package resolver, and print diagnostics to stderr.
-    pub fn new() -> Session {
-        let source_files = SourceFileProvider::new();
-        let mut diag = Diagnostics::new(source_files.clone());
-        diag.add_sink(TermDiagnosticSink::new(term::Config::default()));
-        Self {
-            diag,
-            tyctxt: TypeCtxt::new(),
-            source_files,
-            resolver: Arc::new(DummyPackageResolver),
-            pkgs: Pkgs {
-                packages: IndexMap::new(),
-            },
-            custom_attributes: Default::default(),
+new_key_type! {
+    /// Identifies a source file.
+    pub struct SourceFileId;
+}
+
+new_key_type! {
+    /// Uniquely identifies a definition within a package.
+    pub struct DefId;
+}
+
+/// Namespace of a definition name.
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Namespace {
+    /// Type names
+    Type,
+    /// Value names (constants, globals, locals, and functions, even though they aren't quite values).
+    Value,
+}
+
+/// Location and name of a definition.
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub struct DefName {
+    pub module: ModuleId,
+    pub namespace: Namespace,
+    pub name: String,
+}
+
+/// `Debug` proxy for `DefId`s.
+///
+/// Prints the name of the defined item alongside the unique ID.
+pub struct DefDebug<'a>(DefId, &'a Def);
+
+impl<'a> fmt::Debug for DefDebug<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "DefId({:04x} `{}`)", self.0 .0, self.1.name)
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Information about a source-file-based module.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct ModuleData {
+    /// Canonicalized URL of the module.
+    ///
+    /// For source-file modules, this is the URL of the source file.
+    /// FIXME redundant with ModuleId
+    pub url: String,
+    /// The of the source file, for source-file modules. `None` otherwise.
+    pub source: Option<SourceFileId>,
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+define_database_tables! {
+    struct CompilerQueryData [dyn CompilerDb] {
+
+        // --- Interned IDs ---
+        intern module_id(String)-> ModuleId;
+        intern def_id(DefName) -> DefId;
+
+        // --- Index generators ---
+        index source_file_id(SourceFileId);
+
+        // --- Input data ---
+        input module_source(ModuleId) -> SourceFileId;
+        input source_file(SourceFileId) -> SourceFile;
+        input module_data(ModuleId) -> ModuleData;
+
+        // --- Queries ---
+
+        /// Syntax trees for each source file.
+        query syntax_tree(compiler: &dyn CompilerDb, source_id: &SourceFileId) -> SyntaxTree {
+            compiler.runtime().set_query_label("query_source_file_syntax_tree");
+            let source_file = compiler.source_file(*source_id);
+            let green_node = syntax::parse(compiler, &source_file.contents, *source_id);
+            let root = SyntaxNode::new_root(green_node.clone());
+            SyntaxTree {
+                green_node,
+                root: SyntaxNodePtr::new(&root),
+            }
+        }
+
+        /// Definitions in a module (not including imports).
+        query module_definitions(compiler: &dyn CompilerDb, module: &ModuleId) -> Vec<DefId> {
+            compiler.runtime().set_query_label("query_package_definitions");
+            compiler.typechecked_module(*module).defs.keys().cloned().collect()
+        }
+
+        /// Module imports (import statements).
+        query module_imports(compiler: &dyn CompilerDb, module: &ModuleId) -> Vec<ModuleId> {
+            compiler.runtime().set_query_label("query_package_imports");
+            // TODO resolve imports without typechecking
+            let tmod = compiler.typechecked_module(*module);
+            tmod.imported_packages.clone()
+        }
+
+        /// Module dependencies (transitive imports).
+        query module_dependencies(compiler: &dyn CompilerDb, module: &ModuleId) -> Vec<ModuleId> {
+            compiler.runtime().set_query_label("query_package_dependencies");
+            // TODO resolve imports without typechecking
+            let mut deps = HashSet::new();
+            let mut visit = vec![*module];
+            while let Some(module) = visit.pop() {
+                let module = compiler.typechecked_module(module);
+                for import in module.imported_packages.iter() {
+                    if deps.insert(*import) {
+                        visit.push(*import);
+                    }
+                }
+            }
+            deps.into_iter().collect()
+        }
+
+        /// Results of definition type-checking.
+        query typechecked_module(compiler: &dyn CompilerDb, module: &ModuleId) -> tast::Module {
+            compiler.runtime().set_query_label("query_typecheck_module");
+            let (source_file, syntax_tree) = compiler.module_syntax_tree(*module);
+            let syntax_node = SyntaxNode::new_root(syntax_tree.green_node.clone());
+            typecheck_items(compiler, *module, source_file, ast::Module::cast(syntax_node).expect("invalid AST"))
+        }
+
+        /// Results of body type-checking.
+        query typechecked_body(compiler: &dyn CompilerDb, def: &DefId) -> tast::TypedBody {
+            compiler.runtime().set_query_label("query_typecheck_body");
+            typecheck_body(compiler, *def)
         }
     }
+}
 
-    /// Sets the package resolver.
-    pub fn with_package_resolver(mut self, resolver: impl PackageResolver + Sync + Send + 'static) -> Session {
-        self.resolver = Arc::new(resolver);
-        self
+/// Compilation session.
+pub struct CompilerDbData {
+    /// Diagnostics output
+    diag: Diagnostics,
+    /// Type
+    tyctxt: TypeCtxt,
+    resolver: Arc<dyn PackageResolver + Sync + Send>,
+    /// Registered custom attributes.
+    custom_attributes: CustomAttributes,
+    /// Stack that tracks which source file is being processed, for the purpose of diagnostics.
+    ///
+    /// See `push_diagnostic_source_file`, `pop_diagnostic_source_file`.
+    source_file_stack: RefCell<Vec<SourceFileId>>,
+    query: CompilerQueryData,
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// COMPILER DB TRAIT
+
+pub trait CompilerDb: HasTables<CompilerDbData> {
+    /// Returns the `TypeCtxt` (types interner).
+    fn tyctxt(&self) -> &TypeCtxt;
+
+    /// Returns the set of registered attributes.
+    fn custom_attributes(&self) -> &CustomAttributes;
+
+    /// Returns the diagnostics output object.
+    fn diag(&self) -> &Diagnostics;
+
+    // --- queries ---
+
+    /// Returns the `DefId` corresponding to the specified name and namespace.
+    fn def_id(&self, package: ModuleId, name: String, namespace: Namespace) -> DefId;
+
+    /// Returns information about the given module.
+    fn module_data(&self, module: ModuleId) -> &ModuleData;
+
+    /// Returns the list of the definitions in a module, in the order in which they appear in the module source code.
+    fn module_definitions(&self, module: ModuleId) -> &[DefId];
+
+    /// Returns the module containing of the given definition.
+    fn parent_module(&self, definition: DefId) -> ModuleId;
+
+    /// Returns the transitive list of dependencies of the given module.
+    fn module_dependencies(&self, module: ModuleId) -> &[ModuleId];
+
+    /// Returns the modules directly imported by the given module.
+    fn module_imports(&self, module: ModuleId) -> &[ModuleId];
+
+    /// Returns information about the given definition.
+    fn definition(&self, definition: DefId) -> &Def;
+
+    /// Retrieves the syntax tree of a source file.
+    fn syntax_tree(&self, source_file: SourceFileId) -> &SyntaxTree;
+
+    /// Returns the source file with the given ID.
+    fn source_file(&self, source_file: SourceFileId) -> &SourceFile;
+
+    /// Returns the type-checked module for the given package.
+    ///
+    /// May trigger type-checking and resolution of definitions (but not bodies) if necessary.
+    /// The module may have errors.
+    fn typechecked_module(&self, module: ModuleId) -> &tast::Module;
+
+    /// Returns the type-checked body of the specified definition.
+    fn typechecked_def_body(&self, def: DefId) -> &tast::TypedBody;
+
+    /// Specifies that the given source file should be used as default location for subsequent diagnostics.
+    ///
+    /// This stays until `pop_diagnostic_source_file` is called.
+    fn push_diagnostic_source_file(&self, source: SourceFileId);
+
+    /// Restores the previous source file for diagnostic locations.
+    ///
+    /// Counterpart of `push_diagnostic_source_file`
+    fn pop_diagnostic_source_file(&self);
+
+    /// Returns the source file to be used as the default location for diagnostics.
+    ///
+    /// This is the last source file passed to `push_diagnostic_source_file`.
+    fn diagnostic_source_file(&self) -> Option<SourceFileId>;
+
+    // --- update ---
+
+    /// Adds a new source file module.
+    ///
+    /// # Arguments
+    /// * canonical_url Canonical URL of the source file. It must be canonicalized before calling this function.
+    /// * contents Contents of the source file.
+    ///
+    /// # Return value
+    ///
+    /// A tuple `(module_id, source_file_id)` containing the ID of the created module and the ID of the
+    /// source file associated to the module.
+    ///
+    /// # Notes
+    ///
+    /// This function cannot create instances of
+    ///
+    fn create_module_from_source_file(&mut self, canonical_url: &str, contents: &str) -> (ModuleId, SourceFileId);
+
+    /// Updates the contents of the specified source file.
+    fn update_source_file(&mut self, source_file: SourceFileId, new_contents: String);
+}
+
+impl<DB> CompilerDb for DB
+where
+    DB: HasTables<CompilerDbData>,
+{
+    fn tyctxt(&self) -> &TypeCtxt {
+        &self.tables().tyctxt
+    }
+
+    fn custom_attributes(&self) -> &CustomAttributes {
+        &self.tables().custom_attributes
+    }
+
+    fn diag(&self) -> &Diagnostics {
+        &self.tables().diag
+    }
+
+    fn def_id(&self, module: ModuleId, name: String, namespace: Namespace) -> DefId {
+        self.tables().query.def_id.intern(DefName {
+            module,
+            namespace,
+            name,
+        })
+    }
+
+    fn module_data(&self, id: ModuleId) -> &ModuleData {
+        self.tables().query.module_data.fetch(self, id)
+    }
+
+    fn module_definitions(&self, id: ModuleId) -> &[DefId] {
+        self.tables().query.module_definitions.fetch(self, id)
+    }
+
+    fn parent_module(&self, definition: DefId) -> ModuleId {
+        self.tables().query.def_id.fetch(definition).module
+    }
+
+    fn module_dependencies(&self, id: ModuleId) -> &[ModuleId] {
+        self.tables().query.module_dependencies.fetch(self, id)
+    }
+
+    fn module_imports(&self, id: ModuleId) -> &[ModuleId] {
+        self.tables().query.module_imports.fetch(self, id)
+    }
+
+    fn definition(&self, definition: DefId) -> &Def {
+        let module = self.parent_module(definition);
+        let ty_module = self.typechecked_module(module);
+        let def = ty_module
+            .defs
+            .get(&definition)
+            .expect("definition was not found in its expected package");
+        def
+    }
+
+    fn syntax_tree(&self, source_file: SourceFileId) -> &SyntaxTree {
+        self.tables().query.syntax_tree.fetch(self, source_file)
+    }
+
+    fn source_file(&self, source_file: SourceFileId) -> &SourceFile {
+        self.tables().query.source_file.fetch(self, source_file)
+    }
+
+    fn typechecked_module(&self, module: ModuleId) -> &Module {
+        self.tables().query.typechecked_module.fetch(self, module)
+    }
+
+    fn typechecked_def_body(&self, definition: DefId) -> &TypedBody {
+        self.tables().query.typechecked_body.fetch(self, definition)
+    }
+
+    fn push_diagnostic_source_file(&self, source_file: SourceFileId) {
+        self.tables().source_file_stack.borrow_mut().push(source_file);
+    }
+
+    fn pop_diagnostic_source_file(&self) {
+        self.tables().source_file_stack.borrow_mut().pop();
+    }
+
+    fn diagnostic_source_file(&self) -> Option<SourceFileId> {
+        self.tables().source_file_stack.borrow().last().cloned()
+    }
+
+    fn create_module_from_source_file(&mut self, canonical_url: &str, contents: &str) -> (ModuleId, SourceFileId) {
+        self.with_new_revision(move |db, rev| {
+            // create source file & module
+            let source_file_id = db.tables().query.source_file_id.new_input();
+            let module_id = db.tables().query.module_id.intern(canonical_url.to_string());
+            db.tables_mut()
+                .query
+                .source_file
+                .set(rev, source_file_id, SourceFile::new(canonical_url, contents));
+            db.tables_mut().query.module_data.set(
+                rev,
+                module_id,
+                ModuleData {
+                    url: canonical_url.to_string(),
+                    source: Some(source_file_id),
+                },
+            );
+            (module_id, source_file_id)
+        })
+    }
+
+    fn update_source_file(&mut self, source_file: SourceFileId, new_contents: String) {
+        self.with_new_revision(move |db, rev| {
+            db.tables_mut()
+                .query
+                .source_file
+                .update(rev, source_file, move |source_file| source_file.update(new_contents));
+        });
+    }
+}
+
+impl CompilerDbData {
+    pub fn new(base_table_index: usize) -> CompilerDbData {
+        let diag = {
+            let mut d = Diagnostics::new();
+            d.add_sink(TermDiagnosticSink::new(term::Config::default()));
+            d
+        };
+        let tyctxt = TypeCtxt::new();
+        let resolver = Arc::new(DummyPackageResolver);
+        let custom_attributes = Default::default();
+        CompilerDbData {
+            diag,
+            tyctxt,
+            resolver,
+            custom_attributes,
+            source_file_stack: RefCell::new(vec![]),
+            query: CompilerQueryData::new(base_table_index),
+        }
     }
 
     /// Sets a diagnostic sink.
@@ -347,219 +475,141 @@ impl Session {
         );
         Ok(())
     }
+}
 
-    /*/// Sets the diagnostics output.
-    pub fn with_diagnostic_output(mut self, diag: impl WriteColor + 'a) -> Session<'a> {
-        self.diag = diag;
-        self
-    }*/
+/// Compiler instance.
+pub struct Compiler {
+    db_data: CompilerDbData,
+    db_runtime: Runtime,
+}
 
-    /// Gets the package with the given name, or creates it if it doesn't exist.
-    pub(crate) fn get_or_create_package<'b>(&mut self, name: impl Into<PackageName<'b>>) -> (PackageId, bool) {
-        let name = name.into();
-        if let Some((id, _, _)) = self.pkgs.packages.get_full(&name) {
-            return (id, false);
+impl Compiler {
+    /// Creates a new `Compiler` instance.
+    pub fn new() -> Compiler {
+        Compiler {
+            db_data: CompilerDbData::new(0),
+            db_runtime: Runtime::new(),
         }
-        let name = name.into_static();
-        let (id, _) = self.pkgs.packages.insert_full(
-            name,
-            PackageCacheEntry {
-                syntax: None,
-                status: PackageStatus::Unparsed,
-                module: None,
-                bodies: IndexVecMap::new(),
-                //hir: None,
-            },
-        );
-        (id, true)
-    }
-
-    //----------------------------------------------------------------------------------------------
-    // QUERIES
-
-    /// Resolves the package with the given name.
-    pub fn resolve_package(&mut self, name: &PackageName) -> Result<PackageId, PackageResolutionError> {
-        let resolver = self.resolver.clone();
-        resolver.resolve(self, name)
-    }
-
-    /// Returns all definitions in the specified package.
-    ///
-    /// May trigger type-checking and resolution of definitions (but not bodies) if necessary.
-    pub fn definitions(&mut self, id: PackageId) -> Result<Vec<LocalDefId>, QueryError> {
-        Ok(self.get_module(id)?.definitions().map(|(id, _)| id).collect())
-    }
-
-    /// Returns the packages directly imported by the specified package.
-    pub fn imports(&mut self, id: PackageId) -> Result<Vec<PackageId>, QueryError> {
-        Ok(self.get_module(id)?.imported_packages.clone())
-    }
-
-    /// Returns the transitive list of dependencies of the specified package.
-    pub fn dependencies(&mut self, id: PackageId) -> Result<Vec<PackageId>, QueryError> {
-        let mut deps = HashSet::new();
-        let mut visit = vec![id];
-        while let Some(package) = visit.pop() {
-            let module = self.get_module(package)?;
-            for import in module.imported_packages.iter() {
-                if deps.insert(*import) {
-                    visit.push(*import);
-                }
-            }
-        }
-        Ok(deps.into_iter().collect())
-    }
-
-    /// Returns the AST of the specified package.
-    ///
-    /// Panics if the id doesn't refer to a source package.
-    pub fn get_ast(&self, id: PackageId) -> Result<ast::Root, QueryError> {
-        let syntax = self.pkgs.packages[id].syntax.as_ref().ok_or(QueryError::NoSource)?;
-        let syntax_node = SyntaxNode::new_root(syntax.green_node.clone());
-        Ok(ast::Root {
-            source_id: syntax.source_id,
-            module: ast::Module::cast(syntax_node).expect("invalid AST"),
-        })
-    }
-
-    /// Returns the typed AST module for the given package.
-    ///
-    /// May trigger type-checking and resolution of definitions (but not bodies) if necessary.
-    /// The module may have errors.
-    pub fn get_module(&mut self, package: PackageId) -> Result<&tast::Module, QueryError> {
-        if self.pkgs.packages[package].module.is_none() {
-            let ast = self.get_ast(package)?;
-            let module = typecheck_items(self, package, ast);
-            let p = &mut self.pkgs.packages[package];
-            p.module = Some(module);
-        }
-
-        Ok(self.pkgs.packages[package].module.as_ref().unwrap())
-    }
-
-    /// Returns an already computed type-checked module.
-    pub fn get_module_cached(&self, package: PackageId) -> Result<&tast::Module, QueryError> {
-        self.pkgs.packages[package]
-            .module
-            .as_ref()
-            .ok_or(QueryError::NotInCache)
-    }
-
-    fn typecheck_bodies_inner(&mut self, package: PackageId) -> Result<(), QueryError> {
-        let defs = self.definitions(package)?;
-        for def in defs {
-            let tbody = typecheck_body(self, DefId::new(package, def))?;
-            self.pkgs.packages[package].bodies.insert(def, tbody);
-        }
-        Ok(())
-    }
-
-    /// Type-checks all bodies in the given package and their dependencies.
-    pub fn typecheck_bodies(&mut self, package: PackageId) -> Result<(), QueryError> {
-        let dependencies = self.dependencies(package)?;
-        for dep in dependencies {
-            self.typecheck_bodies_inner(dep)?;
-        }
-        self.typecheck_bodies_inner(package)?;
-        Ok(())
-    }
-
-    /// Type-checks the body of the specified definition.
-    pub fn get_typed_body(&mut self, def: DefId) -> Result<&tast::TypedBody, QueryError> {
-        // ensure that the typed AST is built
-        let _ = self.get_module(def.package);
-        if self.pkgs.packages[def.package].bodies.get(def.local_def).is_none() {
-            // typecheck body
-            let typechecked = typecheck_body(self, def)?;
-            self.pkgs.packages[def.package]
-                .bodies
-                .insert(def.local_def, typechecked);
-        }
-
-        // body must be there otherwise we'd have returned early due to an error condition
-        Ok(self.pkgs.packages[def.package].bodies.get(def.local_def).unwrap())
-    }
-
-    pub fn get_typed_body_cached(&self, def: DefId) -> Result<&tast::TypedBody, QueryError> {
-        self.pkgs.packages[def.package]
-            .bodies
-            .get(def.local_def)
-            .ok_or(QueryError::NotInCache)
-    }
-
-    pub(crate) fn get_ast_node<N: AstNode<Language = Lang>>(
-        &self,
-        package_id: PackageId,
-        ptr: &AstPtr<N>,
-    ) -> Result<N, QueryError> {
-        let package_syntax = self.get_ast(package_id)?;
-        Ok(ptr.to_node(package_syntax.module.syntax()))
     }
 
     /// Compiles the package to HIR (in-memory SPIR-V).
-    pub fn compile_to_hir(&mut self, package: PackageId) -> Result<hir::Module, QueryError> {
+    pub fn compile_to_hir(&mut self, package: ModuleId) -> Result<hir::Module, QueryError> {
         lower_to_hir(self, package)
     }
 
     /// Compiles the package and its dependencies to a standalone SPIR-V module.
     ///
     /// This includes all dependencies into the module.
-    pub fn compile_to_spirv(&mut self, package: PackageId) -> Result<Vec<u32>, QueryError> {
+    pub fn compile_to_spirv(&mut self, package: ModuleId) -> Result<Vec<u32>, QueryError> {
         let hir = lower_to_hir(self, package)?;
-        let spv_bytecode = hir::transform::write_spirv(&hir);
+        let spv_bytecode = hir::write_spirv(&hir);
         Ok(spv_bytecode)
     }
+}
 
-    //----------------------------------------------------------------------------------------------
-    // Provider entry points
-
-    /// Provides a package as a source file.
-    ///
-    /// # Arguments
-    /// * package package name
-    /// * file_name identifier for the associated source file, usually a path
-    /// * source source text
-    pub fn create_source_package<'b>(
-        &mut self,
-        package_name: impl Into<PackageName<'b>>,
-        file_name: &str,
-        source: &str,
-    ) -> PackageId {
-        // FIXME: if called again, should invalidate stuff that changed
-        let (package_id, created) = self.get_or_create_package(package_name);
-        assert!(created);
-        assert!(matches!(self.pkgs.packages[package_id].status, PackageStatus::Unparsed));
-        self.pkgs.packages[package_id].status = PackageStatus::Parsing;
-        let source_id = self.source_files.register_source(file_name, source);
-        let green_node = syntax::parse(self, source, source_id);
-        let root = SyntaxNode::new_root(green_node.clone());
-        self.pkgs.packages[package_id].syntax = Some(PackageSyntax {
-            source_id,
-            green_node,
-            root: SyntaxNodePtr::new(&root),
-        });
-        self.pkgs.packages[package_id].status = PackageStatus::Parsed;
-        package_id
+impl Database for Compiler {
+    fn maybe_changed_after(&self, db_index: DbIndex, after: Revision) -> bool {
+        self.db_data
+            .query
+            .maybe_changed_after(self, db_index, after)
+            .expect("invalid database index")
     }
 
-    /// Provides a package as a set of definitions.
-    pub fn create_def_package(&mut self, _package: PackageName) -> PackageId {
-        todo!()
+    fn runtime(&self) -> &Runtime {
+        &self.db_runtime
     }
 
-    /*pub fn definitions(&mut self, package_id: PackageId) -> &tast::Module {
-        let entry = &mut self.entries[package_id];
-        assert!(matches!(entry.status, PackageStatus::Parsed));
-        entry.status = PackageStatus::Checking;
-        let package_name = self.entries.get_key(package_id).unwrap();
-        let package_id = self.resolver.resolve(self, package_name)?;
-        entry.status = PackageStatus::Checked;
-        Ok(())
-    }*/
+    fn runtime_mut(&mut self) -> &mut Runtime {
+        &mut self.db_runtime
+    }
+}
+
+impl HasTables<CompilerDbData> for Compiler {
+    fn tables(&self) -> &CompilerDbData {
+        &self.db_data
+    }
+    fn tables_mut(&mut self) -> &mut CompilerDbData {
+        &mut self.db_data
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// Query system
+
+impl dyn CompilerDb {
+    /// Creates a new diagnostic with `Error` severity.
+    ///
+    /// Emit the diagnostic with `.emit()`.
+    ///
+    /// # Example
+    /// ```
+    ///# fn main() {
+    ///diag.error("Syntax error").emit();
+    ///# }
+    /// ```
+    pub fn diag_error(&self, message: impl Into<String>) -> DiagnosticBuilder {
+        DiagnosticBuilder {
+            compiler: self,
+            diag: Diagnostic::new(Severity::Error).with_message(message.into()),
+        }
+    }
+
+    /// Creates a new diagnostic with `Warning` severity.
+    ///
+    /// # Example
+    /// ```
+    ///# fn main() {
+    ///diag.warning(format!("Unused parameter: {}", param_name)).emit();
+    ///# }
+    /// ```
+    pub fn diag_warn(&self, message: impl Into<String>) -> DiagnosticBuilder {
+        DiagnosticBuilder {
+            compiler: self,
+            diag: Diagnostic::new(Severity::Warning).with_message(message.into()),
+        }
+    }
+
+    /// Creates a new diagnostic with `Bug` severity.
+    ///
+    /// Emit the diagnostic with `.emit()`.
+    ///
+    /// # Example
+    /// ```
+    ///# fn main() {
+    ///diag.bug("Internal compiler error").emit();
+    ///# }
+    /// ```
+    pub fn diag_bug(&self, message: impl Into<String>) -> DiagnosticBuilder {
+        DiagnosticBuilder {
+            compiler: self,
+            diag: Diagnostic::new(Severity::Bug).with_message(message.into()),
+        }
+    }
+
+    /// Dereferences a pointer to an AST node (`AstPtr<N>`).
+    pub fn ast_node<N: AstNode<Language = Lang>>(&self, module: ModuleId, ptr: &AstPtr<N>) -> N {
+        let md = self.module_data(module);
+        let source_file = md.source.expect("`module` should have an associated source file");
+        let syntax_tree = self.syntax_tree(source_file);
+        let syntax_node = SyntaxNode::new_root(syntax_tree.green_node.clone());
+        ptr.to_node(&syntax_node)
+    }
+
+    /// Dereferences a pointer to an AST node that is contained in the same module as `def_id`.
+    pub fn ast_node_for_def<N: AstNode<Language = Lang>>(&self, def_id: DefId, ptr: &AstPtr<N>) -> N {
+        let module = self.parent_module(def_id);
+        self.ast_node(module, ptr)
+    }
+
+    /// Returns the syntax tree of the given module.
+    ///
+    /// The module be a "source-file module" (i.e. have been created with an attached source file).
+    pub fn module_syntax_tree(&self, module: ModuleId) -> (SourceFileId, &SyntaxTree) {
+        let md = self.module_data(module);
+        let source_file = md.source.expect("`module` should have an associated source file");
+        let syntax_tree = self.syntax_tree(source_file);
+        (source_file, syntax_tree)
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -571,21 +621,21 @@ mod tests {
     fn package_names() {
         let name = String::from("foo");
         let name2 = String::from("foo2");
-        let package_name = PackageName::new(&name);
-        let package_name_with_args = PackageName::new(&name).arg(42);
-        let same_package_name_with_args = PackageName::new(&name).arg(42);
+        let package_name = ModuleName::new(&name);
+        let package_name_with_args = ModuleName::new(&name).arg(42);
+        let same_package_name_with_args = ModuleName::new(&name).arg(42);
 
         eprintln!("{}", package_name);
         eprintln!("{}", package_name_with_args);
         eprintln!("{}", same_package_name_with_args);
 
-        let mut cache = Session::new();
-        let (id, created) = cache.get_or_create_package(package_name);
+        let mut compiler = Compiler::new();
+        /*let (id, created) = compiler.create_source_package(package_name);
         assert!(created);
-        let (id2, created) = cache.get_or_create_package(package_name_with_args.clone());
+        let (id2, created) = compiler.get_or_create_package(package_name_with_args.clone());
         assert!(created);
-        let (id3, created) = cache.get_or_create_package(package_name_with_args.clone());
+        let (id3, created) = compiler.get_or_create_package(package_name_with_args.clone());
         assert_eq!(id2, id3);
-        assert!(!created);
+        assert!(!created);*/
     }
 }

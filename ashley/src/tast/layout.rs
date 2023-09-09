@@ -1,7 +1,8 @@
 //! Utilities for computing the memory layout of types.
 use crate::{
-    diagnostic::{AsSourceLocation, Diagnostics},
+    diagnostic::AsSourceLocation,
     hir::{types::ScalarType, Layout},
+    session::CompilerDb,
     syntax::ast,
     tast::{layout::StdLayoutRules::Std140, Type, TypeKind},
     utils::round_up,
@@ -63,11 +64,11 @@ pub(crate) fn std_vector_type_layout(prim_ty: ScalarType, len: u8) -> Layout {
 /// `layout_rule` doesn't affect the calculated stride, but the function emits an error diagnostic
 /// if the calculated stride doesn't conform to the specified layout rule.
 pub(crate) fn std_array_stride(
+    compiler: &dyn CompilerDb,
     element_type: &Type,
     stride: Option<u32>,
     layout_rule: StdLayoutRules,
     syntax: Option<ast::Type>,
-    diag: &mut Diagnostics,
 ) -> Result<u32, LayoutError> {
     // get syntax node of the element type
     let elem_syntax = if let Some(ref syntax) = syntax {
@@ -80,12 +81,13 @@ pub(crate) fn std_array_stride(
     };
     let loc = syntax.as_ref().map(|s| s.source_location());
 
-    let element_type_layout = std_type_layout(&element_type, layout_rule, elem_syntax, diag)?;
+    let element_type_layout = std_type_layout(compiler, &element_type, layout_rule, elem_syntax)?;
     let stride = if let Some(stride) = stride {
         // stride must not be less than the element type size
         let elem_ty_size = element_type_layout.size;
         if stride < elem_ty_size {
-            diag.error("invalid array stride")
+            compiler
+                .diag_error("invalid array stride")
                 .primary_label_opt(loc, "")
                 .note(format!(
                     "array stride ({stride}) is less than the element type size ({elem_ty_size})"
@@ -103,7 +105,7 @@ pub(crate) fn std_array_stride(
     // check for valid std140 stride
     // stride must be a multiple of 16
     if layout_rule == Std140 && stride % 16 != 0 {
-        diag.error("invalid array layout")
+        compiler.diag_error("invalid array layout")
             .primary_label_opt(loc, "")
             .note(
                 "this type appears within a std140 layout struct, consider adding the `stride(16)` qualifier to the type",
@@ -115,10 +117,10 @@ pub(crate) fn std_array_stride(
 
 /// Returns the size and base alignment of the specified type when used as a member of a structure type.
 pub(crate) fn std_type_layout(
+    compiler: &dyn CompilerDb,
     ty: &Type,
     layout_rule: StdLayoutRules,
     syntax: Option<ast::Type>,
-    diag: &mut Diagnostics,
 ) -> Result<Layout, LayoutError> {
     let loc = syntax.as_ref().map(|s| s.source_location());
 
@@ -127,14 +129,14 @@ pub(crate) fn std_type_layout(
         TypeKind::Scalar(scalar_type) => Ok(std_scalar_type_layout(scalar_type)),
         TypeKind::Vector(scalar_type, len) => Ok(std_vector_type_layout(scalar_type, len)),
         TypeKind::Matrix {
-            component_type,
+            component_type: _,
             columns,
-            rows,
+            rows: _,
             stride,
         } => {
             // if std140, check that the stride is a multiple of vec4 size
             if layout_rule == Std140 && stride % 16 != 0 {
-                diag.error("invalid matrix layout")
+                compiler.diag_error("invalid matrix layout")
                     .primary_label_opt(loc, "")
                     .note(
                         "this type appears within a std140 layout struct, consider using the `std140` variant of the type",
@@ -153,7 +155,7 @@ pub(crate) fn std_type_layout(
             stride,
         } => {
             // will emit a diagnostic if the calculated layouts are invalid w.r.t layout_rule
-            std_array_stride(element_type, stride, layout_rule, None, diag)?;
+            std_array_stride(compiler, element_type, stride, layout_rule, None)?;
 
             if let Some(stride) = stride {
                 Ok(Layout {
@@ -170,7 +172,7 @@ pub(crate) fn std_type_layout(
             stride,
         } => {
             // will emit a diagnostic if the calculated layouts are invalid w.r.t layout_rule
-            std_array_stride(element_type, stride, layout_rule, None, diag)?;
+            std_array_stride(compiler, element_type, stride, layout_rule, None)?;
             if let Some(stride) = stride {
                 Ok(Layout { align: stride, size: 0 })
             } else {
@@ -184,16 +186,17 @@ pub(crate) fn std_type_layout(
             ref offsets,
         } => {
             if let Some(offsets) = offsets {
-                let (layout, new_offsets) = std_struct_layout(&fields, layout_rule, diag)?;
+                let (layout, new_offsets) = std_struct_layout(compiler, &fields, layout_rule)?;
                 // Compare the offsets computed with the current layout rule to the offsets computed for the standalone type.
                 // They should be the same.
                 if offsets != &new_offsets {
                     //
-                    diag.error(format!(
-                        "structure `{name}` layout is incompatible with {layout_rule:?} layout rules"
-                    ))
-                    .primary_label_opt(loc, "type used here")
-                    .emit();
+                    compiler
+                        .diag_error(format!(
+                            "structure `{name}` layout is incompatible with {layout_rule:?} layout rules"
+                        ))
+                        .primary_label_opt(loc, "type used here")
+                        .emit();
                     Err(LayoutError::IncompatibleLayout)
                     // TODO: show where the offsets differ from the std layout rule
                     // TODO: source location of the offending struct
@@ -225,16 +228,16 @@ pub(crate) fn std_type_layout(
 /// * required_layout the layout rule that the offsets must conform to (due to this struct being used in another).
 ///   This can be different from `std_layout` as long as they produce the same result.
 pub(crate) fn std_struct_layout(
+    compiler: &dyn CompilerDb,
     fields: &[crate::tast::ty::StructField],
     std_layout: StdLayoutRules,
-    diag: &mut Diagnostics,
 ) -> Result<(Layout, Vec<u32>), LayoutError> {
     let mut next_offset = 0;
     let mut offsets = Vec::with_capacity(fields.len());
     let mut max_align = 0;
 
     for field in fields.iter() {
-        let member_layout = std_type_layout(&field.ty, std_layout, None, diag)?;
+        let member_layout = std_type_layout(compiler, &field.ty, std_layout, None)?;
 
         // compute actual alignment
         let mut actual_alignment = member_layout.align;
@@ -248,7 +251,8 @@ pub(crate) fn std_struct_layout(
             if !explicit_alignment.is_power_of_two() {
                 let name = &field.name;
                 // FIXME: source location
-                diag.error(format!("alignment of member `{name}` must be a power of two"))
+                compiler
+                    .diag_error(format!("alignment of member `{name}` must be a power of two"))
                     .emit();
             }
             actual_alignment = actual_alignment.max(explicit_alignment);
@@ -260,11 +264,12 @@ pub(crate) fn std_struct_layout(
             if explicit_offset < next_offset {
                 let name = &field.name;
                 // FIXME: source location
-                diag.error(format!(
+                compiler
+                    .diag_error(format!(
                     "member `{name}` (at offset {explicit_offset}) overlaps previous members (of size {next_offset})"
                 ))
-                //.primary_label_opt(field.ast.clone(), "")
-                .emit();
+                    //.primary_label_opt(field.ast.clone(), "")
+                    .emit();
             }
             explicit_offset
         } else {

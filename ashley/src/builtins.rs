@@ -418,11 +418,24 @@ impl PseudoType {
 /// Signature of a built-in operation (function or operator).
 #[derive(Copy, Clone)]
 pub struct BuiltinSignature {
+    /// Textual form of the signature, uniquely identifies the signature.
+    pub description: &'static str,
     pub parameter_types: &'static [PseudoType],
     pub result_type: PseudoType,
-    pub lower:
+    pub lower_fn:
         fn(&mut (), &mut hir::FunctionBuilder, args: &[hir::IdRef], types: &[hir::Type], ret: hir::Type) -> hir::Value,
 }
+
+impl PartialEq for BuiltinSignature {
+    fn eq(&self, other: &Self) -> bool {
+        // Can't compare lower_fn, but the other fields are enough for determining whether two signatures are equal
+        self.description == other.description
+            && self.parameter_types == other.parameter_types
+            && self.result_type == other.result_type
+    }
+}
+
+impl Eq for BuiltinSignature {}
 
 impl fmt::Debug for BuiltinSignature {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -992,9 +1005,10 @@ macro_rules! builtin_operations {
             signatures: &[
                 $(
                     BuiltinSignature {
+                        description: std::concat!(std::stringify!($ret_ty), " ", std::stringify!($op_name), "(", std::stringify!($($arg),*), ")"),
                         parameter_types: &[$(PseudoType::$arg),*],
                         result_type: PseudoType::$ret_ty,
-                        lower: $builder_fn
+                        lower_fn: $builder_fn
                     }
                 ),*
             ]
@@ -1025,7 +1039,13 @@ builtin_operations! {
     //      genFType min(genFType x, float y)
     //
     // The result is the same anyway so there isn't any ambiguity in the specification.
-
+    //
+    // TL;DR: if a function or operator has two forms:
+    //      (A) vecN(vecN, vecN)
+    //      (B) vecN(vecN, float)
+    // then put them in that order (A before B).
+    //
+    // TODO: this is a source of bugs. Instead of sorting overload specs manually, automatically favor the "more generic" ones.
 
     And {
        bool(bool,bool)      => |_ctxt, fb, args, _types, ret| fb.emit_logical_and(ret, args[0], args[1]);
@@ -1504,7 +1524,7 @@ builtin_operations! {
 pub struct Constructor {
     pub ty: TypeKind,
     pub args: &'static [TypeKind],
-    pub lower: fn(&mut hir::FunctionBuilder, &[hir::IdRef], hir::Type) -> hir::Value,
+    pub lower_fn: fn(&mut hir::FunctionBuilder, &[hir::IdRef], hir::Type) -> hir::Value,
 }
 
 impl fmt::Debug for Constructor {
@@ -1512,6 +1532,15 @@ impl fmt::Debug for Constructor {
         write!(f, "Constructor {{ ty: {:?}, args: {:?} }}", self.ty, self.args)
     }
 }
+
+impl PartialEq for Constructor {
+    fn eq(&self, other: &Self) -> bool {
+        // Can't compare lower_fn, but the other fields are enough for determining whether two signatures are equal
+        self.ty == other.ty && self.args == other.args
+    }
+}
+
+impl Eq for Constructor {}
 
 macro_rules! constructors {
 
@@ -1575,7 +1604,7 @@ macro_rules! constructors {
                         constructors!(@type_kind $arg)
                     ),*
                 ],
-                lower: $builder_fn,
+                lower_fn: $builder_fn,
             }),*]
         };
     };

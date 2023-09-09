@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-codespan-reporting = "0.11.1"
+codespan-reporting = { git = "https://github.com/ennis/codespan", branch = "unsized_files" }
 indexmap = "1.9"
 logos = "0.12.1"
 once_cell = "1.16"
@@ -19,6 +19,8 @@ id-arena = "2.2.1"
 slotmap = "1.0.6"
 fxhash = "0.2.1"
 ashley-derive = { path = "../ashley-derive" }
+ashley-data-structures = { path = "../ashley-data-structures" }
+ashley-db = { path = "../ashley-db" }
 ordered-float = "3.4.0"
 smallvec = "1.10.0"
 spirv = { version = "0.2.0", features = ["serialize", "deserialize"] }
@@ -26,9 +28,7 @@ rspirv = "0.11.0"
 anyhow = "1.0.69"
 bitflags = "2.2.1"
 bytemuck = {version="1.13.1", features=["derive"]}
-memo-map = { git = "https://github.com/ennis/memo-map" }
-dashmap = "5.4.0"
-boxcar = "0.2.2"
+url = "2.3.1"
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }

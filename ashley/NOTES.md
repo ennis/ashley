@@ -1626,3 +1626,130 @@ Makes sense to do this on HIR.
 glslang -> SPIR-V does that, since in GLSL parameters are mutable, so they are like variables.
 However, this means that at call sites we must materialize arguments into variables => avoid that
 
+
+# Moving the query system in a separate crate
+
+ashley-db?
+ashley-query?
+ide-db?
+
+# Query system extensibility
+
+1. Define a struct type containing the tables.
+2. If extending an existing database, include the `Tables` of the underlying db in the struct:
+```
+struct MyDatabaseTables {
+   base: BaseTables,
+   query_1: DerivedTable<...>
+}
+```
+3. Implement `DatabaseOps` for the new type, deferring to the base tables when necessary.
+4. Wrap the tables in `Database<Tables>`
+5. Define the queries in an extension trait on `Database<Tables>`
+
+Issue: when extending an existing DB, how to access the queries of the underlying DB?
+E.g. we have a `Database<Tables>, impl TablesTrait`, extending a `BaseTables`, but `Database<Tables>` doesn't impl `BaseTablesTrait`
+
+Need a way to go from `Database<Tables>` to `Database<BaseTables>`, ideally without too much noise.
+
+# Query system: errors
+
+Option 1: return dummy/empty results so that dependents can still proceed
+Option 2: propagate errors (store `Result<T,QueryError>`)
+
+    /// Returns the `DefId` corresponding to the specified name and namespace.
+    fn def_id(&self, package: PackageId, name: String, namespace: Namespace) -> DefId;
+
+    // OK, but should return "Option"
+    fn package_source(&self, package_id: PackageId) -> Result<SourceId, QueryError>;
+
+    // Source code, should not fail. 
+    fn source_file(&self, id: SourceId) -> &SourceFile;
+
+    // All definitions in a package. Should not fail. If package cannot be parsed, return empty vector, or best-effort result.
+    fn package_definitions(&self, package_id: PackageId) -> Result<Vec<DefId>, QueryError>;
+
+    // Returns the package of the specified definition. Cannot fail.
+    fn package(&self, def_id: DefId) -> PackageId;
+
+    // Returns the transitive list of dependencies of the specified package. 
+    // If package cannot be parsed, return empty vector, or best-effort result.
+    fn dependencies(&self, id: PackageId) -> Result<Vec<PackageId>, QueryError>;
+
+    // Returns the packages directly imported by the specified package.
+    // If package cannot be parsed, return empty vector, or best-effort result.
+    fn imports(&self, id: PackageId) -> Result<Vec<PackageId>, QueryError>;
+
+    // Returns the specified definition.
+    // Cannot fail.
+    fn definition(&self, id: DefId) -> &Def;
+
+    /// Retrieves the syntax tree of a source file.
+    fn syntax_tree(&self, id: SourceId) -> Result<SourceFileSyntaxTree, QueryError>;
+
+    /// Returns the type-checked module for the given package.
+    ///
+    /// May trigger type-checking and resolution of definitions (but not bodies) if necessary.
+    /// The module may have errors.
+    fn typechecked_module(&self, package: PackageId) -> Result<&tast::Module, QueryError>;
+
+    /// Returns the type-checked body of the specified definition.
+    fn typechecked_def_body(&self, def: DefId) -> Result<&tast::TypedBody, QueryError>;
+
+    fn resolve_package(&mut self, name: &PackageName) -> Result<PackageId, PackageResolutionError>;
+
+
+# Next steps
+
+### Queries that "set" the value in another table.
+E.g. `typechecked_module` also sets the definitions in the module (`QueryTable<DefId->Definition>`).
+It's more efficient this way because when updating the definition, we can check whether it has changed, and
+skip updating the revision if it hasn't. Whereas right now all definitions are considered dirty whenever the module must be typechecked again.
+
+### Clearer syntax for defining the CompilerDbTables
+
+### Clean API for mutations / inputs
+
+Restrict mutable access to tables.
+Idea: HasTables::tables_mut() increases the rev counter (it has access to the runtime, so use that).
+
+### Module system
+
+Q: Do we have to "declare" modules? (like `mod submodule;` in rust)
+Side-question: why do we have `mod submodule;` in rust? 
+
+A: if you do `import module;` how do we know where to find the module? If the thing is file-based, then how do we know whether to look in the current directory, or in another search path?
+
+Q: do we import modules or individual items within modules?
+A: individual items
+
+Q: How do we make items private to the module?
+A: Several options. Naming convention (e.g. name begins with an underscore), visibility modifier (`public` or `private`), or everything visible. For now, start with having everything visible, except imported symbols.
+ 
+
+Strategies:
+* java-like: each file defines a module (or "package" in java). At the top of each file, a declaration specifies the full path of the module (e.g. root.module.submodule). All source files must be scanned to discover modules and build the module hierarchy. The module hierarchy may not follow the directory structure on disk.
+* rust-like: modules are declared in the source file of the parent module. Declaring them means that a corresponding source file must be found at a well-known location on disk (typically, a source file with the module name in the same directory, or a `mod.rs` file in a subdirectory with the module name)
+* implicit mapping to file system: modules are not declared in code; the module hierarchy reflects the structure on disk. Imports are resolved to file paths. 
+  * Q: If some file is never imported, does that mean that it shouldn't be compiled? Because otherwise (all files should be compiled), then we must scan the directory structure to discover files to compile. A: They *must* be compiled even if they are not imported, since they might export symbols.
+
+Tentative module system:
+* one file = one module (at least for source packages)
+* modules are identified by URIs, with optional schemes
+  * custom schemes can be used to load application-provided modules
+  * file URIs are "canonicalized" somehow (so that the same module isn't imported twice)
+    * need to know whether two paths are equivalent
+    * otherwise you get things like https://stackoverflow.com/questions/47121411/flutter-retrieving-top-level-state-from-child-returns-null/47142052#47142052
+    * flexible
+* in "package compilation mode", all source files in the "package directory" are compiled (recursively). 
+* in "single module mode", only referenced modules are compiled
+* schemes
+  * default to "file"
+  * "package": path in current package. If compiling in "single module mode", will try to find the package root dir.
+  * any other custom scheme: as defined by the application
+    * may include http
+
+
+Refactoring:
+* Cache URI resolution / canonicalization
+* Module entry has canonicalized URI, source code

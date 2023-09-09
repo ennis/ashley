@@ -97,13 +97,13 @@ pub(crate) fn check_signature(
                     component_type: targ,
                     rows: r1,
                     columns: c1,
-                    stride: stride1,
+                    stride: _stride1,
                 },
                 TK::Matrix {
                     component_type: tsig,
                     rows: r2,
                     columns: c2,
-                    stride: stride2,
+                    stride: _stride2,
                 },
             ) if r1 == r2 && c1 == c2 => match (targ, tsig) {
                 (a, b) if a == b => 0, // same component type, number of columns and rows, but different layout (stride): treat as rank 0 (same as no conversion necessary)
@@ -154,7 +154,7 @@ fn typecheck_builtin_helper(
     arguments: &[Type],
     candidates: &mut Vec<OverloadCandidate>,
 ) -> bool {
-    let mut sig: SmallVec<[Type; 2]> = parameter_types
+    let sig: SmallVec<[Type; 2]> = parameter_types
         .iter()
         .map(|ty| pseudo_type_to_concrete_type(*ty, builtin_types, vec_len, image_class))
         .collect();
@@ -208,7 +208,7 @@ impl TypeCheckBodyCtxt<'_> {
     ) -> Result<OverloadCandidate, OverloadResolutionError> {
         let mut candidates: Vec<OverloadCandidate> = Vec::new();
         for (i, overload) in overloads.iter().enumerate() {
-            let func = self.sess.pkgs.def(*overload).as_function().unwrap();
+            let func = self.compiler.definition(*overload).as_function().unwrap();
             let fty = func.function_type.as_function().unwrap();
             if fty.arg_types.len() != args.len() {
                 continue;
@@ -255,7 +255,7 @@ impl TypeCheckBodyCtxt<'_> {
             for ic in image_classes {
                 for vec_len in 1..=max_vec_len {
                     if typecheck_builtin_helper(
-                        &self.sess.tyctxt.prim_tys,
+                        &self.compiler.tyctxt().prim_tys,
                         index,
                         sig.parameter_types,
                         sig.result_type,

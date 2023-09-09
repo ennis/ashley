@@ -1,21 +1,18 @@
 use crate::{
-    syntax::{
-        ast,
-        ast::{AstNode, AstPtr},
-    },
+    syntax::{ast, ast::AstPtr},
     tast::{
         scope::{Res, Scope},
-        Block, BlockId, Expr, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt,
+        Block, BlockId, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt,
     },
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stmt {
     pub ast: AstPtr<ast::Stmt>,
     pub kind: StmtKind,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StmtKind {
     // TODO empty statement?
     Select {
@@ -76,10 +73,9 @@ impl<'a> TypeCheckBodyCtxt<'a> {
             return StmtKind::Error
         };
 
-        if condition.ty != self.sess.tyctxt.prim_tys.bool {
-            self.sess
-                .diag
-                .error("condition must be a boolean expression")
+        if condition.ty != self.compiler.tyctxt().prim_tys.bool {
+            self.compiler
+                .diag_error("condition must be a boolean expression")
                 .location(&ast_condition)
                 .emit();
         }
@@ -183,7 +179,7 @@ impl<'a> TypeCheckBodyCtxt<'a> {
         let ty = local
             .ty()
             .map(|t| self.convert_type(t))
-            .unwrap_or_else(|| self.sess.tyctxt.error.clone());
+            .unwrap_or_else(|| self.compiler.tyctxt().error.clone());
 
         let initializer = if let Some(initializer) = local.initializer() {
             if let Some(initializer) = initializer.expr() {

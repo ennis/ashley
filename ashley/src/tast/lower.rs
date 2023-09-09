@@ -3,7 +3,7 @@ use crate::{
     builtins::{BuiltinSignature, Constructor},
     hir,
     hir::{Decoration, FunctionData, IdRef, Interpolation, InterpolationKind, InterpolationSampling, StructLayout},
-    session::PackageId,
+    session::{CompilerDb, ModuleId},
     syntax::{ast, ast::UnaryOp},
     tast::{
         consteval::ConstantValue,
@@ -13,7 +13,7 @@ use crate::{
         swizzle::ComponentIndices,
         BlockId, Def, DefId, ExprId, LocalVarId, Module, Qualifier, StmtId, TypedBody,
     },
-    QueryError, Session,
+    QueryError,
 };
 use spirv::StorageClass;
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
@@ -32,7 +32,7 @@ enum LocalOrParam {
 }
 
 struct LowerCtxt<'a> {
-    sess: &'a Session,
+    compiler: &'a dyn CompilerDb,
     module: &'a Module,
     def_map: HashMap<DefId, HirDef>,
     local_map: HashMap<LocalVarId, hir::Value>,
@@ -70,12 +70,12 @@ struct Place {
 }
 
 impl<'a> LowerCtxt<'a> {
-    fn lower_module(&mut self, package_id: PackageId, hir: &mut hir::Module) {
+    fn lower_module(&mut self, _module: ModuleId, hir: &mut hir::Module) {
         for (def_id, def) in self.module.definitions() {
             if def.builtin {
                 continue;
             }
-            self.lower_def(hir, def, DefId::new(package_id, def_id));
+            self.lower_def(hir, def, *def_id);
         }
     }
 
@@ -234,7 +234,7 @@ impl<'a> LowerCtxt<'a> {
             UnaryOp::Not | UnaryOp::Neg => {
                 // expression with no side effects
                 let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
-                let val = (sig.lower)(&mut (), fb, &[expr.id], &[expr.ty], result_type);
+                let val = (sig.lower_fn)(&mut (), fb, &[expr.id], &[expr.ty], result_type);
                 val.into()
             }
             UnaryOp::PrefixInc | UnaryOp::PrefixDec | UnaryOp::PostfixInc | UnaryOp::PostfixDec => {
@@ -243,7 +243,7 @@ impl<'a> LowerCtxt<'a> {
                 let place_ty = place.ty;
                 let ptr = self.lower_place(fb, place);
                 let val = fb.emit_load(place_ty, ptr, None);
-                let result = (sig.lower)(&mut (), fb, &[IdRef::from(val)], &[place_ty], place_ty);
+                let result = (sig.lower_fn)(&mut (), fb, &[IdRef::from(val)], &[place_ty], place_ty);
                 fb.emit_store(ptr, result.into(), None);
                 match op {
                     UnaryOp::PrefixInc | UnaryOp::PrefixDec => {
@@ -271,7 +271,7 @@ impl<'a> LowerCtxt<'a> {
     ) -> IdRef {
         let lhs = self.lower_expr(fb, body, lhs).expect("expected non-void expression");
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
-        let val = (sig.lower)(&mut (), fb, &[lhs.id, rhs.id], &[lhs.ty, rhs.ty], result_type);
+        let val = (sig.lower_fn)(&mut (), fb, &[lhs.id, rhs.id], &[lhs.ty, rhs.ty], result_type);
         val.into()
     }
 
@@ -312,7 +312,7 @@ impl<'a> LowerCtxt<'a> {
         let lhs_ty = lhs.ty;
         let lhs_ptr = self.lower_place(fb, lhs);
         let lhs_val = fb.emit_load(lhs_ty, lhs_ptr, None);
-        let val = (sig.lower)(&mut (), fb, &[IdRef::from(lhs_val), rhs.id], &[lhs_ty, rhs.ty], lhs_ty);
+        let val = (sig.lower_fn)(&mut (), fb, &[IdRef::from(lhs_val), rhs.id], &[lhs_ty, rhs.ty], lhs_ty);
         fb.emit_store(lhs_ptr, val.into(), None);
     }
 
@@ -386,9 +386,8 @@ impl<'a> LowerCtxt<'a> {
         result_type: hir::Type,
     ) -> Option<hir::IdRef> {
         let func = self
-            .sess
-            .pkgs
-            .def(function_id)
+            .compiler
+            .definition(function_id)
             .as_function()
             .expect("expected function");
         let mut arg_ids = Vec::with_capacity(args.len());
@@ -400,7 +399,7 @@ impl<'a> LowerCtxt<'a> {
         }
 
         if let Some(builtin) = func.builtin {
-            Some((builtin.lower)(&mut (), fb, &arg_ids, &arg_types, result_type).into())
+            Some((builtin.lower_fn)(&mut (), fb, &arg_ids, &arg_types, result_type).into())
         } else {
             // FIXME: the function may not be defined yet: we rely on the fact that, in GLSL, item definitions must appear before their use in the source code,
             // and thus the definitions are correctly ordered in the resulting TAST, but this might no longer be the case if we decide to use the TAST for other frontends.
@@ -451,7 +450,7 @@ impl<'a> LowerCtxt<'a> {
             let expr = self.lower_expr(fb, body, arg).expect("expected non-void expression");
             arg_ids.push(expr.id);
         }
-        (ctor.lower)(fb, &arg_ids, result_type).into()
+        (ctor.lower_fn)(fb, &arg_ids, result_type).into()
     }
 
     fn lower_literal(&mut self, fb: &mut hir::FunctionBuilder, value: &ConstantValue) -> hir::IdRef {
@@ -726,10 +725,7 @@ impl<'a> LowerCtxt<'a> {
         // if there's a block, then it's a function definition, otherwise it's just a declaration
         let func_data = if function_def.has_body {
             // get the typechecked body
-            let typed_body = self
-                .sess
-                .get_typed_body_cached(def_id)
-                .expect("function should have a type-checked body");
+            let typed_body = self.compiler.typechecked_def_body(def_id);
             if typed_body.has_errors() {
                 // emit a dummy body so that lowering can continue
                 FunctionData::new_declaration(
@@ -814,32 +810,30 @@ impl<'a> LowerCtxt<'a> {
     }
 }
 
-pub fn lower_to_hir(sess: &mut Session, package: PackageId) -> Result<hir::Module, QueryError> {
-    // ensure module is created & typechecked
-    sess.typecheck_bodies(package)?;
-    let dependencies = sess.dependencies(package)?;
+pub fn lower_to_hir(compiler: &dyn CompilerDb, module: ModuleId) -> Result<hir::Module, QueryError> {
+    let dependencies = compiler.module_dependencies(module);
     let mut hir = hir::Module::new();
 
     // lower dependencies
     for dep in dependencies {
-        let module = sess.pkgs.module(dep).unwrap();
+        let typed_module = compiler.typechecked_module(*dep);
         let mut ctxt = LowerCtxt {
-            sess,
-            module,
+            compiler,
+            module: typed_module,
             def_map: Default::default(),
             local_map: Default::default(),
         };
-        ctxt.lower_module(dep, &mut hir);
+        ctxt.lower_module(*dep, &mut hir);
     }
 
     // lower main module
-    let module = sess.pkgs.module(package).unwrap();
+    let typed_module = compiler.typechecked_module(module);
     let mut ctxt = LowerCtxt {
-        sess,
-        module,
+        compiler,
+        module: typed_module,
         def_map: Default::default(),
         local_map: Default::default(),
     };
-    ctxt.lower_module(package, &mut hir);
+    ctxt.lower_module(module, &mut hir);
     Ok(hir)
 }

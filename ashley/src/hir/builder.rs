@@ -1,8 +1,7 @@
 use crate::hir::{
-    Block, BlockData, Constant, ExtInstSet, FunctionData, GlobalVariable, IdRef, InstructionData, Local, LocalData,
-    Module, Operand, TerminatingInstruction, Type, Value, ValueData, ValueOrConstant,
+    Block, BlockData, Constant, ExtInstSet, FunctionData, GlobalVariable, IdRef, InstructionData, LocalData, Module,
+    Operand, TerminatingInstruction, Type, Value, ValueData, ValueOrConstant,
 };
-use ashley::hir::ConstantData;
 use rspirv::spirv;
 use smallvec::{smallvec, SmallVec};
 use spirv::Op;

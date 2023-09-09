@@ -1,10 +1,11 @@
 use crate::{
-    diagnostic::{SourceId, SourceLocation},
+    diagnostic::SourceLocation,
+    session::{CompilerDb, SourceFileId},
     syntax::{
         syntax_kind::{Lexer, SyntaxKind::*},
-        SyntaxKind, SyntaxNode,
+        SyntaxKind,
     },
-    Session, T,
+    T,
 };
 use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextRange, TextSize};
 use std::{
@@ -178,7 +179,7 @@ const BUILTIN_TYPE_NAMES: &[&str] = &[
     "usubpassInputMS",
 ];
 
-pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> GreenNode {
+pub(crate) fn parse_raw(compiler: &dyn CompilerDb, text: &str, source_file: SourceFileId) -> GreenNode {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let mut lookahead = VecDeque::default();
@@ -189,10 +190,10 @@ pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> 
     for ty in BUILTIN_TYPE_NAMES {
         types.insert(ty.to_string());
     }
-    sess.diag.set_current_source(source_id);
+    compiler.push_diagnostic_source_file(source_file);
     let parser = Parser {
-        sess,
-        source_id,
+        compiler,
+        source_file,
         text,
         lookahead,
         lex,
@@ -200,13 +201,15 @@ pub(crate) fn parse_raw(sess: &mut Session, text: &str, source_id: SourceId) -> 
         types,
         consumed_tokens: 0,
     };
-    parser.parse()
+    let result = parser.parse();
+    compiler.pop_diagnostic_source_file();
+    result
 }
 
 struct Parser<'a> {
-    sess: &'a mut Session,
+    compiler: &'a dyn CompilerDb,
     text: &'a str,
-    source_id: SourceId,
+    source_file: SourceFileId,
     // Current token & span
     //current: Option<(SyntaxKind, Range<usize>)>,
     /// lexer for the input text
@@ -344,7 +347,7 @@ impl<'a> Parser<'a> {
     fn span(&self) -> Option<SourceLocation> {
         if let Some((_, span)) = self.lookahead.front().clone() {
             Some(SourceLocation {
-                file: Some(self.source_id),
+                file: Some(self.source_file),
                 range: TextRange::new(TextSize::from(span.start as u32), TextSize::from(span.end as u32)),
             })
         } else {
@@ -378,9 +381,8 @@ impl<'a> Parser<'a> {
     fn expect_ident(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
             let span = self.span();
-            self.sess
-                .diag
-                .error(format!("expected {ident_kind}"))
+            self.compiler
+                .diag_error(format!("expected {ident_kind}"))
                 .primary_label_opt(span, "expected IDENT")
                 .emit();
             false
@@ -393,9 +395,8 @@ impl<'a> Parser<'a> {
     fn expect_new_type_name(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
             let span = self.span();
-            self.sess
-                .diag
-                .error(format!("expected {ident_kind}"))
+            self.compiler
+                .diag_error(format!("expected {ident_kind}"))
                 .primary_label_opt(span, "expected IDENT")
                 .emit();
             false
@@ -411,7 +412,10 @@ impl<'a> Parser<'a> {
         if self.next() != Some(kind) {
             let span = self.span();
             let msg = format!("expected {kind:?}");
-            self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+            self.compiler
+                .diag_error(msg.clone())
+                .primary_label_opt(span, msg)
+                .emit();
             false
         } else {
             self.eat();
@@ -426,7 +430,10 @@ impl<'a> Parser<'a> {
         if self.next() != Some(kind) {
             let span = self.span();
             let msg = format!("expected {kind:?}");
-            self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+            self.compiler
+                .diag_error(msg.clone())
+                .primary_label_opt(span, msg)
+                .emit();
             while let Some(tk) = self.next() {
                 self.eat();
                 if tk == kind {
@@ -450,7 +457,7 @@ impl<'a> Parser<'a> {
 
         let span = self.span();
         let msg = format!("expected one of {kinds:?}");
-        self.sess.diag.error(msg.clone()).primary_label_opt(span, msg).emit();
+        self.compiler.diag_error(msg.clone()).primary_label_opt(span, msg).emit();
         false
     }*/
 
@@ -508,9 +515,8 @@ impl<'a> Parser<'a> {
                     _ => {
                         // TODO better recovery
                         let span = self.span();
-                        self.sess
-                            .diag
-                            .error("unexpected token")
+                        self.compiler
+                            .diag_error("unexpected token")
                             .primary_label_opt(span, "")
                             .emit();
                         self.eat();
@@ -573,9 +579,8 @@ impl<'a> Parser<'a> {
             _ => {
                 // assume expression?
                 let span = self.span();
-                self.sess
-                    .diag
-                    .error("expected literal or ident")
+                self.compiler
+                    .diag_error("expected literal or ident")
                     .primary_label_opt(span, "")
                     .emit();
             }
@@ -648,9 +653,8 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let span = self.span();
-                self.sess
-                    .diag
-                    .error("expected package parameter")
+                self.compiler
+                    .diag_error("expected package parameter")
                     .primary_label_opt(span, "")
                     .emit();
             }
@@ -757,7 +761,7 @@ impl<'a> Parser<'a> {
             _ => {
                 // TODO better recovery
                 let span = self.span();
-                self.sess.diag.error("unexpected token").primary_label_opt(span, "").emit();
+                self.compiler.diag_error("unexpected token").primary_label_opt(span, "").emit();
                 self.b.start_node_at(cp, FN_DEF.into());
                 self.eat();
             }
@@ -782,9 +786,8 @@ impl<'a> Parser<'a> {
                 }
                 None => {
                     let cur_span = self.span();
-                    self.sess
-                        .diag
-                        .error("unexpected end of file")
+                    self.compiler
+                        .diag_error("unexpected end of file")
                         .primary_label_opt(cur_span, "")
                         .emit();
                     break;
@@ -884,17 +887,15 @@ impl<'a> Parser<'a> {
             }
             None => {
                 let cur_span = self.span();
-                self.sess
-                    .diag
-                    .error("unexpected end of file")
+                self.compiler
+                    .diag_error("unexpected end of file")
                     .primary_label_opt(cur_span, "")
                     .emit();
             }
             _ => {
                 let cur_span = self.span();
-                self.sess
-                    .diag
-                    .error("syntax error")
+                self.compiler
+                    .diag_error("syntax error")
                     .primary_label_opt(cur_span, "")
                     .emit();
                 // forward progress bump
@@ -919,9 +920,8 @@ impl<'a> Parser<'a> {
             match self.next_ensure_progress(&mut progress) {
                 Some(x) if x == end => {
                     if trailing_sep && !allow_trailing {
-                        self.sess
-                            .diag
-                            .error("trailing separator not allowed here")
+                        self.compiler
+                            .diag_error("trailing separator not allowed here")
                             .primary_label_opt(last_sep_span, "")
                             .emit()
                     }
@@ -936,9 +936,8 @@ impl<'a> Parser<'a> {
                 Some(x) if x == end => {
                     if item_count == 1 && tuple_rule {
                         // should end with a comma
-                        self.sess
-                            .diag
-                            .error("single-element tuple types should have a trailing `,`")
+                        self.compiler
+                            .diag_error("single-element tuple types should have a trailing `,`")
                             .primary_label_opt(last_sep_span, "")
                             .emit()
                     }
@@ -951,9 +950,8 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let span = self.span();
-                    self.sess
-                        .diag
-                        .error("syntax error (TODO)")
+                    self.compiler
+                        .diag_error("syntax error (TODO)")
                         .primary_label_opt(span, "")
                         .emit();
                     trailing_sep = false;
@@ -1016,9 +1014,8 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let span = self.span();
-                self.sess
-                    .diag
-                    .error("expected boolean, integer, float or string literal")
+                self.compiler
+                    .diag_error("expected boolean, integer, float or string literal")
                     .primary_label_opt(span, "")
                     .emit();
                 self.eat();
@@ -1079,7 +1076,10 @@ impl<'a> Parser<'a> {
             }*/
             _ => {
                 let span = self.span();
-                self.sess.diag.error("syntax error").primary_label_opt(span, "").emit();
+                self.compiler
+                    .diag_error("syntax error")
+                    .primary_label_opt(span, "")
+                    .emit();
                 self.eat();
             }
         }
@@ -1131,7 +1131,10 @@ impl<'a> Parser<'a> {
             Some(_) => self.parse_expr_stmt(),
             _ => {
                 let loc = self.span();
-                self.sess.diag.error("syntax error").primary_label_opt(loc, "").emit()
+                self.compiler
+                    .diag_error("syntax error")
+                    .primary_label_opt(loc, "")
+                    .emit()
             }
         }
     }
@@ -1274,9 +1277,8 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let span = self.span();
-                    self.sess
-                        .diag
-                        .error("syntax error (TODO)")
+                    self.compiler
+                        .diag_error("syntax error (TODO)")
                         .primary_label_opt(span, "")
                         .emit();
                 }

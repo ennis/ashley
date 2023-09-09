@@ -1,13 +1,9 @@
-// TODO move this out of `transform`
-use crate::{
-    hir::{
-        types::{ImageSampling, ImageType, ScalarType},
-        Block, Constant, ConstantData, Decoration, EntryPoint, ExtInstSet, Function, GlobalVariable, IdRef, Local,
-        Module, Operand, TerminatingInstruction, Type, TypeData, Value,
-    },
-    utils::IdMap,
+use crate::hir::{
+    id_map::IdMap,
+    types::{ImageSampling, ImageType, ScalarType},
+    Block, Constant, ConstantData, Decoration, EntryPoint, ExtInstSet, Function, GlobalVariable, IdRef, Module,
+    Operand, TerminatingInstruction, Type, TypeData, Value,
 };
-use ashley::hir::types::InterpolationKind;
 use rspirv::{
     binary::Assemble,
     dr,
@@ -17,6 +13,8 @@ use rspirv::{
 };
 use spirv::StorageClass;
 use tracing::error;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 type ExtInstSetMap = IdMap<ExtInstSet, Word>;
 type TypeMap = IdMap<Type, Word>;
@@ -317,7 +315,7 @@ impl<'a> Ctxt<'a> {
             self.builder.select_block(Some(ib)).unwrap();
             if ib == 0 {
                 // entry block, add local variables
-                for (local, ldata) in fdata.locals.iter() {
+                for (_local, ldata) in fdata.locals.iter() {
                     let local_ty = fdata.values[ldata.value].ty;
                     let ty = self.emit_type_recursive(local_ty);
                     //let ptr_ty = self.builder.type_pointer(None, StorageClass::Function, ty);
@@ -369,9 +367,9 @@ impl<'a> Ctxt<'a> {
                             .unwrap();
                     }
                     TerminatingInstruction::Switch {
-                        selector,
-                        target,
-                        default,
+                        selector: _,
+                        target: _,
+                        default: _,
                     } => {
                         todo!("switch")
                     }

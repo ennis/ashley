@@ -1,9 +1,8 @@
 use crate::{
-    diagnostic::{AsSourceLocation, SourceId, SourceLocation},
+    diagnostic::{AsSourceLocation, SourceLocation},
     syntax::{Lang, SyntaxKind, SyntaxNode, SyntaxToken},
     tast, T,
 };
-use rowan::Language;
 use std::num::{ParseFloatError, ParseIntError};
 
 pub use rowan::ast::{AstNode, AstPtr};
@@ -226,12 +225,6 @@ macro_rules! impl_ast_variant_node {
             }
         }
     };
-}
-
-#[derive(Debug, Clone)]
-pub struct Root {
-    pub source_id: SourceId,
-    pub module: Module,
 }
 
 impl_ast_token!(Ident<IDENT>);
@@ -645,7 +638,7 @@ impl Visibility {
 #[cfg(test)]
 mod tests {
     use crate::{
-        session::{PackageName, Session},
+        session::{ModuleName, Session},
         syntax::ast::{Item, Module},
     };
     use codespan_reporting::{
@@ -655,7 +648,7 @@ mod tests {
 
     fn parse_module(text: &str) -> Module {
         let mut session = Session::new();
-        let package = session.create_source_package(PackageName::new("<input>"), "<input>", text);
+        let package = session.create_source_package(ModuleName::new("<input>"), "<input>", text);
         session.get_ast(package).module
     }
 

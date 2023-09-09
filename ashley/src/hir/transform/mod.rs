@@ -1,22 +1,22 @@
-mod emit_spirv;
+//! HIR transformations
 mod link;
 
 use crate::{
-    diagnostic::Diagnostics,
     hir,
     hir::{
-        types::{Field, MemoryInterfaceLayout, StructType},
-        Decoration, GlobalVariable, GlobalVariableData, InstructionData, Layout, Module, Operand, StructLayout, Type,
-        TypeData, ValueData,
+        types::{Field, StructType},
+        Decoration, GlobalVariable, GlobalVariableData, InstructionData, Operand, StructLayout, Type, TypeData,
+        ValueData,
     },
-    tast, utils,
+    session::CompilerDb,
+    utils,
 };
 use ::spirv::StorageClass;
 use smallvec::smallvec;
 use spirv::Op;
 use std::mem;
 
-pub use self::{emit_spirv::write_spirv, link::link_module_pipeline};
+pub use self::link::link_module_pipeline;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ShaderInterfaceTransformError {
@@ -58,7 +58,7 @@ struct InterfaceItem {
 
 pub struct ShaderInterfaceTransform<'a> {
     hir: &'a mut hir::Module,
-    diag: &'a mut Diagnostics,
+    compiler: &'a dyn CompilerDb,
     interface: Vec<InterfaceItem>,
 }
 
@@ -135,10 +135,10 @@ fn rewrite_uniform_access(
 }
 
 impl<'a> ShaderInterfaceTransform<'a> {
-    pub fn new(hir: &'a mut hir::Module, diag: &'a mut Diagnostics) -> ShaderInterfaceTransform<'a> {
+    pub fn new(hir: &'a mut hir::Module, compiler: &'a dyn CompilerDb) -> ShaderInterfaceTransform<'a> {
         ShaderInterfaceTransform {
             hir,
-            diag,
+            compiler,
             interface: vec![],
         }
     }
@@ -206,7 +206,7 @@ impl<'a> ShaderInterfaceTransform<'a> {
                         let global_ty_dbg = self.hir.debug_type(global.ty);
                         let field_name = field.name.as_deref().unwrap_or("<unnamed>");
                         let global_name = &global.name;
-                        self.diag.error(format!("type mismatch: shader expects `{global_ty_dbg:?} {global_name}` but the application provides `{field_ty_dbg:?} {field_name}`"))
+                        self.compiler.diag_error(format!("type mismatch: shader expects `{global_ty_dbg:?} {global_name}` but the application provides `{field_ty_dbg:?} {field_name}`"))
                             .primary_label_opt(global.source_location, "").emit();
                     } else {
                         global_to_field.push((global_id, field_index as i32));

@@ -2,7 +2,7 @@ use ashley::{
     hir,
     hir::TypeData,
     tast::{lower_to_hir, Module},
-    Session,
+    Compiler, CompilerDb, ModuleName,
 };
 use spirv::StorageClass;
 use spirv_tools::{
@@ -110,20 +110,20 @@ fn print_interface(hir: &hir::Module) {
 
 fn test_lower_one(path: &Path) {
     let source: Arc<str> = fs::read_to_string(path).unwrap().into();
-    let mut sess = Session::new();
+    let mut compiler = Compiler::new();
 
     let file_stem = path.file_stem().unwrap().to_str().unwrap();
     let file_name = path.file_name().unwrap().to_str().unwrap();
 
     // 0. parse
-    let pkg = sess.create_source_package(file_stem, file_name, &source);
+    let (pkg, _) = compiler.create_source_module(ModuleName::from(file_stem), file_name, &source);
 
     // 2. lower to HIR
-    let hir = lower_to_hir(&mut sess, pkg).expect("failed to create hir");
+    let hir = lower_to_hir(&compiler, pkg).expect("failed to create hir");
     print_interface(&hir);
 
     // 3. emit SPIR-V bytecode
-    let spv_bytecode = ashley::hir::transform::write_spirv(&hir);
+    let spv_bytecode = hir::write_spirv(&hir);
     validate_spirv(file_stem, &spv_bytecode);
 
     // 4. load bytecode with rspirv and disassemble

@@ -1,5 +1,4 @@
 use crate::{
-    diagnostic::SourceLocation,
     hir::{Module, StructLayout, Type},
     utils::write_list,
 };
@@ -420,7 +419,7 @@ impl<'a> fmt::Debug for TypeDataDebug<'a> {
                     ScalarType::Double => "dmat",
                     _ => panic!("invalid matrix type"),
                 };
-                write!(f, "{prefix}{columns}x{rows}")?;
+                write!(f, "{prefix}{columns}x{rows} stride({stride})")?;
             }
             TypeData::Array {
                 element_type,

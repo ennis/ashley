@@ -1,0 +1,11 @@
+[package]
+name = "ashley-db"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+memo-map = "0.3.2"
+dashmap = "5.4.0"
+ashley-data-structures = { path = "../ashley-data-structures" }

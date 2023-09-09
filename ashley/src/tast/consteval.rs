@@ -1,4 +1,4 @@
-use crate::{diagnostic::Diagnostics, syntax::ast};
+use crate::{session::CompilerDb, syntax::ast};
 use ordered_float::OrderedFloat;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -8,14 +8,10 @@ pub enum ConstantValue {
     Bool(bool),
 }
 
-pub(crate) fn try_evaluate_constant_expression(
-    expr: &ast::Expr,
-    //_module: &Module,
-    diag: &mut Diagnostics,
-) -> Option<ConstantValue> {
+pub(crate) fn try_evaluate_constant_expression(compiler: &dyn CompilerDb, expr: &ast::Expr) -> Option<ConstantValue> {
     match expr {
         ast::Expr::LitExpr(lit) => match lit.kind() {
-            ast::LiteralKind::String(s) => {
+            ast::LiteralKind::String(_s) => {
                 // TODO
                 None
             }
@@ -26,7 +22,8 @@ pub(crate) fn try_evaluate_constant_expression(
                         match i.try_into() {
                             Ok(i) => Some(ConstantValue::Int(i)),
                             Err(err) => {
-                                diag.error(format!("error parsing integer: {err}"))
+                                compiler
+                                    .diag_error(format!("error parsing integer: {err}"))
                                     .primary_label(&v, "")
                                     .emit();
                                 return None;
@@ -34,7 +31,10 @@ pub(crate) fn try_evaluate_constant_expression(
                         }
                     }
                     Err(err) => {
-                        diag.error(format!("error parsing integer: {err}")).location(&v).emit();
+                        compiler
+                            .diag_error(format!("error parsing integer: {err}"))
+                            .location(&v)
+                            .emit();
                         return None;
                     }
                 }
@@ -42,7 +42,8 @@ pub(crate) fn try_evaluate_constant_expression(
             ast::LiteralKind::FloatNumber(v) => match v.value() {
                 Ok(f) => Some(ConstantValue::Float(OrderedFloat::from(f as f32))),
                 Err(err) => {
-                    diag.error(format!("error parsing floating-point number: {err}"))
+                    compiler
+                        .diag_error(format!("error parsing floating-point number: {err}"))
                         .location(v)
                         .emit();
                     return None;

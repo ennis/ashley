@@ -1,7 +1,10 @@
 use ashley::{
-    hir::transform::{write_spirv, ShaderInterfaceTransform, ShaderInterfaceTransformError},
+    hir::{
+        transform::{ShaderInterfaceTransform, ShaderInterfaceTransformError},
+        write_spirv,
+    },
     utils::{MemoryLayout, Std140Int, Std140Vec4},
-    QueryError, Session,
+    Compiler, CompilerDb, ModuleName, QueryError,
 };
 use spirv_tools::{
     assembler::{Assembler, DisassembleOptions},
@@ -331,8 +334,8 @@ impl WgpuState {
         let stem = file_path.file_stem().unwrap().to_str().unwrap();
 
         // create session
-        let mut sess = Session::new();
-        let pkg = sess.create_source_package(stem, file_path.to_str().unwrap(), &src);
+        let mut sess = Compiler::new();
+        let (pkg, _) = sess.create_source_module(ModuleName::from(stem), file_path.to_str().unwrap(), &src);
 
         let mut hir = match sess.compile_to_hir(pkg) {
             Ok(spv) => spv,
@@ -342,7 +345,7 @@ impl WgpuState {
             }
         };
 
-        let mut sit = ShaderInterfaceTransform::new(&mut hir, &mut sess.diag);
+        let mut sit = ShaderInterfaceTransform::new(&mut hir, &sess);
         if let Err(err) = sit.provide_uniform_buffer_as_type::<Uniforms>(0, 0) {
             warn!("failed to remap uniforms for {file_path:?} ({err}), see standard output for errors");
             return;

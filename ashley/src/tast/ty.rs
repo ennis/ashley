@@ -1,27 +1,22 @@
 use crate::{
-    diagnostic::{AsSourceLocation, Diagnostics, SourceLocation},
     hir,
     hir::Interpolation,
-    syntax::{ast, ast::TypeQualifier, SyntaxNode},
+    session::CompilerDb,
+    syntax::{ast, ast::TypeQualifier},
     tast::{
-        attributes::{KnownAttribute, KnownAttributeKind},
         consteval::{try_evaluate_constant_expression, ConstantValue},
         def::DefKind,
-        layout::{std_array_stride, LayoutError, StdLayoutRules::Std430},
+        layout::{std_array_stride, StdLayoutRules::Std430},
         scope::{resolve_name, Res, Scope},
         DefId,
     },
-    utils::round_up,
-    Session,
 };
 pub use hir::types::{ImageSampling, ImageType};
 use spirv::Dim;
 use std::{
-    collections::HashSet,
     fmt,
     fmt::Display,
     hash::{Hash, Hasher},
-    num::{ParseIntError, TryFromIntError},
     ops::Deref,
     ptr,
     sync::Arc,
@@ -284,7 +279,7 @@ impl fmt::Display for TypeKind {
                 storage_class,
             } => {
                 // TODO: display storage class
-                write!(f, "ptr to {}", pointee_type)
+                write!(f, "pointer({storage_class:?}) to {pointee_type}")
             }
             TypeKind::Function(fty) => {
                 // TODO use C syntax
@@ -406,32 +401,34 @@ impl TypeKind {
 }
 
 /// Converts an AST type to a TAST type.
-pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) -> Type {
+pub(crate) fn convert_type(ty: ast::Type, compiler: &dyn CompilerDb, scopes: &[Scope]) -> Type {
+    let tyctxt = compiler.tyctxt();
+
     match ty {
         ast::Type::TypeRef(tyref) => {
-            let Some(ident) = tyref.ident() else { return sess.tyctxt.error.clone(); };
-            if let Some(res) = resolve_name(&sess.tyctxt, ident.text(), scopes) {
+            let Some(ident) = tyref.ident() else { return tyctxt.error.clone(); };
+            if let Some(res) = resolve_name(tyctxt, ident.text(), scopes) {
                 match res {
                     Res::Global(def_id) => {
-                        let def = sess.pkgs.def(def_id);
+                        let def = compiler.definition(def_id);
                         match def.kind {
                             DefKind::Struct(ref struct_def) => struct_def.ty.clone(),
                             _ => {
-                                sess.diag.error("expected a type").location(ident).emit();
-                                sess.tyctxt.error.clone()
+                                compiler.diag_error("expected a type").location(ident).emit();
+                                tyctxt.error.clone()
                             }
                         }
                     }
                     Res::PrimTy(ty) => ty,
                     _ => {
-                        sess.diag.error("expected a type").location(ident).emit();
-                        sess.tyctxt.error.clone()
+                        compiler.diag_error("expected a type").location(ident).emit();
+                        tyctxt.error.clone()
                     }
                 }
             } else {
                 // TODO better error message
-                sess.diag.error("expected a type").location(ident).emit();
-                sess.tyctxt.error.clone()
+                compiler.diag_error("expected a type").location(ident).emit();
+                tyctxt.error.clone()
             }
         }
         ast::Type::TupleType(_tuple_ty) => {
@@ -455,8 +452,8 @@ pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) 
         ast::Type::ArrayType(ref array_type) => {
             let element_type = array_type
                 .element_type()
-                .map(|ty| convert_type(ty, sess, scopes))
-                .unwrap_or_else(|| sess.tyctxt.error.clone());
+                .map(|ty| convert_type(ty, compiler, scopes))
+                .unwrap_or_else(|| tyctxt.error.clone());
 
             let mut stride = None;
 
@@ -470,26 +467,29 @@ pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) 
                                 Ok(v) => match u32::try_from(v) {
                                     Ok(v) => stride = Some(v),
                                     Err(err) => {
-                                        sess.diag.error(format!("invalid stride: {err}")).location(&qual).emit();
+                                        compiler
+                                            .diag_error(format!("invalid stride: {err}"))
+                                            .location(&qual)
+                                            .emit();
                                     }
                                 },
                                 Err(err) => {
-                                    sess.diag.bug(format!("syntax error: {err}")).location(&qual).emit();
+                                    compiler.diag_bug(format!("syntax error: {err}")).location(&qual).emit();
                                 }
                             }
                         } else {
-                            sess.diag.bug(format!("syntax error")).location(&qual).emit();
+                            compiler.diag_bug(format!("syntax error")).location(&qual).emit();
                         }
                     }
                     TypeQualifier::RowMajorQualifier(_) => {
-                        sess.diag
-                            .warn(format!("unimplemented: row_major qualifier"))
+                        compiler
+                            .diag_warn(format!("unimplemented: row_major qualifier"))
                             .location(&qual)
                             .emit();
                     }
                     TypeQualifier::ColumnMajorQualifier(_) => {
-                        sess.diag
-                            .warn(format!("unimplemented: column_major qualifier"))
+                        compiler
+                            .diag_warn(format!("unimplemented: column_major qualifier"))
                             .location(&qual)
                             .emit();
                     }
@@ -498,7 +498,7 @@ pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) 
 
             // compute stride
             if !element_type.is_opaque() {
-                match std_array_stride(&element_type, stride, Std430, Some(ty.clone()), &mut sess.diag) {
+                match std_array_stride(compiler, &element_type, stride, Std430, Some(ty.clone())) {
                     Ok(s) => {
                         stride = Some(s);
                     }
@@ -510,45 +510,51 @@ pub(crate) fn convert_type(ty: ast::Type, sess: &mut Session, scopes: &[Scope]) 
             }
 
             if let Some(expr) = array_type.length() {
-                if let Some(size) = try_evaluate_constant_expression(&expr, &mut sess.diag) {
+                if let Some(size) = try_evaluate_constant_expression(compiler, &expr) {
                     match size {
                         ConstantValue::Int(size) => {
                             // TODO validate array length
                             match u32::try_from(size) {
-                                Ok(size) => sess.tyctxt.ty(TypeKind::Array {
+                                Ok(size) => tyctxt.ty(TypeKind::Array {
                                     element_type,
                                     size,
                                     stride,
                                 }),
                                 Err(err) => {
-                                    sess.diag
-                                        .error(format!("invalid array length: {err}"))
+                                    compiler
+                                        .diag_error(format!("invalid array length: {err}"))
                                         .location(expr)
                                         .emit();
-                                    sess.tyctxt.error.clone()
+                                    tyctxt.error.clone()
                                 }
                             }
                         }
                         ConstantValue::Float(_) => {
-                            sess.diag.error("array length must be an integer").location(expr).emit();
-                            sess.tyctxt.error.clone()
+                            compiler
+                                .diag_error("array length must be an integer")
+                                .location(expr)
+                                .emit();
+                            tyctxt.error.clone()
                         }
                         ConstantValue::Bool(_) => {
-                            sess.diag.error("array length must be an integer").location(expr).emit();
-                            sess.tyctxt.error.clone()
+                            compiler
+                                .diag_error("array length must be an integer")
+                                .location(expr)
+                                .emit();
+                            tyctxt.error.clone()
                         }
                     }
                 } else {
                     // TODO better error message
-                    sess.diag
-                        .error("array length must be a constant expression")
+                    compiler
+                        .diag_error("array length must be a constant expression")
                         .location(expr)
                         .emit();
-                    sess.tyctxt.error.clone()
+                    tyctxt.error.clone()
                 }
             } else {
                 // no length
-                sess.tyctxt.ty(TypeKind::RuntimeArray { element_type, stride })
+                tyctxt.ty(TypeKind::RuntimeArray { element_type, stride })
             }
         }
         ast::Type::ClosureType(_closure_type) => {

@@ -1,21 +1,17 @@
 use crate::{
-    diagnostic::{AsSourceLocation, Diagnostics},
-    hir,
-    hir::{Interpolation, Layout},
+    diagnostic::AsSourceLocation,
+    hir::Interpolation,
+    session::Namespace,
     syntax::ast,
     tast,
     tast::{
         attributes::{check_attributes, AttributeTarget, KnownAttribute, KnownAttributeKind},
-        def::{DefKind, FunctionDef, FunctionParam, FunctionQualifiers, GlobalDef, StructDef},
-        layout::{
-            std_struct_layout,
-            StdLayoutRules::{Std140, Std430},
-        },
+        def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef},
+        layout::{std_struct_layout, StdLayoutRules::Std430},
         scope::{Res, Scope},
         ty::StructField,
-        Def, DefId, FunctionType, IdentExt, Type, TypeCheckItemCtxt, TypeKind, Visibility,
+        Def, DefId, FunctionType, IdentExt, TypeCheckItemCtxt, TypeKind, Visibility,
     },
-    utils::round_up,
 };
 use rowan::ast::AstPtr;
 
@@ -97,7 +93,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
             ast::Item::StructDef(struct_def) => {
                 self.define_struct(struct_def);
             }
-            ast::Item::ImportDecl(import_decl) => {
+            ast::Item::ImportDecl(_import_decl) => {
                 todo!("import declarations")
             }
         }
@@ -108,7 +104,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
         target: AttributeTarget,
         attrs: impl Iterator<Item = ast::Attribute>,
     ) -> Vec<KnownAttribute> {
-        check_attributes(&self.sess.custom_attributes, target, attrs, &mut self.sess.diag)
+        check_attributes(self.compiler, target, attrs)
     }
 
     fn typecheck_global_variable(&mut self, global: &ast::Global) -> Option<DefId> {
@@ -122,7 +118,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
         let ty = global
             .ty()
             .map(|ty| self.convert_type(ty))
-            .unwrap_or_else(|| self.sess.tyctxt.error.clone());
+            .unwrap_or_else(|| self.compiler.tyctxt().error.clone());
 
         //
         let external_linkage = visibility == tast::Visibility::Public || extern_;
@@ -159,7 +155,8 @@ impl<'a> TypeCheckItemCtxt<'a> {
             }),
         };
 
-        let def_id = DefId::new(self.package, self.module.defs.push(def));
+        let def_id = self.compiler.def_id(self.module, name.clone(), Namespace::Value);
+        self.typed_module.defs.insert(def_id, def);
         // TODO check for duplicate definitions
         self.scopes.last_mut().unwrap().add(name, Res::Global(def_id));
         Some(def_id)
@@ -186,7 +183,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
                 let ty = param
                     .ty()
                     .map(|ty| self.convert_type(ty))
-                    .unwrap_or_else(|| self.sess.tyctxt.error.clone());
+                    .unwrap_or_else(|| self.compiler.tyctxt().error.clone());
                 arg_types.push(ty.clone());
                 params.push(FunctionParam {
                     ast: Some(AstPtr::new(&param)),
@@ -200,7 +197,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
         let return_type = if let Some(return_type) = return_type {
             self.convert_type(return_type)
         } else {
-            self.sess.tyctxt.prim_tys.void.clone()
+            self.compiler.tyctxt().prim_tys.void.clone()
         };
 
         // process attributes
@@ -216,7 +213,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
         }
 
         // create function type
-        let func_type = self.sess.tyctxt.ty(TypeKind::Function(FunctionType {
+        let func_type = self.compiler.tyctxt().ty(TypeKind::Function(FunctionType {
             arg_types,
             return_type: return_type.clone(),
         }));
@@ -261,7 +258,8 @@ impl<'a> TypeCheckItemCtxt<'a> {
             }),
         };
         // TODO: check for duplicate definitions
-        let def_id = DefId::new(self.package, self.module.defs.push(def));
+        let def_id = self.compiler.def_id(self.module, name.clone(), Namespace::Value);
+        self.typed_module.defs.insert(def_id, def);
         self.scopes.last_mut().unwrap().add_function_overload(name, def_id);
         Some(def_id)
     }
@@ -277,7 +275,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
             let ty = field
                 .ty()
                 .map(|ty| self.convert_type(ty.clone()))
-                .unwrap_or_else(|| self.sess.tyctxt.error.clone());
+                .unwrap_or_else(|| self.compiler.tyctxt().error.clone());
 
             // process field attributes
             let attrs = self.check_attributes(AttributeTarget::MEMBER, field.attrs());
@@ -296,36 +294,36 @@ impl<'a> TypeCheckItemCtxt<'a> {
 
         // compute field offsets
         let offsets = match std_struct_layout(
+            self.compiler,
             &fields,
             // TODO attributes for std layouts
             Std430,
-            &mut self.sess.diag,
         ) {
             Ok((_layout, offsets)) => Some(offsets),
             Err(_err) => None, // error already reported by std_struct_layout
         };
 
-        // define the type before the struct (there's a circular reference)
-        let next_def_id = self.module.defs.next_id();
-        let ty = self.sess.tyctxt.ty(TypeKind::Struct {
+        let def_id = self.compiler.def_id(self.module, name.clone(), Namespace::Type);
+        let ty = self.compiler.tyctxt().ty(TypeKind::Struct {
             name: name.clone(),
-            def: Some(DefId::new(self.package, next_def_id)),
+            def: Some(def_id),
             fields,
             offsets,
         });
 
-        let def_id = self.module.defs.push(Def {
-            //package: None,
-            location: Some(struct_def.source_location()),
-            builtin: false,
-            name,
-            visibility,
-            kind: DefKind::Struct(StructDef {
-                ast: Some(AstPtr::new(struct_def)),
-                ty,
-            }),
-        });
-        assert_eq!(def_id, next_def_id);
-        DefId::new(self.package, def_id)
+        self.typed_module.defs.insert(
+            def_id,
+            Def {
+                location: Some(struct_def.source_location()),
+                builtin: false,
+                name,
+                visibility,
+                kind: DefKind::Struct(StructDef {
+                    ast: Some(AstPtr::new(struct_def)),
+                    ty,
+                }),
+            },
+        );
+        def_id
     }
 }

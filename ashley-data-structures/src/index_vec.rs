@@ -11,8 +11,8 @@ use std::{
 
 /// A trait for a type that is equivalent to an index.
 pub trait Idx: Copy + Clone + Eq + PartialEq + Hash + Ord + PartialOrd {
-    fn index(&self) -> usize;
-    fn from_index(index: usize) -> Self;
+    fn to_usize(&self) -> usize;
+    fn from_usize(index: usize) -> Self;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -76,11 +76,11 @@ impl<T> Hash for Id<T> {
 }
 
 impl<T> Idx for Id<T> {
-    fn index(&self) -> usize {
+    fn to_usize(&self) -> usize {
         self.index()
     }
 
-    fn from_index(index: usize) -> Self {
+    fn from_usize(index: usize) -> Self {
         Self::from_index(index)
     }
 }
@@ -91,6 +91,7 @@ impl<T> Idx for Id<T> {
 /// and is usable as an index for `IndexVec`.
 ///
 /// It also derives `From<u32>` and `From<usize>` implementations.
+/// It also implements `Default`, which returns index 0.
 ///
 /// # Example
 ///```
@@ -101,28 +102,28 @@ impl<T> Idx for Id<T> {
 #[macro_export]
 macro_rules! new_index {
     ($(#[$m:meta])* $v:vis struct $name:ident;) => {
-        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+        #[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
         #[repr(transparent)]
-        $(#[$m])* $v struct $name(u32);
+        $(#[$m])* $v struct $name(pub u32);
 
-        impl $crate::utils::Idx for $name {
-            fn index(&self) -> usize {
+        impl $crate::Idx for $name {
+            fn to_usize(&self) -> usize {
                 self.0 as usize
             }
-            fn from_index(index: usize) -> Self {
+            fn from_usize(index: usize) -> Self {
                 $name(index as u32)
             }
         }
 
         impl From<usize> for $name {
             fn from(v: usize) -> $name {
-                <$name as $crate::utils::Idx>::from_index(v)
+                <$name as $crate::Idx>::from_usize(v)
             }
         }
 
         impl From<u32> for $name {
             fn from(v: u32) -> $name {
-                <$name as $crate::utils::Idx>::from_index(v as usize)
+                <$name as $crate::Idx>::from_usize(v as usize)
             }
         }
     };
@@ -131,7 +132,7 @@ macro_rules! new_index {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Vector with strongly-typed indices.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct IndexVec<T, I = Id<T>> {
     items: Vec<T>,
     _phantom: PhantomData<fn() -> I>,
@@ -157,7 +158,7 @@ impl<T, I: Idx> IndexVec<T, I> {
     /// Inserts an item and returns its ID.
     pub fn push(&mut self, item: T) -> I {
         self.items.push(item);
-        I::from_index(self.items.len() - 1)
+        I::from_usize(self.items.len() - 1)
     }
 
     /// Resizes the vector.
@@ -170,7 +171,7 @@ impl<T, I: Idx> IndexVec<T, I> {
 
     /// Returns the index of the next item to be inserted.
     pub fn next_id(&self) -> I {
-        I::from_index(self.items.len())
+        I::from_usize(self.items.len())
     }
 
     /// Returns the last item in the vector.
@@ -185,7 +186,7 @@ impl<T, I: Idx> IndexVec<T, I> {
 
     /// Returns an iterator over the items and their IDs.
     pub fn iter_full(&self) -> impl Iterator<Item = (I, &T)> + '_ {
-        self.items.iter().enumerate().map(|(i, v)| (I::from_index(i), v))
+        self.items.iter().enumerate().map(|(i, v)| (I::from_usize(i), v))
     }
 
     /// Length of the vector.
@@ -195,12 +196,12 @@ impl<T, I: Idx> IndexVec<T, I> {
 
     /// Returns the element at the given index.
     pub fn get(&self, id: I) -> Option<&T> {
-        self.items.get(id.index())
+        self.items.get(id.to_usize())
     }
 
     /// Returns a mutable reference to the element at the given index.
     pub fn get_mut(&mut self, id: I) -> Option<&mut T> {
-        self.items.get_mut(id.index())
+        self.items.get_mut(id.to_usize())
     }
 }
 
@@ -208,13 +209,13 @@ impl<T, I: Idx> Index<I> for IndexVec<T, I> {
     type Output = T;
 
     fn index(&self, id: I) -> &Self::Output {
-        &self.items[id.index()]
+        &self.items[id.to_usize()]
     }
 }
 
 impl<T, I: Idx> IndexMut<I> for IndexVec<T, I> {
     fn index_mut(&mut self, id: I) -> &mut Self::Output {
-        &mut self.items[id.index()]
+        &mut self.items[id.to_usize()]
     }
 }
 
@@ -242,7 +243,7 @@ impl<I: Idx, V> IndexVecMap<I, V> {
     ///
     /// Returns the previous value if any.
     pub fn insert(&mut self, id: I, item: V) -> Option<V> {
-        let index = id.index();
+        let index = id.to_usize();
         if index >= self.items.len() {
             self.items.resize_with(index + 1, || None);
         }
@@ -251,7 +252,7 @@ impl<I: Idx, V> IndexVecMap<I, V> {
 
     /// Removes an element from the map.
     pub fn remove(&mut self, id: I) -> Option<V> {
-        let index = id.index();
+        let index = id.to_usize();
         if index < self.items.len() {
             self.items[index].take()
         } else {
@@ -261,7 +262,7 @@ impl<I: Idx, V> IndexVecMap<I, V> {
 
     /// Returns the element at the given index.
     pub fn get(&self, id: I) -> Option<&V> {
-        let index = id.index();
+        let index = id.to_usize();
         if index < self.items.len() {
             self.items[index].as_ref()
         } else {
@@ -271,7 +272,7 @@ impl<I: Idx, V> IndexVecMap<I, V> {
 
     /// Returns a mutable reference to the element at the given index.
     pub fn get_mut(&mut self, id: I) -> Option<&mut V> {
-        let index = id.index();
+        let index = id.to_usize();
         if index < self.items.len() {
             self.items[index].as_mut()
         } else {
@@ -284,7 +285,7 @@ impl<I: Idx, V> IndexVecMap<I, V> {
         self.items
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| v.as_ref().map(|v| (I::from_index(i), v)))
+            .filter_map(|(i, v)| v.as_ref().map(|v| (I::from_usize(i), v)))
     }
 
     /// Returns a mutable iterator over the items.
@@ -292,7 +293,7 @@ impl<I: Idx, V> IndexVecMap<I, V> {
         self.items
             .iter_mut()
             .enumerate()
-            .filter_map(|(i, v)| v.as_mut().map(|v| (I::from_index(i), v)))
+            .filter_map(|(i, v)| v.as_mut().map(|v| (I::from_usize(i), v)))
     }
 }
 
@@ -375,7 +376,7 @@ impl<K, V, I: Idx> IndexMap<K, V, I> {
         Q: Eq + Hash + ?Sized,
     {
         let (i, k, v) = self.map.get_full(key)?;
-        Some((I::from_index(i), k, v))
+        Some((I::from_usize(i), k, v))
     }
 
     pub fn get_full_mut<Q>(&mut self, key: &Q) -> Option<(I, &K, &mut V)>
@@ -384,7 +385,7 @@ impl<K, V, I: Idx> IndexMap<K, V, I> {
         Q: Eq + Hash + ?Sized,
     {
         let (i, k, v) = self.map.get_full_mut(key)?;
-        Some((I::from_index(i), k, v))
+        Some((I::from_usize(i), k, v))
     }
 }
 
@@ -419,13 +420,13 @@ impl<K, V, I: Idx> Index<I> for IndexMap<K, V, I> {
     type Output = V;
 
     fn index(&self, id: I) -> &V {
-        self.map.get_index(id.index()).unwrap().1
+        self.map.get_index(id.to_usize()).unwrap().1
     }
 }
 
 /// Indexing with the index
 impl<K, V, I: Idx> IndexMut<I> for IndexMap<K, V, I> {
     fn index_mut(&mut self, id: I) -> &mut V {
-        self.map.get_index_mut(id.index()).unwrap().1
+        self.map.get_index_mut(id.to_usize()).unwrap().1
     }
 }

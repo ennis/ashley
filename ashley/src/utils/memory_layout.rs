@@ -1,6 +1,6 @@
 use crate::{
     hir,
-    hir::{types::ScalarType, ArrayLayout, InnerLayout, Module, Type, TypeData},
+    hir::{types::ScalarType, Module, Type, TypeData},
 };
 use std::mem;
 

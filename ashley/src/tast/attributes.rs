@@ -1,24 +1,18 @@
 //! Known attributes
 use crate::{
-    diagnostic::{AsSourceLocation, Diagnostics},
     hir,
-    hir::{Interpolation, InterpolationKind, InterpolationSampling},
-    session::AttributeRegistration,
+    hir::{InterpolationKind, InterpolationSampling},
+    session::CompilerDb,
     syntax::{
         ast,
-        ast::{AstNode, AttrItem, Expr, LiteralKind},
+        ast::{AstNode, AttrItem, LiteralKind},
         SyntaxNode,
     },
     tast::{layout::StdLayoutRules, ParseFrom},
     utils::write_list,
 };
-use bitflags::{bitflags, Flags};
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Write,
-    marker::PhantomData,
-    num::ParseIntError,
-};
+use bitflags::bitflags;
+use std::{collections::HashSet, fmt::Write, marker::PhantomData};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -35,23 +29,23 @@ pub enum AttrParseError {
 }
 
 impl<T: ParseFrom<AttrItem>> ParseFrom<Option<AttrItem>> for Option<T> {
-    fn parse_from(value: Option<AttrItem>, diag: &mut Diagnostics) -> Result<Self, ()> {
+    fn parse_from(value: Option<AttrItem>, compiler: &dyn CompilerDb) -> Result<Self, ()> {
         match value {
             None => Ok(None),
-            Some(item) => T::parse_from(item, diag).map(Some),
+            Some(item) => T::parse_from(item, compiler).map(Some),
         }
     }
 }
 
 impl<T: ParseFrom<AttrItem>> ParseFrom<Option<AttrItem>> for T {
-    fn parse_from(value: Option<AttrItem>, diag: &mut Diagnostics) -> Result<Self, ()> {
+    fn parse_from(value: Option<AttrItem>, compiler: &dyn CompilerDb) -> Result<Self, ()> {
         match value {
             None => {
                 // FIXME this is not the right place for emitting this diagnostic since we have no location
-                diag.error("missing attribute parameter").emit();
+                compiler.diag_error("missing attribute parameter").emit();
                 return Err(());
             }
-            Some(item) => T::parse_from(item, diag),
+            Some(item) => T::parse_from(item, compiler),
         }
     }
 }
@@ -86,21 +80,21 @@ pub trait Attribute: ParseFrom<ast::Attribute> {}
 pub(crate) trait AttributeChecker {
     //fn name(&self) -> &str;
     //fn targets(&self) -> AttributeTarget;
-    fn check(&self, ast: &ast::Attribute, diag: &mut Diagnostics) -> Result<(), ()>;
+    fn check(&self, ast: &ast::Attribute, compiler: &dyn CompilerDb) -> Result<(), ()>;
 }
 
 pub(crate) struct AttributeCheckerImpl<T: Attribute>(pub(crate) PhantomData<fn() -> T>);
 
 impl<T: Attribute> AttributeChecker for AttributeCheckerImpl<T> {
-    fn check(&self, ast: &ast::Attribute, diag: &mut Diagnostics) -> Result<(), ()> {
-        T::parse_from(ast.clone(), diag).map(|_| ())
+    fn check(&self, ast: &ast::Attribute, compiler: &dyn CompilerDb) -> Result<(), ()> {
+        T::parse_from(ast.clone(), compiler).map(|_| ())
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 impl ParseFrom<AttrItem> for StdLayoutRules {
-    fn parse_from(item: ast::AttrItem, diag: &mut Diagnostics) -> Result<Self, ()> {
+    fn parse_from(item: ast::AttrItem, _compiler: &dyn CompilerDb) -> Result<Self, ()> {
         match item {
             AttrItem::AttrIdent(ident) => {
                 let ident = ident.ident().ok_or(())?;
@@ -116,7 +110,7 @@ impl ParseFrom<AttrItem> for StdLayoutRules {
 }
 
 impl ParseFrom<AttrItem> for InterpolationKind {
-    fn parse_from(item: ast::AttrItem, diag: &mut Diagnostics) -> Result<Self, ()> {
+    fn parse_from(item: ast::AttrItem, _compiler: &dyn CompilerDb) -> Result<Self, ()> {
         match item {
             AttrItem::AttrIdent(ident) => {
                 let ident = ident.ident().ok_or(())?;
@@ -133,7 +127,7 @@ impl ParseFrom<AttrItem> for InterpolationKind {
 }
 
 impl ParseFrom<AttrItem> for InterpolationSampling {
-    fn parse_from(item: AttrItem, diag: &mut Diagnostics) -> Result<Self, ()> {
+    fn parse_from(item: AttrItem, _compiler: &dyn CompilerDb) -> Result<Self, ()> {
         match item {
             AttrItem::AttrIdent(ident) => {
                 let ident = ident.ident().ok_or(())?;
@@ -151,7 +145,8 @@ impl ParseFrom<AttrItem> for InterpolationSampling {
 
 /// Parse u32 from attribute argument.
 impl ParseFrom<AttrItem> for u32 {
-    fn parse_from(item: AttrItem, diag: &mut Diagnostics) -> Result<Self, ()> {
+    fn parse_from(item: AttrItem, compiler: &dyn CompilerDb) -> Result<Self, ()> {
+        // FIXME: the rightward drift is atrocious, why so many fallible operations?
         match item {
             AttrItem::AttrLiteral(lit) => match lit.expr() {
                 Some(lit) => match lit.kind() {
@@ -159,29 +154,30 @@ impl ParseFrom<AttrItem> for u32 {
                         Ok(value) => match u32::try_from(value) {
                             Ok(value) => Ok(value),
                             Err(err) => {
-                                diag.error(format!("invalid integer constant: {err}"))
+                                compiler
+                                    .diag_error(format!("invalid integer constant: {err}"))
                                     .location(lit)
                                     .emit();
                                 Err(())
                             }
                         },
-                        Err(err) => {
-                            diag.error("invalid integer constant").location(lit).emit();
+                        Err(_err) => {
+                            compiler.diag_error("invalid integer constant").location(lit).emit();
                             Err(())
                         }
                     },
                     _ => {
-                        diag.error("expected integer literal").location(lit).emit();
+                        compiler.diag_error("expected integer literal").location(lit).emit();
                         Err(())
                     }
                 },
                 _ => {
-                    diag.bug("expected integer literal").location(lit).emit();
+                    compiler.diag_bug("expected integer literal").location(lit).emit();
                     Err(())
                 }
             },
             _ => {
-                diag.error("syntax error").location(item).emit();
+                compiler.diag_error("syntax error").location(item).emit();
                 Err(())
             }
         }
@@ -197,10 +193,10 @@ macro_rules! define_attribute {
         $v struct $struct_name { $($param_vis $param_name: $param_ty),* }
 
         impl ParseFrom<ast::Attribute> for $struct_name {
-            fn parse_from(attr: ast::Attribute, diag: &mut Diagnostics) -> Result<Self, ()> {
+            fn parse_from(attr: ast::Attribute, compiler: &dyn CompilerDb) -> Result<Self, ()> {
                 let attr_name = std::stringify!($struct_name);
                 /*if attr.name().ok_or(AttrParseError::SyntaxError)?.text() != attr_name {
-                    diag.error(format!("expected `@{}` attribute", attr_name))
+                    compiler.diag_error(format!("expected `@{}` attribute", attr_name))
                         .location(attr)
                         .emit();
                     return Err(AttrParseError::SyntaxError);
@@ -208,9 +204,9 @@ macro_rules! define_attribute {
 
                 let mut args = attr.args().into_iter().map(|args| args.args()).flatten();
 
-                $(let $param_name : $param_ty = ParseFrom::parse_from(args.next(), diag)?;)*
+                $(let $param_name : $param_ty = ParseFrom::parse_from(args.next(), compiler)?;)*
                 if let Some(arg) = args.next() {
-                    diag.error(format!("extra arguments on `@{}` attribute", attr_name))
+                    compiler.diag_error(format!("extra arguments on `@{}` attribute", attr_name))
                         .location(arg)
                         .emit();
                     return Err(());
@@ -239,7 +235,7 @@ pub enum KnownAttributeKind {
 }
 
 fn diag_attribute_invalid_for_target(
-    diag: &mut Diagnostics,
+    compiler: &dyn CompilerDb,
     name: &str,
     attr: &ast::Attribute,
     target: AttributeTarget,
@@ -280,7 +276,8 @@ fn diag_attribute_invalid_for_target(
          write!(valid_targets_desc, "{}", t).unwrap();
     });
 
-    diag.error(format!("attribute `{name}` cannot be used on {target_desc}"))
+    compiler
+        .diag_error(format!("attribute `{name}` cannot be used on {target_desc}"))
         .location(&attr)
         .note(format!(
             "attribute can be used on the following targets: {valid_targets_desc}"
@@ -288,41 +285,48 @@ fn diag_attribute_invalid_for_target(
         .emit()
 }
 
-fn diag_attribute_appears_more_than_once(diag: &mut Diagnostics, name: &str, attr: &ast::Attribute) {
-    diag.error(format!("attribute `{name}` appears more than once"))
+fn diag_attribute_appears_more_than_once(compiler: &dyn CompilerDb, name: &str, attr: &ast::Attribute) {
+    compiler
+        .diag_error(format!("attribute `{name}` appears more than once"))
         .location(&attr)
         .emit()
 }
 
-fn diag_attribute_mutually_exclusive_conflict(diag: &mut Diagnostics, name: &str, other: &str, attr: &ast::Attribute) {
+fn diag_attribute_mutually_exclusive_conflict(
+    compiler: &dyn CompilerDb,
+    name: &str,
+    other: &str,
+    attr: &ast::Attribute,
+) {
     // TODO better error message
-    diag.error(format!("attribute `{name}` cannot appear alongside `{other}`"))
+    compiler
+        .diag_error(format!("attribute `{name}` cannot appear alongside `{other}`"))
         .location(&attr)
         .emit()
 }
 
 macro_rules! impl_known_attributes {
     ($($attr_name:ident [$attr_valid_targets:expr] $([$($mutually_exclusive:ident),*])? $multiplicity:ident $(( $($param_name:ident: $param_ty:ty),* ))? => $e:expr; )*) => {
-        fn parse_known_attribute(name: &str, attr: &ast::Attribute, target: AttributeTarget, already_seen: &mut HashSet<String>, diag: &mut Diagnostics) -> Result<Option<KnownAttributeKind>, ()>
+        fn parse_known_attribute(name: &str, attr: &ast::Attribute, target: AttributeTarget, already_seen: &mut HashSet<String>, compiler: &dyn CompilerDb) -> Result<Option<KnownAttributeKind>, ()>
         {
             $( define_attribute!{ #[allow(non_camel_case_types)] $attr_name $( ( $($param_name: $param_ty),* ) )? } )*
             match name {
                 $( std::stringify!($attr_name) => {
                     let attr_name_str = std::stringify!($attr_name);
                     if !$attr_valid_targets.contains(target) {
-                        diag_attribute_invalid_for_target(diag, attr_name_str, attr, target, $attr_valid_targets);
+                        diag_attribute_invalid_for_target(compiler, attr_name_str, attr, target, $attr_valid_targets);
                     }
                     if AttributeMultiplicity::$multiplicity == AttributeMultiplicity::Multi && already_seen.contains(attr_name_str) {
-                        diag_attribute_appears_more_than_once(diag, attr_name_str, attr);
+                        diag_attribute_appears_more_than_once(compiler, attr_name_str, attr);
                     }
                     $(for excl in [$(std::stringify!($mutually_exclusive)),*] {
                         if already_seen.contains(excl) {
-                            diag_attribute_mutually_exclusive_conflict(diag, attr_name_str, excl, attr);
+                            diag_attribute_mutually_exclusive_conflict(compiler, attr_name_str, excl, attr);
                         }
                     })?
 
                     already_seen.insert(attr_name_str.to_string());
-                    match $attr_name::parse_from(attr.clone(), diag) {
+                    match $attr_name::parse_from(attr.clone(), compiler) {
                         Ok($attr_name $( { $($param_name),* })?) => { Ok(Some($e)) },
                         Err(err) => {
                             Err(err)
@@ -361,21 +365,22 @@ pub(crate) struct KnownAttribute {
 }
 
 pub(crate) fn check_attributes(
-    custom_attributes: &HashMap<String, AttributeRegistration>,
+    compiler: &dyn CompilerDb,
     target: AttributeTarget,
     attrs: impl Iterator<Item = ast::Attribute>,
-    diag: &mut Diagnostics,
 ) -> Vec<KnownAttribute> {
     let mut known = vec![];
     let mut already_seen = HashSet::new();
 
+    let custom_attributes = compiler.custom_attributes();
+
     for attr in attrs {
         let Some(ident) = attr.name() else {
-            diag.bug("syntax error").location(&attr).emit();
+            compiler.diag_bug("syntax error").location(&attr).emit();
             continue
         };
         let name = ident.text();
-        match parse_known_attribute(name, &attr, target, &mut already_seen, diag) {
+        match parse_known_attribute(name, &attr, target, &mut already_seen, compiler) {
             Ok(Some(kind)) => {
                 // well-known attribute
                 known.push(KnownAttribute {
@@ -389,19 +394,25 @@ pub(crate) fn check_attributes(
                     Some(reg) => {
                         // yes, check its allowed targets and syntax
                         if !reg.valid_targets.contains(target) {
-                            diag_attribute_invalid_for_target(diag, name, &attr, target, reg.valid_targets);
+                            diag_attribute_invalid_for_target(compiler, name, &attr, target, reg.valid_targets);
                         }
                         if reg.multiplicity == AttributeMultiplicity::Single && already_seen.contains(name) {
-                            diag_attribute_appears_more_than_once(diag, name, &attr);
+                            diag_attribute_appears_more_than_once(compiler, name, &attr);
                         }
                         already_seen.insert(name.to_string());
                         // the checker is free to emit a more precise diagnostic
-                        match reg.checker.check(&attr, diag) {
+                        match reg.checker.check(&attr, compiler) {
                             Ok(()) => {}
-                            Err(()) => diag.error("parsing custom attribute failed").location(&attr).emit(),
+                            Err(()) => compiler
+                                .diag_error("parsing custom attribute failed")
+                                .location(&attr)
+                                .emit(),
                         }
                     }
-                    None => diag.error(format!("unknown attribute `{name}`")).location(&attr).emit(),
+                    None => compiler
+                        .diag_error(format!("unknown attribute `{name}`"))
+                        .location(&attr)
+                        .emit(),
                 }
             }
             Err(()) => {}

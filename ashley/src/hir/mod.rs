@@ -3,17 +3,14 @@ mod constant;
 //mod list;
 //pub mod print;
 mod decoration;
+mod emit_spirv;
+mod id_map;
 mod layout;
 pub mod transform;
 pub mod types;
 mod visit;
 
-use crate::{
-    diagnostic::SourceLocation,
-    hir,
-    hir::types::ScalarType,
-    utils::{id_types, interner::UniqueArena},
-};
+use crate::{diagnostic::SourceLocation, hir, hir::types::ScalarType, utils::UniqueArena};
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::{spirv, spirv::LinkageType};
@@ -25,13 +22,55 @@ pub use self::{
     builder::FunctionBuilder,
     constant::ConstantData,
     decoration::Decoration,
+    emit_spirv::write_spirv,
     layout::{ArrayLayout, InnerLayout, Layout, StructLayout},
     types::{Interpolation, InterpolationKind, InterpolationSampling, TypeData, TypeDataDebug},
 };
 
 //--------------------------------------------------------------------------------------------------
 
-// Define the handle types for elements in the context arrays
+macro_rules! id_types {
+    ($($(#[$m:meta])* $v:vis struct $n:ident;)*) => {
+        $(
+        $(#[$m])*
+        #[derive(Copy,Clone,Debug,Eq,PartialEq,Ord,PartialOrd,Hash)]
+        #[repr(transparent)]
+        $v struct $n(NonZeroU32);
+
+        impl $n {
+            $v fn index(&self) -> usize {
+                (self.0.get() - 1) as usize
+            }
+
+            $v fn from_index(index: usize) -> $n {
+                $n(unsafe { NonZeroU32::new_unchecked((index+1) as u32) })
+            }
+        }
+
+        impl id_arena::ArenaBehavior for $n {
+            type Id = Self;
+
+            fn new_id(_arena_id: u32, index: usize) -> Self::Id {
+                $n(unsafe { NonZeroU32::new_unchecked((index+1) as u32) })
+            }
+
+            fn index(id: Self::Id) -> usize {
+                (id.0.get() - 1) as usize
+            }
+
+            fn arena_id(_: Self::Id) -> u32 {
+                0
+            }
+
+            fn new_arena_id() -> u32 {
+                0
+            }
+        }
+        )*
+    };
+}
+
+// Define the handle types for elements in the context arenas
 id_types! {
 
     /// Handle to a HIR value.
@@ -817,7 +856,7 @@ impl Module {
         accessed: &mut HashSet<GlobalVariable>,
         call_stack: &mut Vec<Function>,
     ) {
-        for (b, block_data) in self.functions[func].blocks.iter() {
+        for (_b, block_data) in self.functions[func].blocks.iter() {
             for inst in block_data.instructions.iter() {
                 if inst.opcode == Op::FunctionCall {
                     let Operand::FunctionRef(callee) = inst.operands[0] else {
@@ -846,7 +885,7 @@ impl Module {
     pub fn find_variable(&self, name: &str) -> Option<(GlobalVariable, &GlobalVariableData)> {
         self.globals
             .iter()
-            .find(|(g, gdata)| !gdata.removed && &gdata.name == name)
+            .find(|(_g, gdata)| !gdata.removed && &gdata.name == name)
     }
 
     /// Finds an interface variable by name.
@@ -854,7 +893,7 @@ impl Module {
     /// Global variables marked as removed are not considered.
     pub fn find_interface_variable(&self, name: &str) -> Option<(GlobalVariable, &GlobalVariableData)> {
         self.interface_variables()
-            .find(|(g, gdata)| !gdata.removed && &gdata.name == name)
+            .find(|(_g, gdata)| !gdata.removed && &gdata.name == name)
     }
 
     /// Flags the specified global variable as removed.

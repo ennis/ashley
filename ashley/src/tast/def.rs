@@ -1,13 +1,4 @@
-use crate::{
-    builtins::BuiltinSignature,
-    diagnostic::{Diagnostics, SourceLocation},
-    hir::Interpolation,
-    syntax::{ast, SyntaxNodePtr},
-    tast::{
-        attributes::{KnownAttribute, KnownAttributeKind},
-        ty::Type,
-    },
-};
+use crate::{builtins::BuiltinSignature, diagnostic::SourceLocation, hir::Interpolation, syntax::ast, tast::ty::Type};
 use rowan::ast::AstPtr;
 use std::fmt;
 
@@ -51,13 +42,13 @@ impl fmt::Display for Qualifier {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
     pub ast: Option<AstPtr<ast::StructDef>>,
     pub ty: Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionParam {
     pub ast: Option<AstPtr<ast::FnParam>>,
     pub ty: Type,
@@ -65,7 +56,7 @@ pub struct FunctionParam {
     pub name: String,
 }
 
-/// Qualifiers on functions.
+/*/// Qualifiers on functions.
 #[derive(Default, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FunctionQualifiers {
     pub execution_model: Option<spirv::ExecutionModel>,
@@ -112,10 +103,10 @@ impl FunctionQualifiers {
 
         FunctionQualifiers { execution_model }
     }
-}
+}*/
 
 /// A function definition or declaration.
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct FunctionDef {
     pub ast: Option<ast::AstPtr<ast::FnDef>>,
     pub has_body: bool,
@@ -127,7 +118,7 @@ pub struct FunctionDef {
     pub execution_model: Option<spirv::ExecutionModel>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalDef {
     pub ast: Option<ast::AstPtr<ast::Global>>,
     pub linkage: Option<spirv::LinkageType>,
@@ -138,7 +129,7 @@ pub struct GlobalDef {
     pub builtin: Option<spirv::BuiltIn>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum DefKind {
     Function(FunctionDef),
     Global(GlobalDef),
@@ -151,7 +142,7 @@ pub enum Visibility {
     Private,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Def {
     // The package containing the definition.
     //

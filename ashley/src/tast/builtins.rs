@@ -1,6 +1,6 @@
 //! Registration of builtin functions and variables during type checking.
 
-// FIXME: how about moving this alongside "builtin.rs"? That's where I have the reflex to look.
+// FIXME: how about moving this alongside "builtin.rs"? That's where I tend to go first when looking for it.
 
 use crate::{
     builtins::{pseudo_type_to_concrete_type, ImageClass, PseudoType},
@@ -75,7 +75,7 @@ impl TypeCheckItemCtxt<'_> {
                             def_id,
                             Def {
                                 //package: None,
-                                location: None,
+                                span: None,
                                 builtin: true,
                                 name: real_name.clone(),
                                 visibility: Visibility::Public,

@@ -1,4 +1,5 @@
 pub mod ast;
+mod diagnostics;
 mod operators;
 mod parse;
 mod syntax_kind;
@@ -6,12 +7,12 @@ mod syntax_kind;
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{
-    diagnostic::{AsSourceLocation, SourceLocation},
+    diagnostic::DiagnosticSpan,
     session::{CompilerDb, SourceFileId},
     syntax::parse::parse_raw,
 };
-pub use rowan::ast::AstNode;
 use rowan::GreenNode;
+pub use rowan::{ast::AstNode, TextRange};
 
 //--------------------------------------------------------------------------------------------------
 
@@ -33,15 +34,23 @@ pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 pub type SyntaxNodePtr = rowan::ast::SyntaxNodePtr<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 
-impl AsSourceLocation for SyntaxToken {
-    fn source_location(&self) -> SourceLocation {
-        SourceLocation::new(None, self.text_range())
+impl DiagnosticSpan for SyntaxToken {
+    fn file(&self) -> Option<SourceFileId> {
+        None
+    }
+
+    fn range(&self) -> TextRange {
+        self.text_range()
     }
 }
 
-impl AsSourceLocation for SyntaxNode {
-    fn source_location(&self) -> SourceLocation {
-        SourceLocation::new(None, self.text_range())
+impl DiagnosticSpan for SyntaxNode {
+    fn file(&self) -> Option<SourceFileId> {
+        None
+    }
+
+    fn range(&self) -> TextRange {
+        self.text_range()
     }
 }
 

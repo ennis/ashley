@@ -377,10 +377,10 @@ pub(crate) fn check_attributes(
     for attr in attrs {
         let Some(ident) = attr.name() else {
             compiler.diag_bug("syntax error").location(&attr).emit();
-            continue
+            continue;
         };
         let name = ident.text();
-        match parse_known_attribute(name, &attr, target, &mut already_seen, compiler) {
+        match parse_known_attribute(&name, &attr, target, &mut already_seen, compiler) {
             Ok(Some(kind)) => {
                 // well-known attribute
                 known.push(KnownAttribute {
@@ -390,16 +390,16 @@ pub(crate) fn check_attributes(
             }
             Ok(None) => {
                 // possibly a custom attribute
-                match custom_attributes.get(name) {
+                match custom_attributes.get(&name) {
                     Some(reg) => {
                         // yes, check its allowed targets and syntax
                         if !reg.valid_targets.contains(target) {
-                            diag_attribute_invalid_for_target(compiler, name, &attr, target, reg.valid_targets);
+                            diag_attribute_invalid_for_target(compiler, &name, &attr, target, reg.valid_targets);
                         }
-                        if reg.multiplicity == AttributeMultiplicity::Single && already_seen.contains(name) {
-                            diag_attribute_appears_more_than_once(compiler, name, &attr);
+                        if reg.multiplicity == AttributeMultiplicity::Single && already_seen.contains(&name) {
+                            diag_attribute_appears_more_than_once(compiler, &name, &attr);
                         }
-                        already_seen.insert(name.to_string());
+                        already_seen.insert(name);
                         // the checker is free to emit a more precise diagnostic
                         match reg.checker.check(&attr, compiler) {
                             Ok(()) => {}

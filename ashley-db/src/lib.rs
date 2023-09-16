@@ -41,6 +41,11 @@ macro_rules! define_database_tables {
                 $(if dbindex.table == $crate::TableIndex::from(self.base_table_index + $field_index)  { return Some(self.$field_name.maybe_changed_after(db, dbindex.value, after)); } )*
                 return None;
             }
+
+            // on_new_revision impl
+            $v fn on_new_revision(&mut self, revision: $crate::Revision) {
+                $(<$field_type as $crate::TableOps<$dbty>>::on_new_revision(&mut self.$field_name, revision);)*
+            }
         }
     };
 

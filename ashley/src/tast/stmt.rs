@@ -2,13 +2,12 @@ use crate::{
     syntax::{ast, ast::AstPtr},
     tast::{
         scope::{Res, Scope},
-        Block, BlockId, ExprId, IdentExt, LocalVar, LocalVarId, StmtId, TypeCheckBodyCtxt,
+        Block, BlockId, ExprId, InFile, LocalVar, LocalVarId, NameExt, StmtId, StmtSource, TypeCheckBodyCtxt,
     },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stmt {
-    pub ast: AstPtr<ast::Stmt>,
     pub kind: StmtKind,
 }
 
@@ -65,12 +64,12 @@ impl<'a> TypeCheckBodyCtxt<'a> {
 
     fn typecheck_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> StmtKind {
         let Some(ast_condition) = if_stmt.condition().and_then(|c| c.expr()) else {
-            return StmtKind::Error
+            return StmtKind::Error;
         };
         let condition = self.typecheck_expr(&ast_condition);
 
         let Some(stmt) = if_stmt.stmt() else {
-            return StmtKind::Error
+            return StmtKind::Error;
         };
 
         if condition.ty != self.compiler.tyctxt().prim_tys.bool {
@@ -92,9 +91,8 @@ impl<'a> TypeCheckBodyCtxt<'a> {
             None
         };
 
-        let condition = self.add_expr(condition);
         StmtKind::Select {
-            condition,
+            condition: condition.id,
             true_branch,
             false_branch,
         }
@@ -111,11 +109,10 @@ impl<'a> TypeCheckBodyCtxt<'a> {
             return StmtKind::Error;
         };
 
-        //
         let condition = if let Some(cond) = for_stmt.condition() {
             if let Some(cond_expr) = cond.expr() {
-                let c = self.typecheck_expr(&cond_expr);
-                Some(self.add_expr(c))
+                // TODO check that condition is a boolean!
+                Some(self.typecheck_expr(&cond_expr).id)
             } else {
                 None
             }
@@ -125,8 +122,7 @@ impl<'a> TypeCheckBodyCtxt<'a> {
 
         let loop_expr = if let Some(loop_expr) = for_stmt.loop_expr() {
             if let Some(e) = loop_expr.expr() {
-                let e = self.typecheck_expr(&e);
-                Some(self.add_expr(e))
+                Some(self.typecheck_expr(&e).id)
             } else {
                 None
             }
@@ -158,9 +154,8 @@ impl<'a> TypeCheckBodyCtxt<'a> {
     /// Typechecks an expression statement and return the statement kind.
     fn typecheck_expr_stmt(&mut self, expr_stmt: &ast::ExprStmt) -> StmtKind {
         if let Some(ast_expr) = expr_stmt.expr() {
-            let expr = self.typecheck_expr(&ast_expr);
-            let id = self.typed_body.exprs.push(expr);
-            StmtKind::ExprStmt { expr: id }
+            let expr = self.typecheck_expr(&ast_expr).id;
+            StmtKind::ExprStmt { expr }
         } else {
             StmtKind::Error
         }
@@ -168,7 +163,7 @@ impl<'a> TypeCheckBodyCtxt<'a> {
 
     fn typecheck_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> StmtKind {
         let Some(block) = block_stmt.block() else {
-            return StmtKind::Error
+            return StmtKind::Error;
         };
         StmtKind::Block {
             block: self.typecheck_block(&block),
@@ -183,8 +178,7 @@ impl<'a> TypeCheckBodyCtxt<'a> {
 
         let initializer = if let Some(initializer) = local.initializer() {
             if let Some(initializer) = initializer.expr() {
-                let expr = self.typecheck_expr(&initializer);
-                Some(self.add_expr(expr))
+                Some(self.typecheck_expr(&initializer).id)
             } else {
                 None
             }
@@ -204,8 +198,7 @@ impl<'a> TypeCheckBodyCtxt<'a> {
 
     fn typecheck_return_stmt(&mut self, return_stmt: &ast::ReturnStmt) -> StmtKind {
         if let Some(expr) = return_stmt.expr() {
-            let return_value = self.typecheck_expr(&expr);
-            let return_value = self.add_expr(return_value);
+            let return_value = self.typecheck_expr(&expr).id;
             StmtKind::Return {
                 value: Some(return_value),
             }
@@ -236,10 +229,8 @@ impl<'a> TypeCheckBodyCtxt<'a> {
             ast::Stmt::IfStmt(if_stmt) => self.typecheck_if_stmt(if_stmt),
             ast::Stmt::ForStmt(for_stmt) => self.typecheck_for_stmt(for_stmt),
         };
-        self.typed_body.stmts.push(Stmt {
-            ast: AstPtr::new(stmt),
-            kind,
-        })
+        let source = self.in_file_syntax_ptr(stmt);
+        self.alloc_stmt(source, kind)
     }
 
     pub fn typecheck_stmt_in_new_scope(&mut self, stmt: &ast::Stmt) -> StmtId {
@@ -247,5 +238,12 @@ impl<'a> TypeCheckBodyCtxt<'a> {
         let id = self.typecheck_stmt(stmt);
         self.scopes.pop();
         id
+    }
+
+    pub fn alloc_stmt(&mut self, source: StmtSource, kind: StmtKind) -> StmtId {
+        let stmt = self.typed_body.stmts.push(Stmt { kind });
+        self.typed_body.stmt_map.insert(source.clone(), stmt);
+        self.typed_body.stmt_map_back.insert(stmt, source);
+        stmt
     }
 }

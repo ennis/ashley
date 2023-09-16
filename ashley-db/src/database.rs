@@ -7,6 +7,9 @@ pub trait Database: 'static {
     ///
     fn maybe_changed_after(&self, dbindex: DbIndex, after: Revision) -> bool;
 
+    ///
+    fn on_new_revision(&mut self, revision: Revision);
+
     /// Returns the `Runtime` instance.
     fn runtime(&self) -> &Runtime;
 
@@ -28,7 +31,9 @@ pub trait DatabaseExt: Database {
     /// Use the returned revision as an input to `set()` methods of input tables.
     fn with_new_revision<R>(&mut self, f: impl FnOnce(&mut Self, Revision) -> R) -> R {
         let next_rev = self.runtime_mut().next_revision();
-        f(self, next_rev)
+        let r = f(self, next_rev);
+        self.on_new_revision(next_rev);
+        r
     }
 }
 

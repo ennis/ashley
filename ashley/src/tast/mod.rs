@@ -3,6 +3,7 @@ mod attributes;
 mod builtins;
 mod consteval;
 mod def;
+mod diagnostics;
 mod expr;
 mod item;
 mod layout;
@@ -23,13 +24,17 @@ pub use ty::{FunctionType, ScalarType, Type, TypeKind};
 
 use crate::{
     builtins::PrimitiveTypes,
+    diagnostic::{DiagnosticSpan, Span, Spanned},
     session::{CompilerDb, DefId, ModuleId, SourceFileId},
-    syntax::ast,
-    tast::{scope::Res, stmt::Stmt, ty::convert_type},
+    syntax::{ast, ast::Name, SyntaxNode, SyntaxNodePtr, SyntaxToken},
+    tast::{diagnostics::TyDiagnostic, scope::Res, stmt::Stmt, ty::TypeLoweringCtxt},
     utils::{Id, IndexVec},
 };
+use ashley::syntax::TextRange;
+use ashley_data_structures::IndexVecMap;
+use rowan::ast::{AstNode, AstPtr};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -66,6 +71,92 @@ pub struct DefId {
     }
 }*/
 
+/// Wraps something alongside a source file ID.
+// (inspired by r-a)
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct InFile<T> {
+    pub file: SourceFileId,
+    pub data: T,
+}
+
+impl<T> InFile<T> {
+    pub fn new(file: SourceFileId, data: T) -> InFile<T> {
+        InFile { file, data }
+    }
+}
+
+impl<N: AstNode> InFile<AstPtr<N>> {
+    pub fn new_ast_ptr(file: SourceFileId, node: &N) -> InFile<AstPtr<N>> {
+        InFile::new(file, AstPtr::new(node))
+    }
+}
+
+// Old DiagnosticSpan
+impl DiagnosticSpan for InFile<SyntaxNode> {
+    fn file(&self) -> Option<SourceFileId> {
+        Some(self.file)
+    }
+
+    fn range(&self) -> TextRange {
+        self.data.text_range()
+    }
+}
+
+impl DiagnosticSpan for InFile<SyntaxNodePtr> {
+    fn file(&self) -> Option<SourceFileId> {
+        Some(self.file)
+    }
+
+    fn range(&self) -> TextRange {
+        self.data.text_range()
+    }
+}
+
+impl DiagnosticSpan for InFile<SyntaxToken> {
+    fn file(&self) -> Option<SourceFileId> {
+        Some(self.file)
+    }
+
+    fn range(&self) -> TextRange {
+        self.data.text_range()
+    }
+}
+
+impl<N: AstNode> DiagnosticSpan for InFile<AstPtr<N>> {
+    fn file(&self) -> Option<SourceFileId> {
+        Some(self.file)
+    }
+
+    fn range(&self) -> TextRange {
+        self.data.syntax_node_ptr().text_range()
+    }
+}
+
+// New "Spanned" impls
+impl Spanned for InFile<SyntaxNode> {
+    fn span(&self) -> Span {
+        Span::new(self.file, self.data.text_range())
+    }
+}
+
+impl Spanned for InFile<SyntaxNodePtr> {
+    fn span(&self) -> Span {
+        Span::new(self.file, self.data.text_range())
+    }
+}
+
+impl Spanned for InFile<SyntaxToken> {
+    fn span(&self) -> Span {
+        Span::new(self.file, self.data.text_range())
+    }
+}
+
+impl<N: AstNode> Spanned for InFile<AstPtr<N>> {
+    fn span(&self) -> Span {
+        Span::new(self.file, self.data.syntax_node_ptr().text_range())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalVar {
     pub name: String,
@@ -83,15 +174,37 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub type ExprPtr = AstPtr<ast::Expr>;
+pub type ExprSource = InFile<ExprPtr>;
+
+pub type StmtPtr = AstPtr<ast::Stmt>;
+pub type StmtSource = InFile<StmtPtr>;
+
+pub type LocalVarPtr = AstPtr<ast::LocalVariable>;
+pub type LocalVarSource = InFile<LocalVarPtr>;
+
+pub type BlockPtr = AstPtr<ast::Block>;
+pub type BlockSource = InFile<BlockPtr>;
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct TypedBody {
     pub stmts: IndexVec<Stmt>,
     pub exprs: IndexVec<Expr>,
     pub local_vars: IndexVec<LocalVar>,
     pub blocks: IndexVec<Block>,
     pub params: Vec<LocalVarId>,
-    pub errors: usize,
+    // TODO also warnings
+    pub errors: Vec<TyDiagnostic>,
     pub entry_block: Option<BlockId>,
+
+    pub expr_map: HashMap<ExprSource, ExprId>,
+    pub expr_map_back: IndexVecMap<ExprId, ExprSource>,
+
+    pub stmt_map: HashMap<StmtSource, StmtId>,
+    pub stmt_map_back: IndexVecMap<StmtId, StmtSource>,
+
+    pub local_var_map: HashMap<LocalVarSource, LocalVarId>,
+    pub local_var_map_back: IndexVecMap<LocalVarId, LocalVarSource>,
 }
 
 impl TypedBody {
@@ -102,8 +215,14 @@ impl TypedBody {
             local_vars: IndexVec::new(),
             blocks: IndexVec::new(),
             params: vec![],
+            errors: vec![],
             entry_block: None,
-            errors: 0,
+            expr_map: Default::default(),
+            expr_map_back: Default::default(),
+            stmt_map: Default::default(),
+            stmt_map_back: Default::default(),
+            local_var_map: Default::default(),
+            local_var_map_back: Default::default(),
         }
     }
 
@@ -112,16 +231,16 @@ impl TypedBody {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.errors > 0
+        !self.errors.is_empty()
     }
 }
 
-trait IdentExt {
+pub(crate) trait NameExt {
     // TODO rename this to to_unique_name
     fn to_string_opt(&self) -> String;
 }
 
-impl IdentExt for Option<ast::Ident> {
+impl NameExt for Option<Name> {
     fn to_string_opt(&self) -> String {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         self.as_ref()
@@ -140,7 +259,8 @@ pub struct Module {
     /// All definitions in this module, in the order in which they appear in the source file
     /// (hence the IndexMap, to preserve this order).
     pub defs: indexmap::IndexMap<DefId, Def>,
-    // TODO errors?
+    /// Collected errors (& warnings)
+    pub errors: Vec<TyDiagnostic>,
 }
 
 impl Module {
@@ -149,6 +269,7 @@ impl Module {
         Module {
             imported_packages: vec![],
             defs: Default::default(),
+            errors: vec![],
         }
     }
 
@@ -220,13 +341,16 @@ impl TypeCtxt {
 pub(crate) struct TypeCheckItemCtxt<'a> {
     compiler: &'a dyn CompilerDb,
     module: ModuleId,
+    source_file: SourceFileId,
     typed_module: &'a mut Module,
     scopes: Vec<Scope>,
+    errors: Vec<TyDiagnostic>,
 }
 
 impl<'a> TypeCheckItemCtxt<'a> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
-        convert_type(ty, self.compiler, &self.scopes)
+        let mut lower_ctxt = TypeLoweringCtxt::new(self.compiler, &self.scopes, &mut self.errors);
+        lower_ctxt.lower_type(ty, self.source_file)
     }
 }
 
@@ -241,26 +365,44 @@ pub(crate) fn typecheck_items(
     let mut ctxt = TypeCheckItemCtxt {
         compiler,
         module,
+        source_file,
         typed_module: &mut typed_module,
         scopes: Vec::new(),
+        errors: vec![],
     };
     ctxt.define_builtin_functions();
-    compiler.push_diagnostic_source_file(source_file);
+    //compiler.push_diagnostic_source_file(source_file);
     ctxt.typecheck_module(&ast);
-    compiler.pop_diagnostic_source_file();
+    //compiler.pop_diagnostic_source_file();
 
+    typed_module.errors = ctxt.errors;
     typed_module
 }
 
 pub(crate) struct TypeCheckBodyCtxt<'a> {
     compiler: &'a dyn CompilerDb,
+    /// Source file containing the AST of the body.
+    ///
+    /// TODO: we kinda assume that the AST of a def body is all contained in the same file.
+    /// This may not be true anymore if we decide to use macros?
+    source_file: SourceFileId,
     scopes: Vec<Scope>,
     typed_body: &'a mut TypedBody,
+    errors: Vec<TyDiagnostic>,
 }
 
 impl<'a> TypeCheckBodyCtxt<'a> {
     pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
-        convert_type(ty, self.compiler, &self.scopes)
+        let mut lower_ctxt = TypeLoweringCtxt::new(self.compiler, &self.scopes, &mut self.errors);
+        lower_ctxt.lower_type(ty, self.source_file)
+    }
+
+    pub(crate) fn in_file_syntax_ptr<N: AstNode>(&self, node: &N) -> InFile<AstPtr<N>> {
+        InFile::new(self.source_file, AstPtr::new(node))
+    }
+
+    pub(crate) fn span<N: AstNode>(&self, node: &N) -> Span {
+        Span::new(self.source_file, node.syntax().text_range())
     }
 }
 
@@ -306,19 +448,25 @@ fn build_scope_for_def_body(compiler: &dyn CompilerDb, def_id: DefId) -> Scope {
 pub(crate) fn typecheck_body(compiler: &dyn CompilerDb, def: DefId) -> TypedBody {
     let scope = build_scope_for_def_body(compiler, def);
 
-    // HACK: to count the number of errors during type-checking, count the difference in number of errors
-    let initial_err_count = compiler.diag().error_count();
+    let def_info = compiler.definition(def);
+    // TODO: the idea here is that def bodies always come from ASTs,
+    // and thus always have an associated source file, and a span.
+    // This may not be the best way, or place, to check that.
+    // (We need the source file when emitting diagnostics)
+    let source_file = def_info.span.expect("typecheck_body called on definition without a span; definitions with bodies should always be associated to a source file").file;
 
     let mut typed_body = TypedBody::new();
     let mut ctxt = TypeCheckBodyCtxt {
         compiler,
         scopes: vec![scope],
+        source_file,
         typed_body: &mut typed_body,
+        errors: vec![],
     };
 
-    match ctxt.compiler.definition(def).kind {
+    match def_info.kind {
         DefKind::Function(ref func) => {
-            if let Some(ref ast_ptr) = func.ast {
+            if let Some(InFile { data: ref ast_ptr, .. }) = func.ast {
                 let func_ast = ctxt.compiler.ast_node_for_def(def, ast_ptr);
                 if let Some(ref body) = func_ast.block() {
                     // create local vars for function parameters
@@ -339,12 +487,11 @@ pub(crate) fn typecheck_body(compiler: &dyn CompilerDb, def: DefId) -> TypedBody
             }
         }
         DefKind::Global(ref global) => {
-            if let Some(ref ast_ptr) = global.ast {
+            if let Some(InFile { data: ref ast_ptr, .. }) = global.ast {
                 let global_ast = ctxt.compiler.ast_node_for_def(def, ast_ptr);
                 if let Some(ref initializer) = global_ast.initializer() {
                     if let Some(ref expr) = initializer.expr() {
-                        let expr = ctxt.typecheck_expr(expr);
-                        ctxt.add_expr(expr);
+                        ctxt.typecheck_expr(expr);
                     }
                 }
             }
@@ -352,8 +499,7 @@ pub(crate) fn typecheck_body(compiler: &dyn CompilerDb, def: DefId) -> TypedBody
         DefKind::Struct(_) => {}
     };
 
-    let final_err_count = compiler.diag().error_count();
-    typed_body.errors = final_err_count - initial_err_count;
+    typed_body.errors = ctxt.errors;
     typed_body
 }
 

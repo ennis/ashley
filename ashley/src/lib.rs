@@ -16,7 +16,7 @@ pub mod utils;
 pub use package_name::{ModuleName, PackageArg};
 pub use resolver::FileSystemPackageResolver;
 pub use session::{Compiler, CompilerDb, DefDebug, QueryError};
-pub use source_file::SourceFile;
+pub use source_file::{LineCharacterPosition, LineCharacterRange, SourceFile};
 
 // re-export codespan_reporting and termcolor so that it's easier to set up a session
 pub use codespan_reporting::{self, term::termcolor};

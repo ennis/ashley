@@ -1,12 +1,15 @@
 //! Utilities for computing the memory layout of types.
 use crate::{
-    diagnostic::AsSourceLocation,
+    diagnostic::Span,
     hir::{types::ScalarType, Layout},
     session::CompilerDb,
-    syntax::ast,
-    tast::{layout::StdLayoutRules::Std140, Type, TypeKind},
+    syntax::{ast, ast::Name},
+    tast::{diagnostics::TyDiagnostic, layout::StdLayoutRules::Std140, InFile, Type, TypeKind},
     utils::round_up,
 };
+use ashley::tast::ty::StructLayout;
+use rowan::ast::AstPtr;
+use spirv::CLOp::exp;
 
 /// Error during type layout calculation.
 #[derive(Debug, thiserror::Error)]
@@ -15,15 +18,6 @@ pub enum LayoutError {
     OpaqueType,
     #[error("incompatible layout")]
     IncompatibleLayout,
-}
-
-/// Standard layout rules.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum StdLayoutRules {
-    /// Components are laid-out according to GLSL std140 rules
-    Std140,
-    /// Components are laid-out according to GLSL std430 rules
-    Std430,
 }
 
 /// Returns the size and alignment of a scalar type according to std140 (and std430) GLSL layout rules.
@@ -56,260 +50,372 @@ pub(crate) fn std_vector_type_layout(prim_ty: ScalarType, len: u8) -> Layout {
     }
 }
 
-/// Computes the stride of an array type.
-///
-/// If an explicit stride is provided in `stride`, use that.
-/// Otherwise, compute it from the element type.
-///
-/// `layout_rule` doesn't affect the calculated stride, but the function emits an error diagnostic
-/// if the calculated stride doesn't conform to the specified layout rule.
-pub(crate) fn std_array_stride(
-    compiler: &dyn CompilerDb,
-    element_type: &Type,
-    stride: Option<u32>,
+// Layout-check diagnostics
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BlockLayoutDiagnostic {
+    MemberOverlap {
+        member: MemberInfo,
+        explicit_offset: u32,
+        computed_next_offset: u32,
+    },
+    OpaqueType {
+        use_chain: Vec<MemberInfo>,
+        ty: Type,
+    },
+    InvalidStd140ArrayStride {
+        ref_chain: Vec<MemberInfo>,
+        ty: Type,
+        stride: u32,
+    },
+    // struct {{use_chain[0].struct_name}} layout is not compatible with std140 rules
+    // note: in member {{use_chain[0]}}
+    // note: in member {{use_chain[...]}}
+    // note: matrix type {{ty}} has a layout incompatible with std140 rules, consider using {{std140_matrix_alternative}}
+    InvalidStd140MatrixLayout {
+        ref_chain: Vec<MemberInfo>,
+        ty: Type,
+    },
+    MisalignedOffset {
+        ref_chain: Vec<MemberInfo>,
+        explicit_offset: u32,
+        required_alignment: u32,
+    },
+    LayoutMismatch {
+        ref_chain: Vec<MemberInfo>,
+        computed_offset: u32,
+        expected_offset: u32,
+    },
+}
+
+/// Standard layout rules.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum StdLayoutRules {
+    /// Components are laid-out according to GLSL std140 rules
+    Std140,
+    /// Components are laid-out according to GLSL std430 rules
+    Std430,
+}
+
+fn warn_opaque_type() {
+    warn!("opaque type during block layout check");
+}
+
+pub type StructFieldPtr = InFile<AstPtr<ast::StructField>>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MemberInfo {
+    pub member: Option<StructFieldPtr>,
+    pub struct_name: String,
+    pub member_name: String,
+    pub member_index: usize,
+}
+
+pub(crate) struct BlockLayoutCheck<'a> {
+    compiler: &'a dyn CompilerDb,
+    ref_chain: Vec<MemberInfo>,
+    diags: &'a mut Vec<TyDiagnostic>,
     layout_rule: StdLayoutRules,
-    syntax: Option<ast::Type>,
-) -> Result<u32, LayoutError> {
-    // get syntax node of the element type
-    let elem_syntax = if let Some(ref syntax) = syntax {
-        let ast::Type::ArrayType(array_type) = syntax else {
-            panic!("invalid type syntax")
-        };
-        Some(array_type.element_type().expect("invalid type syntax"))
-    } else {
-        None
-    };
-    let loc = syntax.as_ref().map(|s| s.source_location());
+}
 
-    let element_type_layout = std_type_layout(compiler, &element_type, layout_rule, elem_syntax)?;
-    let stride = if let Some(stride) = stride {
-        // stride must not be less than the element type size
-        let elem_ty_size = element_type_layout.size;
-        if stride < elem_ty_size {
-            compiler
-                .diag_error("invalid array stride")
-                .primary_label_opt(loc, "")
-                .note(format!(
-                    "array stride ({stride}) is less than the element type size ({elem_ty_size})"
-                ))
-                .emit();
-            // ignore user-specified stride if it is invalid
-            elem_ty_size
-        } else {
-            stride
+impl<'a> BlockLayoutCheck<'a> {
+    pub(crate) fn new(
+        compiler: &'a dyn CompilerDb,
+        layout_rule: StdLayoutRules,
+        diags: &'a mut Vec<TyDiagnostic>,
+    ) -> BlockLayoutCheck<'a> {
+        BlockLayoutCheck {
+            compiler,
+            ref_chain: vec![],
+            diags,
+            layout_rule,
         }
-    } else {
-        round_up(element_type_layout.size, element_type_layout.align)
-    };
+    }
 
-    // check for valid std140 stride
-    // stride must be a multiple of 16
-    if layout_rule == Std140 && stride % 16 != 0 {
-        compiler.diag_error("invalid array layout")
-            .primary_label_opt(loc, "")
+    /// Computes the stride of an array type.
+    ///
+    /// If an explicit stride is provided in `stride`, use that.
+    /// Otherwise, compute it from the element type.
+    ///
+    /// `layout_rule` doesn't affect the calculated stride, but the function emits an error diagnostic
+    /// if the calculated stride doesn't conform to the specified layout rule.
+    pub(crate) fn check_array_stride(&mut self, ty: &Type, element_type: &Type, stride: Option<u32>) -> u32 {
+        let element_type_layout = self.check_type_layout(&element_type);
+        let stride = if let Some(stride) = stride {
+            // stride must not be less than the element type size
+            let elem_ty_size = element_type_layout.size;
+            if stride < elem_ty_size {
+                // ignore user-specified stride if it is invalid
+                // the error should have been reported in `convert_type`
+                elem_ty_size
+            } else {
+                stride
+            }
+        } else {
+            round_up(element_type_layout.size, element_type_layout.align)
+        };
+
+        // check for valid std140 stride
+        // stride must be a multiple of 16
+        if self.layout_rule == Std140 && stride % 16 != 0 {
+            self.diags.push(
+                BlockLayoutDiagnostic::InvalidStd140ArrayStride {
+                    ref_chain: self.ref_chain.clone(),
+                    ty: ty.clone(),
+                    stride,
+                }
+                .into(),
+            );
+            /*compiler.diag_error("invalid array layout")
+            .primary_label_opt(member_span, "in this member")
             .note(
                 "this type appears within a std140 layout struct, consider adding the `stride(16)` qualifier to the type",
             )
-            .emit();
+            .emit();*/
+
+            //
+        }
+        stride
     }
-    Ok(stride)
-}
 
-/// Returns the size and base alignment of the specified type when used as a member of a structure type.
-pub(crate) fn std_type_layout(
-    compiler: &dyn CompilerDb,
-    ty: &Type,
-    layout_rule: StdLayoutRules,
-    syntax: Option<ast::Type>,
-) -> Result<Layout, LayoutError> {
-    let loc = syntax.as_ref().map(|s| s.source_location());
-
-    match *ty.0 {
-        TypeKind::Unit => Ok(Layout { align: 0, size: 0 }),
-        TypeKind::Scalar(scalar_type) => Ok(std_scalar_type_layout(scalar_type)),
-        TypeKind::Vector(scalar_type, len) => Ok(std_vector_type_layout(scalar_type, len)),
-        TypeKind::Matrix {
-            component_type: _,
-            columns,
-            rows: _,
-            stride,
-        } => {
-            // if std140, check that the stride is a multiple of vec4 size
-            if layout_rule == Std140 && stride % 16 != 0 {
-                compiler.diag_error("invalid matrix layout")
-                    .primary_label_opt(loc, "")
-                    .note(
-                        "this type appears within a std140 layout struct, consider using the `std140` variant of the type",
-                    )
-                    .emit();
-            }
-
-            Ok(Layout {
-                align: stride,
-                size: stride * (columns as u32),
-            })
-        }
-        TypeKind::Array {
-            ref element_type,
-            size,
-            stride,
-        } => {
-            // will emit a diagnostic if the calculated layouts are invalid w.r.t layout_rule
-            std_array_stride(compiler, element_type, stride, layout_rule, None)?;
-
-            if let Some(stride) = stride {
-                Ok(Layout {
-                    align: stride,
-                    size: stride * size,
-                })
-            } else {
-                // No stride = Opaque element type
-                Err(LayoutError::OpaqueType)
-            }
-        }
-        TypeKind::RuntimeArray {
-            ref element_type,
-            stride,
-        } => {
-            // will emit a diagnostic if the calculated layouts are invalid w.r.t layout_rule
-            std_array_stride(compiler, element_type, stride, layout_rule, None)?;
-            if let Some(stride) = stride {
-                Ok(Layout { align: stride, size: 0 })
-            } else {
-                Err(LayoutError::OpaqueType)
-            }
-        }
-        TypeKind::Struct {
-            ref name,
-            ref fields,
-            def,
-            ref offsets,
-        } => {
-            if let Some(offsets) = offsets {
-                let (layout, new_offsets) = std_struct_layout(compiler, &fields, layout_rule)?;
-                // Compare the offsets computed with the current layout rule to the offsets computed for the standalone type.
-                // They should be the same.
-                if offsets != &new_offsets {
-                    //
-                    compiler
-                        .diag_error(format!(
-                            "structure `{name}` layout is incompatible with {layout_rule:?} layout rules"
-                        ))
-                        .primary_label_opt(loc, "type used here")
-                        .emit();
-                    Err(LayoutError::IncompatibleLayout)
-                    // TODO: show where the offsets differ from the std layout rule
-                    // TODO: source location of the offending struct
-                    // TODO: chain of uses leading to the struct
-                } else {
-                    Ok(layout)
+    /// Returns the size and base alignment of the specified type when used as a member of a structure type.
+    fn check_type_layout(&mut self, ty: &Type) -> Layout {
+        match *ty.0 {
+            TypeKind::Unit => Layout { align: 0, size: 0 },
+            TypeKind::Scalar(scalar_type) => std_scalar_type_layout(scalar_type),
+            TypeKind::Vector(scalar_type, len) => std_vector_type_layout(scalar_type, len),
+            TypeKind::Matrix {
+                component_type: _,
+                columns,
+                rows: _,
+                stride,
+            } => {
+                // if std140, check that the stride is a multiple of vec4 size
+                if self.layout_rule == Std140 && stride % 16 != 0 {
+                    self.diags.push(
+                        BlockLayoutDiagnostic::InvalidStd140MatrixLayout {
+                            ref_chain: self.ref_chain.clone(),
+                            ty: ty.clone(),
+                        }
+                        .into(),
+                    );
                 }
-            } else {
-                Err(LayoutError::OpaqueType)
+
+                Layout {
+                    align: stride,
+                    size: stride * (columns as u32),
+                }
+            }
+            TypeKind::Array {
+                ref element_type,
+                size,
+                stride,
+            } => {
+                // will emit a diagnostic if the calculated layouts are invalid w.r.t layout_rule
+                self.check_array_stride(ty, element_type, stride);
+
+                if let Some(stride) = stride {
+                    Layout {
+                        align: stride,
+                        size: stride * size,
+                    }
+                } else {
+                    // opaque type, this is an error but it should have been reported elsewhere
+                    warn_opaque_type();
+                    // return a dummy layout so that compilation can proceed
+                    Layout { align: 1, size: 1 }
+                }
+            }
+            TypeKind::RuntimeArray {
+                ref element_type,
+                stride,
+            } => {
+                // will emit a diagnostic if the calculated layouts are invalid w.r.t layout_rule
+                self.check_array_stride(ty, element_type, stride);
+                if let Some(stride) = stride {
+                    Layout { align: stride, size: 0 }
+                } else {
+                    warn_opaque_type();
+                    Layout { align: 1, size: 1 }
+                }
+            }
+            TypeKind::Struct {
+                ref name,
+                ref fields,
+                ref layout,
+                ..
+            } => {
+                if let Some(layout) = layout {
+                    // check the provided layout agains the current layout rule
+                    let new_layout = self.check_struct_layout(name, &fields, Some(&layout.offsets));
+                    // Always return new_layout which is computed under the current layout rules.
+                    // This way we don't get cascading errors if the layout mismatch
+                    // happens several layers deep.
+                    new_layout.layout
+                } else {
+                    warn_opaque_type();
+                    Layout { align: 1, size: 1 }
+                }
+            }
+            TypeKind::Pointer { .. } => {
+                todo!("pointer type layout")
+            }
+            TypeKind::Image(_)
+            | TypeKind::Function(_)
+            | TypeKind::Sampler
+            | TypeKind::SamplerShadow
+            | TypeKind::String
+            | TypeKind::Unknown
+            | TypeKind::Error => {
+                warn_opaque_type();
+                Layout { align: 1, size: 1 }
             }
         }
-        TypeKind::Pointer { .. } => {
-            todo!("pointer type layout")
+    }
+
+    ///
+    /// # Arguments
+    ///
+    /// * std_layout the layout rule used to compute member offsets
+    /// * required_layout the layout rule that the offsets must conform to (due to this struct being used in another).
+    ///   This can be different from `std_layout` as long as they produce the same result.
+    pub(crate) fn check_struct_layout(
+        &mut self,
+        struct_name: &str,
+        fields: &[crate::tast::ty::StructField],
+        expected_offsets: Option<&[u32]>,
+    ) -> StructLayout {
+        let mut next_offset = 0;
+        let mut offsets = Vec::with_capacity(fields.len());
+        let mut max_align = 0;
+
+        if let Some(expected_offsets) = expected_offsets {
+            assert_eq!(expected_offsets.len(), fields.len());
         }
-        TypeKind::Image(_)
-        | TypeKind::Function(_)
-        | TypeKind::Sampler
-        | TypeKind::SamplerShadow
-        | TypeKind::String
-        | TypeKind::Unknown
-        | TypeKind::Error => Err(LayoutError::OpaqueType),
+
+        for (i_field, field) in fields.iter().enumerate() {
+            let member_info = MemberInfo {
+                member: field.syntax.clone(),
+                struct_name: struct_name.to_string(),
+                member_name: field.name.clone(),
+                member_index: i_field,
+            };
+            self.ref_chain.push(member_info);
+
+            let member_layout = self.check_type_layout(&field.ty);
+
+            // compute actual alignment
+            let mut actual_alignment = member_layout.align;
+            if self.layout_rule == Std140 {
+                // round up the alignment to vec4 if layout rule is std140
+                actual_alignment = round_up(actual_alignment, 16)
+            }
+            if let Some(explicit_alignment) = field.align {
+                // take into account explicit alignment if any
+                // check that it's a power of two
+                // TODO this should be done when parsing the attribute
+
+                if explicit_alignment.is_power_of_two() {
+                    actual_alignment = actual_alignment.max(explicit_alignment);
+                } else {
+                    // ignore explicit alignment if it's invalid (not a power of two)
+                    // it should have been reported before
+                    /*errors.push(LayoutDiagnostic::AlignmentNotPowerOfTwo {
+                        member: field.syntax.clone(),
+                        member_name: field.name.clone(),
+                        member_index: i_field,
+                        explicit_alignment,
+                    });*/
+                }
+            }
+
+            // compute actual offset
+            let mut actual_offset = if let Some(explicit_offset) = field.offset {
+                // check that it doesn't overlap with the previous member
+                if explicit_offset < next_offset {
+                    self.diags.push(
+                        BlockLayoutDiagnostic::MemberOverlap {
+                            member: self.ref_chain.last().unwrap().clone(),
+                            explicit_offset,
+                            computed_next_offset: next_offset,
+                        }
+                        .into(),
+                    )
+                }
+                // ... and that it is correctly aligned
+                if (explicit_offset % actual_alignment) != 0 {
+                    self.diags.push(
+                        BlockLayoutDiagnostic::MisalignedOffset {
+                            ref_chain: self.ref_chain.clone(),
+                            explicit_offset,
+                            required_alignment: actual_alignment,
+                        }
+                        .into(),
+                    )
+                }
+                explicit_offset
+            } else {
+                // compute by rounding up next_offset to alignment of the member
+                round_up(next_offset, actual_alignment)
+            };
+
+            // check offset with what is expected
+            if let Some(expected_offsets) = expected_offsets {
+                if expected_offsets[i_field] != actual_offset {
+                    self.diags.push(
+                        BlockLayoutDiagnostic::LayoutMismatch {
+                            ref_chain: self.ref_chain.clone(),
+                            computed_offset: actual_offset,
+                            expected_offset: expected_offsets[i_field],
+                        }
+                        .into(),
+                    )
+                }
+            }
+
+            // update offset, next offset and max align
+            offsets.push(actual_offset);
+            next_offset = actual_offset + member_layout.size;
+            max_align = max_align.max(actual_alignment);
+
+            // In addition, if the member is a struct, round up the next offset to the multiple of the alignment.
+            // See OpenGL 4.6 spec - 7.6.2.2:
+            //
+            //         The structure may have padding at the end;
+            //         the base offset of the member following the sub-structure is rounded up to
+            //         the next multiple of the base alignment of the structure.
+            //
+            if field.ty.is_struct() {
+                next_offset = round_up(next_offset, actual_alignment);
+            }
+        }
+
+        if self.layout_rule == Std140 {
+            // OpenGL 4.6 spec - 7.6.2.2 Standard Uniform Block Layout:
+            //
+            //      If the member is a structure, the base alignment of the structure is N , where
+            //      N is the largest base alignment value of any of its members, and rounded
+            //      up to the base alignment of a vec4.
+            max_align = round_up(max_align, 16);
+        }
+
+        StructLayout {
+            offsets,
+            layout: Layout {
+                align: max_align,
+                size: next_offset,
+            },
+        }
     }
 }
 
-///
-/// # Arguments
-///
-/// * std_layout the layout rule used to compute member offsets
-/// * required_layout the layout rule that the offsets must conform to (due to this struct being used in another).
-///   This can be different from `std_layout` as long as they produce the same result.
-pub(crate) fn std_struct_layout(
+pub(crate) fn check_struct_layout(
     compiler: &dyn CompilerDb,
+    struct_name: &str,
     fields: &[crate::tast::ty::StructField],
-    std_layout: StdLayoutRules,
-) -> Result<(Layout, Vec<u32>), LayoutError> {
-    let mut next_offset = 0;
-    let mut offsets = Vec::with_capacity(fields.len());
-    let mut max_align = 0;
-
-    for field in fields.iter() {
-        let member_layout = std_type_layout(compiler, &field.ty, std_layout, None)?;
-
-        // compute actual alignment
-        let mut actual_alignment = member_layout.align;
-        if std_layout == Std140 {
-            // round up the alignment to vec4 if layout rule is std140
-            actual_alignment = round_up(actual_alignment, 16)
-        }
-        if let Some(explicit_alignment) = field.align {
-            // take into account explicit alignment if any
-            // check that it's a power of two
-            if !explicit_alignment.is_power_of_two() {
-                let name = &field.name;
-                // FIXME: source location
-                compiler
-                    .diag_error(format!("alignment of member `{name}` must be a power of two"))
-                    .emit();
-            }
-            actual_alignment = actual_alignment.max(explicit_alignment);
-        }
-
-        // compute actual offset
-        let mut actual_offset = if let Some(explicit_offset) = field.offset {
-            // check that it doesn't overlap with the previous member
-            if explicit_offset < next_offset {
-                let name = &field.name;
-                // FIXME: source location
-                compiler
-                    .diag_error(format!(
-                    "member `{name}` (at offset {explicit_offset}) overlaps previous members (of size {next_offset})"
-                ))
-                    //.primary_label_opt(field.ast.clone(), "")
-                    .emit();
-            }
-            explicit_offset
-        } else {
-            next_offset
-        };
-
-        // round up to alignment
-        actual_offset = round_up(actual_offset, actual_alignment);
-
-        // update offset, next offset and max align
-        offsets.push(actual_offset);
-        next_offset = actual_offset + member_layout.size;
-        max_align = max_align.max(actual_alignment);
-
-        // In addition, if the member is a struct, round up the next offset to the multiple of the alignment.
-        // See OpenGL 4.6 spec - 7.6.2.2:
-        //
-        //         The structure may have padding at the end;
-        //         the base offset of the member following the sub-structure is rounded up to
-        //         the next multiple of the base alignment of the structure.
-        //
-        if field.ty.is_struct() {
-            next_offset = round_up(next_offset, actual_alignment);
-        }
-    }
-
-    if std_layout == Std140 {
-        // OpenGL 4.6 spec - 7.6.2.2 Standard Uniform Block Layout:
-        //
-        //      If the member is a structure, the base alignment of the structure is N , where
-        //      N is the largest base alignment value of any of its members, and rounded
-        //      up to the base alignment of a vec4.
-        max_align = round_up(max_align, 16);
-    }
-
-    Ok((
-        Layout {
-            align: max_align,
-            size: next_offset,
-        },
-        offsets,
-    ))
+    layout_rule: StdLayoutRules,
+    expected_offsets: Option<&[u32]>,
+    diags: &mut Vec<TyDiagnostic>,
+) -> StructLayout {
+    let mut ctx = BlockLayoutCheck::new(compiler, layout_rule, diags);
+    ctx.check_struct_layout(struct_name, fields, expected_offsets)
 }

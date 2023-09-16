@@ -1,5 +1,5 @@
 use crate::{
-    diagnostic::AsSourceLocation,
+    diagnostic::Span,
     hir::Interpolation,
     session::Namespace,
     syntax::ast,
@@ -7,13 +7,13 @@ use crate::{
     tast::{
         attributes::{check_attributes, AttributeTarget, KnownAttribute, KnownAttributeKind},
         def::{DefKind, FunctionDef, FunctionParam, GlobalDef, StructDef},
-        layout::{std_struct_layout, StdLayoutRules::Std430},
+        layout::{check_struct_layout, StdLayoutRules::Std430},
         scope::{Res, Scope},
         ty::StructField,
-        Def, DefId, FunctionType, IdentExt, TypeCheckItemCtxt, TypeKind, Visibility,
+        Def, DefId, FunctionType, InFile, NameExt, TypeCheckItemCtxt, TypeKind, Visibility,
     },
 };
-use rowan::ast::AstPtr;
+use rowan::ast::{AstNode, AstPtr};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -140,12 +140,12 @@ impl<'a> TypeCheckItemCtxt<'a> {
 
         let def = Def {
             //package: None,
-            location: Some(global.source_location()),
+            span: Some(Span::new(self.source_file, global.syntax().text_range())),
             builtin: false,
             name: name.clone(),
             visibility,
             kind: DefKind::Global(GlobalDef {
-                ast: Some(ast::AstPtr::new(global)),
+                ast: Some(InFile::new(self.source_file, AstPtr::new(global))),
                 linkage,
                 ty,
                 qualifier,
@@ -186,8 +186,11 @@ impl<'a> TypeCheckItemCtxt<'a> {
                     .unwrap_or_else(|| self.compiler.tyctxt().error.clone());
                 arg_types.push(ty.clone());
                 params.push(FunctionParam {
-                    ast: Some(AstPtr::new(&param)),
-                    name: param.ident().map(|id| id.text().to_string()).unwrap_or_default(),
+                    ast: Some(InFile::new(self.source_file, AstPtr::new(&param))),
+                    name: param
+                        .name()
+                        .map(|param_name| param_name.text().to_string())
+                        .unwrap_or_default(),
                     ty,
                 });
             }
@@ -242,12 +245,12 @@ impl<'a> TypeCheckItemCtxt<'a> {
 
         let def = Def {
             //package: None,
-            location: Some(fn_def.source_location()),
+            span: Some(Span::new(self.source_file, fn_def.syntax().text_range())),
             builtin: false,
             name: name.clone(),
             visibility,
             kind: DefKind::Function(FunctionDef {
-                ast: Some(ast::AstPtr::new(fn_def)),
+                ast: Some(InFile::new(self.source_file, AstPtr::new(fn_def))),
                 has_body: fn_def.block().is_some(),
                 linkage,
                 function_control: spirv::FunctionControl::NONE,
@@ -265,7 +268,7 @@ impl<'a> TypeCheckItemCtxt<'a> {
     }
 
     fn define_struct(&mut self, struct_def: &ast::StructDef) -> DefId {
-        let name = struct_def.ident().to_string_opt();
+        let name = struct_def.name().to_string_opt();
         let visibility = struct_def
             .visibility()
             .and_then(|v| v.visibility())
@@ -282,8 +285,9 @@ impl<'a> TypeCheckItemCtxt<'a> {
             let var_attrs = VariableAttributes::from_attributes(&attrs);
 
             fields.push(StructField {
-                name: field.ident().to_string_opt(),
+                name: field.name().to_string_opt(),
                 ty,
+                syntax: Some(InFile::new_ast_ptr(self.source_file, &field)),
                 location: var_attrs.location,
                 interpolation: var_attrs.interpolation,
                 builtin: var_attrs.builtin,
@@ -292,34 +296,36 @@ impl<'a> TypeCheckItemCtxt<'a> {
             });
         }
 
-        // compute field offsets
-        let offsets = match std_struct_layout(
-            self.compiler,
-            &fields,
-            // TODO attributes for std layouts
-            Std430,
-        ) {
-            Ok((_layout, offsets)) => Some(offsets),
-            Err(_err) => None, // error already reported by std_struct_layout
+        let layout = if fields.iter().all(|f| !f.ty.is_opaque()) {
+            // compute layout if the struct does not have opaque fields
+            // TODO attributes for std layout rules
+            // TODO move layout check to a separate query/pass; IDE diagnostics don't need layout information immediately.
+            let result = check_struct_layout(self.compiler, &name, &fields, Std430, None, &mut self.errors);
+            Some(result)
+        } else {
+            None
         };
 
         let def_id = self.compiler.def_id(self.module, name.clone(), Namespace::Type);
+
+        // create the struct type
         let ty = self.compiler.tyctxt().ty(TypeKind::Struct {
             name: name.clone(),
             def: Some(def_id),
             fields,
-            offsets,
+            layout,
         });
 
+        // create the definition
         self.typed_module.defs.insert(
             def_id,
             Def {
-                location: Some(struct_def.source_location()),
+                span: Some(Span::new(self.source_file, struct_def.syntax().text_range())),
                 builtin: false,
                 name,
                 visibility,
                 kind: DefKind::Struct(StructDef {
-                    ast: Some(AstPtr::new(struct_def)),
+                    ast: Some(InFile::new(self.source_file, AstPtr::new(struct_def))),
                     ty,
                 }),
             },

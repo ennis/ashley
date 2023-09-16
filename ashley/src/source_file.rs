@@ -1,5 +1,21 @@
-use codespan_reporting::files::{line_starts, Error};
+use crate::syntax::TextRange;
+use codespan_reporting::files::line_starts;
+use rowan::TextSize;
 use std::ops::Range;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct LineCharacterPosition {
+    /// Line number (0-based).
+    pub line: usize,
+    /// Character offset in UTF-8 code units (i.e. bytes).
+    pub character_offset: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct LineCharacterRange {
+    pub start: LineCharacterPosition,
+    pub end: LineCharacterPosition,
+}
 
 #[derive(Clone, Debug)]
 pub struct SourceFile {
@@ -71,9 +87,10 @@ impl SourceFile {
     }
 
     /// Returns the line corresponding to the given byte index.
-    pub fn line_index(&self, byte_index: usize) -> usize {
+    pub fn line_index(&self, pos: TextSize) -> usize {
+        let byte_pos: usize = pos.into();
         self.line_starts
-            .binary_search(&byte_index)
+            .binary_search(&byte_pos)
             .unwrap_or_else(|next_line| next_line - 1)
     }
 
@@ -84,5 +101,18 @@ impl SourceFile {
         let line_start = self.line_start(line_index)?;
         let next_line_start = self.line_start(line_index + 1)?;
         Some(line_start..next_line_start)
+    }
+
+    pub fn line_character_position(&self, pos: TextSize) -> LineCharacterPosition {
+        let line = self.line_index(pos.into());
+        let character_offset = usize::from(pos) - self.line_starts[line];
+        LineCharacterPosition { line, character_offset }
+    }
+
+    pub fn line_character_range(&self, text_range: TextRange) -> LineCharacterRange {
+        LineCharacterRange {
+            start: self.line_character_position(text_range.start()),
+            end: self.line_character_position(text_range.end()),
+        }
     }
 }

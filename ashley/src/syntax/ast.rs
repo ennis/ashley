@@ -1,6 +1,5 @@
 use crate::{
-    diagnostic::{AsSourceLocation, SourceLocation},
-    syntax::{Lang, SyntaxKind, SyntaxNode, SyntaxToken},
+    syntax::{DiagnosticSpan, Lang, SourceFileId, SyntaxKind, SyntaxNode, SyntaxToken, TextRange},
     tast, T,
 };
 use std::num::{ParseFloatError, ParseIntError};
@@ -108,9 +107,13 @@ macro_rules! impl_ast_token {
             }
         }
 
-        impl AsSourceLocation for $name {
-            fn source_location(&self) -> SourceLocation {
-                self.syntax().source_location()
+        impl DiagnosticSpan for $name {
+            fn file(&self) -> Option<SourceFileId> {
+                None
+            }
+
+            fn range(&self) -> TextRange {
+                self.syntax().range()
             }
         }
     };
@@ -168,24 +171,16 @@ macro_rules! impl_ast_node {
             )*
         }
 
-        impl AsSourceLocation for $name {
-            fn source_location(&self) -> SourceLocation {
-                self.syntax().source_location()
+        impl DiagnosticSpan for $name {
+            fn file(&self) -> Option<SourceFileId> {
+                None
+            }
+
+            fn range(&self) -> TextRange {
+                self.syntax().range()
             }
         }
     };
-
-    /*($name:ident <$syntax_kind:ident>) => {
-        impl_ast_node!($name <$syntax_kind> CHILD [] CHILDREN [] TOKEN []);
-    };
-
-    ($name:ident <$syntax_kind:ident> CHILD [ $($child_method:ident: $child_ast:ty),* ]) => {
-        impl_ast_node!($name <$syntax_kind> CHILD [$($child_method:$child_ast),*] CHILDREN [] TOKEN []);
-    };
-
-    ($name:ident <$syntax_kind:ident> TOKEN [ $($token_method:ident: $token_ast:ty),* ]) => {
-        impl_ast_node!($name <$syntax_kind> CHILD [] CHILDREN [] TOKEN [$($token_method:$token_ast),*]);
-    };*/
 }
 
 macro_rules! impl_ast_variant_node {
@@ -219,9 +214,13 @@ macro_rules! impl_ast_variant_node {
             }
         }
 
-        impl AsSourceLocation for $name {
-            fn source_location(&self) -> SourceLocation {
-                self.syntax().source_location()
+        impl DiagnosticSpan for $name {
+            fn file(&self) -> Option<SourceFileId> {
+                None
+            }
+
+            fn range(&self) -> TextRange {
+                self.syntax().range()
             }
         }
     };
@@ -246,27 +245,27 @@ impl_ast_variant_node!(AttrItem, [
     ATTR_LITERAL => AttrLiteral,
     ATTR_KEY_VALUE => AttrKeyValue
 ]);
-impl_ast_node!(Attribute   <ATTRIBUTE>      [token name: Ident, node args: AttrArgs]);
+impl_ast_node!(Attribute   <ATTRIBUTE>      [node name: Name, node args: AttrArgs]);
 impl_ast_node!(AttrIdent   <ATTR_IDENT>     [token ident: Ident]);
 impl_ast_node!(AttrLiteral <ATTR_LITERAL>   [node expr: LitExpr]);
 impl_ast_node!(AttrKeyValue <ATTR_KEY_VALUE> [token key: Ident, node value: Expr]);
 impl_ast_node!(AttrNested  <ATTR_NESTED>  [token ident: Ident, node args: AttrArgs]);
 impl_ast_node!(AttrArgs    <ATTR_ARGS>  [nodes args: AttrItem]);
 impl_ast_node!(Module      <MODULE>       [nodes items: Item]);
-impl_ast_node!(ImportDecl  <IMPORT_DECL>  [token package_name: Ident]);
+impl_ast_node!(ImportDecl  <IMPORT_DECL>  [node package_name: Name]);
 impl_ast_node!(ImportParamList <IMPORT_PARAM_LIST>  []);
-impl_ast_node!(ImportAlias <IMPORT_ALIAS> [token alias: Ident]);
-impl_ast_node!(TypeRef     <TYPE_REF>     [token ident: Ident, nodes qualifiers: TypeQualifier]);
+impl_ast_node!(ImportAlias <IMPORT_ALIAS> [node name: Name]);
+impl_ast_node!(TypeRef     <TYPE_REF>     [node name: Name, nodes qualifiers: TypeQualifier]);
 impl_ast_node!(TupleType   <TUPLE_TYPE>   [nodes fields: Type]);
-impl_ast_node!(StrideQualifier   <STRIDE_QUALIFIER>   [token stride: IntNumber]);
+impl_ast_node!(StrideQualifier   <STRIDE_QUALIFIER>   [node stride: Expr]);
 impl_ast_node!(RowMajorQualifier   <ROW_MAJOR_QUALIFIER>   []);
 impl_ast_node!(ColumnMajorQualifier   <COLUMN_MAJOR_QUALIFIER>   []);
 impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node element_type: Type, node length: Expr, nodes qualifiers: TypeQualifier]);
 impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node return_type: Type]);
-impl_ast_node!(StructDef   <STRUCT_DEF>   [node visibility: Visibility, token ident: Ident, nodes fields: StructField]);
-impl_ast_node!(StructField <STRUCT_FIELD> [nodes attrs: Attribute, token ident: Ident, node ty: Type]);
+impl_ast_node!(StructDef   <STRUCT_DEF>   [node visibility: Visibility, node name: Name, nodes fields: StructField]);
+impl_ast_node!(StructField <STRUCT_FIELD> [nodes attrs: Attribute, node name: Name, node ty: Type]);
 impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
-impl_ast_node!(FnParam     <FN_PARAM>     [token ident: Ident, node ty: Type]);
+impl_ast_node!(FnParam     <FN_PARAM>     [node name: Name, node ty: Type]);
 impl_ast_node!(ParamList   <PARAM_LIST>   [nodes parameters: FnParam]);
 impl_ast_node!(ClosureParamList   <CLOSURE_PARAM_LIST>   [nodes parameters: Type]);
 
@@ -277,7 +276,7 @@ impl_ast_node!(FnDef<FN_DEF>
                 node return_type: Type,
                 node param_list: ParamList,
                 node block: Block,
-                token name: Ident]);
+                node name: Name]);
 
 /*impl_ast_node!(FnDecl<FN_DECL>
 [node extern_: Extern,
@@ -286,6 +285,7 @@ impl_ast_node!(FnDef<FN_DEF>
  node block: Block,
  token name: Ident]);*/
 
+impl_ast_node!(Name          <NAME>        [token ident: Ident]);
 impl_ast_node!(Condition     <CONDITION>   [node expr: Expr]);
 impl_ast_node!(ArgList       <ARG_LIST>    [nodes arguments: Expr]);
 impl_ast_node!(ExprStmt      <EXPR_STMT>   [node expr: Expr]);
@@ -301,23 +301,25 @@ impl_ast_node!(ForStmt       <FOR_STMT>    [node initializer: ForInit, node cond
 impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: Stmt]);
 impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node stmt: Stmt]);
 impl_ast_node!(BinExpr       <BIN_EXPR>    []);
+impl_ast_node!(TernaryExpr   <TERNARY_EXPR> []);
+// FIXME the name can be confusing: this is the whole "indexing expression", i.e. `array[index]` and not just `index`
 impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
 impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
 impl_ast_node!(CallExpr      <CALL_EXPR>   [node callee: Expr, node arg_list: ArgList]);
 impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
 impl_ast_node!(PostfixExpr   <POSTFIX_EXPR> []);
-impl_ast_node!(FieldExpr     <FIELD_EXPR>  [node expr: Expr, token field: Ident]);
+impl_ast_node!(FieldExpr     <FIELD_EXPR>  [node expr: Expr, node field: Name]);
 impl_ast_node!(LitExpr       <LIT_EXPR>    []);
-impl_ast_node!(PathExpr      <PATH_EXPR>   [token ident: Ident]);
+impl_ast_node!(PathExpr      <PATH_EXPR>   [node name: Name]);
 impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
 impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
 impl_ast_node!(ConstructorExpr <CONSTRUCTOR>  [node ty: Type, node args: ArgList]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Qualifier     <QUALIFIER>   []);
-impl_ast_node!(Visibility    <VISIBILITY>   []);
-impl_ast_node!(Linkage        <LINKAGE>      []);
-impl_ast_node!(Global        <GLOBAL>      [nodes attrs: Attribute, token name: Ident, node visibility: Visibility, node extern_: Linkage, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
-impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [token name: Ident, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(Visibility    <VISIBILITY>  []);
+impl_ast_node!(Linkage        <LINKAGE>    []);
+impl_ast_node!(Global        <GLOBAL>      [nodes attrs: Attribute, node name: Name, node visibility: Visibility, node extern_: Linkage, node qualifier: Qualifier, node ty: Type, node initializer: Initializer ]);
+impl_ast_node!(LocalVariable <LOCAL_VARIABLE> [node name: Name, node ty: Type, node initializer: Initializer ]);
 
 impl_ast_variant_node!(Type, [ TYPE_REF => TypeRef, TUPLE_TYPE => TupleType, ARRAY_TYPE => ArrayType, CLOSURE_TYPE => ClosureType ]);
 impl_ast_variant_node!(Item, [ FN_DEF => FnDef, GLOBAL => Global, STRUCT_DEF => StructDef, IMPORT_DECL => ImportDecl ]);
@@ -349,6 +351,7 @@ impl_ast_variant_node!(Expr, [
     TUPLE_EXPR => TupleExpr,
     ARRAY_EXPR => ArrayExpr,
     FIELD_EXPR => FieldExpr,
+    TERNARY_EXPR => TernaryExpr,
     CONSTRUCTOR => ConstructorExpr
 ]);
 
@@ -356,6 +359,13 @@ impl_ast_variant_node!(Expr, [
 impl Ident {
     pub fn text(&self) -> &str {
         self.syntax.text()
+    }
+}
+
+impl Name {
+    pub fn text(&self) -> String {
+        // IDENT is never None because if parse_name fails, no NAME node is created.
+        self.ident().unwrap().text().to_string()
     }
 }
 
@@ -514,6 +524,20 @@ impl PostfixExpr {
 
     pub fn expr(&self) -> Option<Expr> {
         self.syntax.children().filter_map(Expr::cast).nth(0)
+    }
+}
+
+impl TernaryExpr {
+    pub fn condition(&self) -> Option<Condition> {
+        self.syntax.children().filter_map(Condition::cast).nth(0)
+    }
+
+    pub fn true_alt(&self) -> Option<Expr> {
+        self.syntax.children().filter_map(Expr::cast).nth(0)
+    }
+
+    pub fn false_alt(&self) -> Option<Expr> {
+        self.syntax.children().filter_map(Expr::cast).nth(1)
     }
 }
 

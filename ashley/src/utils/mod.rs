@@ -5,7 +5,7 @@ pub use ashley_derive::MemoryLayout;
 pub use memory_layout::{MemoryLayout, Std140Float, Std140IVec4, Std140Int, Std140Vec4};
 use std::fmt;
 
-pub(crate) use ashley_data_structures::{Id, IndexVec, IndexVecMap};
+pub(crate) use ashley_data_structures::{Id, IndexVec};
 pub(crate) use interner::UniqueArena;
 
 /// Helper macro to write a comma-separated list.

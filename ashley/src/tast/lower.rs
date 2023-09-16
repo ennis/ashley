@@ -1,4 +1,5 @@
 //! Lowering to HIR
+//! TODO this should be in the `hir` module
 use crate::{
     builtins::{BuiltinSignature, Constructor},
     hir,
@@ -112,7 +113,7 @@ impl<'a> LowerCtxt<'a> {
                 ref name,
                 ref fields,
                 def: _,
-                ref offsets,
+                ref layout,
             } => {
                 let fields: Vec<_> = fields
                     .iter()
@@ -123,10 +124,9 @@ impl<'a> LowerCtxt<'a> {
                     })
                     .collect();
 
-                let layout = if let Some(offsets) = offsets {
+                let hir_layout = if let Some(ref layout) = layout {
                     Some(StructLayout {
-                        offsets: offsets.clone(),
-                        layouts: vec![],
+                        offsets: layout.offsets.clone(),
                     })
                 } else {
                     None
@@ -135,7 +135,7 @@ impl<'a> LowerCtxt<'a> {
                 hir::TypeData::Struct(hir::types::StructType {
                     name: Some(Cow::Owned(name.clone())),
                     fields: fields.into(),
-                    layout,
+                    layout: hir_layout,
                     block: false,
                 })
             }
@@ -212,7 +212,7 @@ impl<'a> LowerCtxt<'a> {
             name: def.name.clone(),
             ty,
             storage_class,
-            source_location: def.location,
+            source_location: def.span,
             linkage: global_def.linkage,
             decorations,
             removed: false,
@@ -343,7 +343,9 @@ impl<'a> LowerCtxt<'a> {
             }
             ExprKind::GlobalVar { var } => {
                 let global = self.def_map.get(&var).expect("invalid global var");
-                let HirDef::Variable(id) = global else  { panic!("invalid global var") };
+                let HirDef::Variable(id) = global else {
+                    panic!("invalid global var")
+                };
                 let global = &fb.module.globals[*id];
                 Place {
                     base: (*id).into(),
@@ -403,7 +405,9 @@ impl<'a> LowerCtxt<'a> {
         } else {
             // FIXME: the function may not be defined yet: we rely on the fact that, in GLSL, item definitions must appear before their use in the source code,
             // and thus the definitions are correctly ordered in the resulting TAST, but this might no longer be the case if we decide to use the TAST for other frontends.
-            let Some(HirDef::Function(hir_func)) = self.def_map.get(&function_id) else { panic!("function not lowered yet") };
+            let Some(HirDef::Function(hir_func)) = self.def_map.get(&function_id) else {
+                panic!("function not lowered yet")
+            };
             Some(
                 fb.emit_function_call(result_type, IdRef::from(*hir_func), &arg_ids)
                     .into(),
@@ -455,9 +459,10 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_literal(&mut self, fb: &mut hir::FunctionBuilder, value: &ConstantValue) -> hir::IdRef {
         match *value {
-            ConstantValue::Int(v) => fb.const_i32(v).into(),
+            ConstantValue::Int(v) => fb.const_i32(v as i32).into(),
             ConstantValue::Float(v) => fb.const_f32(v.0).into(),
             ConstantValue::Bool(v) => fb.const_bool(v).into(),
+            _ => unimplemented!("lowering for `{value:?}`"),
         }
     }
 
@@ -528,7 +533,9 @@ impl<'a> LowerCtxt<'a> {
                 }
             }
             ExprKind::GlobalVar { var } => {
-                let Some(HirDef::Variable(global)) = self.def_map.get(&var) else { panic!("invalid global var") };
+                let Some(HirDef::Variable(global)) = self.def_map.get(&var) else {
+                    panic!("invalid global var")
+                };
                 fb.emit_load(ty, (*global).into(), None).into()
             }
             ExprKind::Index { .. } => {

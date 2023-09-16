@@ -1748,8 +1748,68 @@ Tentative module system:
   * "package": path in current package. If compiling in "single module mode", will try to find the package root dir.
   * any other custom scheme: as defined by the application
     * may include http
+    * example: `texture:path/to/image.png` to use a texture file inside 
 
 
 Refactoring:
 * Cache URI resolution / canonicalization
 * Module entry has canonicalized URI, source code
+
+# Collect diagnostics for definitions, modules 
+
+* Add `InFile<AstNode>`, like r-a
+* Do diagnostics need to be an enum? Or can we use ad-hoc definitions?
+  * allow ad-hoc definitions?
+* Actually diags should be an enum, because they should be `PartialEq` for the query engine, and we'd need string comparisons for ad-hoc diagnostics. That's what r-a does anyway.
+  * rustc has `PartialEq` for ad-hoc diagnostics (https://doc.rust-lang.org/nightly/nightly-rustc/src/rustc_errors/diagnostic.rs.html#1041-1061), compares messages, suggestions, etc.
+  * Do diags really need to be partialeq?
+
+FIXME: I don't really like having enums for all diags, it feels like useless busywork.
+
+Also, more importantly, the diags contain pointers to the AST, which means that they will compare different on every source code change => the diags are not stable!
+Solution: diags should only have stable pointers, and should be resolved late.
+Example of stable pointers: SourceFileId, 
+
+The whole TypedBody is not stable anyway (because it contains the expr map).
+
+
+## List of diags
+* "condition must be a boolean expression"
+
+# Split name resolution to a separate stage?
+
+Right now name resolution & type checking (and inference) is done when lowering AST to TAST (which is like rust's THIR).
+Not sure what we gain by doing it later.
+
+What we could do though, is defer/split layout calculation away.
+
+Currently, compilation is done in the following stages:
+* syntax (parsing) -> produces an AST
+* TAST items -> lowers AST definitions to TAST items; 
+   Internally, it resolves definition types, computes type layout, and may also lower bodies of constant expressions appearing in types 
+* TAST bodies -> lowers AST bodies (statements & exprs) to TAST bodies (also resolves types)
+
+## New stages:
+
+Naively:
+* syntax
+* definitions
+* bodies
+* typecheck 
+* layout check
+
+But there's a problem: name resolution depends on typeck (to resolve struct fields).
+
+Alternative:
+* syntax -> AST
+* definitions -> Item tree?
+* non-dependent name resolution (variable names, types)
+* typecheck / dependent name resolution (fields)
+* layout check
+
+Note that r-a has a HIR tree with unresolved names.
+
+TODO:
+* keep typecheck/nameres/consteval in the same stage
+
+* There should be "Bodies" for (const) expressions appearing within types

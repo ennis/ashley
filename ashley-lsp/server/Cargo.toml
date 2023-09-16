@@ -11,3 +11,4 @@ tracing = "0.1.37"
 ashley = { path = "../../ashley" }
 anyhow = "1.0.69"
 tokio = { version = "1.17.0", features = ["full"] }
+url = "2.3.1"

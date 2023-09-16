@@ -14,32 +14,8 @@ pub(crate) enum Res {
     PrimTy(Type),
 }
 
-// TODO replace Scope with an struct + enum kind
-// - BuiltinTypes: builtin types scope
-// - Prelude: builtin definitions
-// - Module(id): global scope
-// - Block(id, block): local scope
-//
-// To consider:
-// - possible to import names from packages (via aliases)
-// - possible to import all names from a package (glob import)
-// - each module file is a different scope
-//      - not sure about the usefulness of multiple files in the same typectxt => remove for now
-//
-// Name resolution:
-// - first, try local variables & function args
-// - then try global vars
-// - try module imports
-// - try builtin functions
-// - try builtin types
-//
-// Two strategies:
-// 1. have different kinds of scopes that refer to existing items (modules, etc.), and look for names in those items
-// 2. as the AST is traversed, keep a stack of HashMaps of resolved names to def ID
-//
-// (2) is more uniform, but need to build hashmaps that are discarded at the end of the parsing
-// With (1) could store the hash maps directly in the item, or not use a hash map at all.
-
+///
+#[derive(Clone)]
 pub(crate) struct Scope {
     items: HashMap<String, Res>,
 }

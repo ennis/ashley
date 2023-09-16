@@ -1,17 +1,24 @@
 use crate::{
     hir,
-    hir::Interpolation,
-    session::CompilerDb,
+    hir::{Interpolation, Layout},
+    session::{CompilerDb, SourceFileId},
     syntax::{ast, ast::TypeQualifier},
     tast::{
-        consteval::{try_evaluate_constant_expression, ConstantValue},
+        consteval::{eval_non_specialization_constant_expr, try_evaluate_constant_expression, ConstantValue},
         def::DefKind,
-        layout::{std_array_stride, StdLayoutRules::Std430},
+        diagnostics::{
+            TyDiagnostic,
+            TyDiagnostic::{ArrayStrideOnOpaqueType, InvalidArrayStride},
+        },
+        layout::{std_scalar_type_layout, std_vector_type_layout},
         scope::{resolve_name, Res, Scope},
-        DefId,
+        DefId, InFile,
     },
+    utils::round_up,
 };
+use ashley::tast::consteval::ConstEvalError;
 pub use hir::types::{ImageSampling, ImageType};
+use rowan::ast::AstPtr;
 use spirv::Dim;
 use std::{
     fmt,
@@ -142,6 +149,8 @@ pub struct StructField {
     pub name: String,
     /// Type of the field.
     pub ty: Type,
+    /// Syntax node.
+    pub syntax: Option<InFile<AstPtr<ast::StructField>>>,
     pub location: Option<u32>,
     pub interpolation: Option<Interpolation>,
     pub builtin: Option<spirv::BuiltIn>,
@@ -150,10 +159,11 @@ pub struct StructField {
 }
 
 impl StructField {
-    pub fn new(name: String, ty: Type) -> StructField {
+    pub fn new(name: String, ty: Type, syntax: Option<InFile<AstPtr<ast::StructField>>>) -> StructField {
         StructField {
             name,
             ty,
+            syntax,
             location: None,
             interpolation: None,
             builtin: None,
@@ -170,6 +180,11 @@ pub enum MatrixOrder {
     ColumnMajor,
     RowMajor,
 }*/
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StructLayout {
+    pub offsets: Vec<u32>,
+    pub layout: Layout,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TypeKind {
@@ -207,7 +222,7 @@ pub enum TypeKind {
         fields: Vec<StructField>,
         def: Option<DefId>,
         /// Field offsets
-        offsets: Option<Vec<u32>>,
+        layout: Option<StructLayout>,
     },
     /// Unsampled image type.
     Image(hir::types::ImageType),
@@ -398,167 +413,238 @@ impl TypeKind {
             _ => None,
         }
     }
+
+    /// Returns the layout of a type.
+    pub fn layout(&self) -> Option<Layout> {
+        let layout = match *self {
+            TypeKind::Unit => Layout { align: 1, size: 0 },
+            TypeKind::Scalar(s) => std_scalar_type_layout(s),
+            TypeKind::Vector(s, l) => std_vector_type_layout(s, l),
+            TypeKind::Matrix { stride, columns, .. } => Layout {
+                align: stride,
+                size: stride * (columns as u32),
+            },
+            TypeKind::Array { stride, size, .. } => {
+                if let Some(stride) = stride {
+                    Layout {
+                        align: stride,
+                        size: stride * size,
+                    }
+                } else {
+                    return None;
+                }
+            }
+            TypeKind::Struct { ref layout, .. } => {
+                if let Some(layout) = layout {
+                    layout.layout
+                } else {
+                    return None;
+                }
+            }
+            TypeKind::RuntimeArray { .. }
+            | TypeKind::Image(_)
+            | TypeKind::Pointer { .. }
+            | TypeKind::Function(_)
+            | TypeKind::Sampler
+            | TypeKind::SamplerShadow
+            | TypeKind::String
+            | TypeKind::Unknown
+            | TypeKind::Error => {
+                return None;
+            }
+        };
+        Some(layout)
+    }
+}
+
+fn check_int_or_uint(
+    compiler: &dyn CompilerDb,
+    source_file: SourceFileId,
+    expr: &ast::Expr,
+    ty: &Type,
+) -> Option<TyDiagnostic> {
+    match &*ty.0 {
+        TypeKind::Scalar(ScalarType::Int | ScalarType::UnsignedInt) => None,
+        _ => {
+            // TODO it should be "int or uint", not "uint" only => create a special diagnostic for array sizes
+            Some(TyDiagnostic::ConstEvalError(ConstEvalError::TypeMismatch {
+                expr: InFile::new_ast_ptr(source_file, expr),
+                expected: compiler.tyctxt().prim_tys.uint.clone(),
+                resolved: ty.clone(),
+            }))
+        }
+    }
+}
+
+pub(crate) struct TypeLoweringCtxt<'a> {
+    compiler: &'a dyn CompilerDb,
+    scopes: &'a [Scope],
+    diags: &'a mut Vec<TyDiagnostic>,
 }
 
 /// Converts an AST type to a TAST type.
-pub(crate) fn convert_type(ty: ast::Type, compiler: &dyn CompilerDb, scopes: &[Scope]) -> Type {
-    let tyctxt = compiler.tyctxt();
+// TODO: rename this to "check_type", it can emit error diagnostics
+impl<'a> TypeLoweringCtxt<'a> {
+    pub(crate) fn new(
+        compiler: &'a dyn CompilerDb,
+        scopes: &'a [Scope],
+        diags: &'a mut Vec<TyDiagnostic>,
+    ) -> TypeLoweringCtxt<'a> {
+        TypeLoweringCtxt {
+            compiler,
+            scopes,
+            diags,
+        }
+    }
 
-    match ty {
-        ast::Type::TypeRef(tyref) => {
-            let Some(ident) = tyref.ident() else { return tyctxt.error.clone(); };
-            if let Some(res) = resolve_name(tyctxt, ident.text(), scopes) {
-                match res {
-                    Res::Global(def_id) => {
-                        let def = compiler.definition(def_id);
-                        match def.kind {
-                            DefKind::Struct(ref struct_def) => struct_def.ty.clone(),
-                            _ => {
-                                compiler.diag_error("expected a type").location(ident).emit();
-                                tyctxt.error.clone()
+    pub(crate) fn lower_type(&mut self, ty: ast::Type, source_file: SourceFileId) -> Type {
+        let tyctxt = self.compiler.tyctxt();
+
+        match ty {
+            ast::Type::TypeRef(tyref) => {
+                let Some(name) = tyref.name() else {
+                    return tyctxt.error.clone();
+                };
+                if let Some(res) = resolve_name(tyctxt, &name.text(), self.scopes) {
+                    match res {
+                        Res::Global(def_id) => {
+                            let def = self.compiler.definition(def_id);
+                            match def.kind {
+                                DefKind::Struct(ref struct_def) => return struct_def.ty.clone(),
+                                _ => {}
                             }
                         }
-                    }
-                    Res::PrimTy(ty) => ty,
-                    _ => {
-                        compiler.diag_error("expected a type").location(ident).emit();
-                        tyctxt.error.clone()
+                        Res::PrimTy(ty) => return ty,
+                        _ => {}
                     }
                 }
-            } else {
-                // TODO better error message
-                compiler.diag_error("expected a type").location(ident).emit();
+
+                self.diags.push(
+                    TyDiagnostic::UnresolvedType {
+                        name: InFile::new_ast_ptr(source_file, &name),
+                    }
+                    .into(),
+                );
                 tyctxt.error.clone()
             }
-        }
-        ast::Type::TupleType(_tuple_ty) => {
-            todo!("tuple types");
-            /*let fields: Vec<_> = tuple_ty
-                .fields()
-                .enumerate()
-                .map(|(i,f)| StructField {
-                    ast: None,
-                    name: format!("field{}", i),
-                    ty: self.convert_type(f),
-                })
-                .collect();
-            self.module.ty(TypeKind::Struct(Arc::new(StructDef {
-                ast: None,
-                name: "".to_string(), // TODO generate a name for tuples (or remove tuples entirely)
-                fields,
-                ty: (),
-            })))*/
-        }
-        ast::Type::ArrayType(ref array_type) => {
-            let element_type = array_type
-                .element_type()
-                .map(|ty| convert_type(ty, compiler, scopes))
-                .unwrap_or_else(|| tyctxt.error.clone());
+            ast::Type::TupleType(_tuple_ty) => {
+                todo!("tuple types")
+            }
+            ast::Type::ArrayType(ref array_type) => {
+                let element_type = array_type
+                    .element_type()
+                    .map(|ty| self.lower_type(ty, source_file))
+                    .unwrap_or_else(|| tyctxt.error.clone());
 
-            let mut stride = None;
+                let elem_layout = element_type.layout();
 
-            // process type qualifiers
-            for qual in array_type.qualifiers() {
-                match qual {
-                    // TODO clean this up (rightward drift)
-                    TypeQualifier::StrideQualifier(ref q) => {
-                        if let Some(v) = q.stride() {
-                            match v.value() {
-                                Ok(v) => match u32::try_from(v) {
-                                    Ok(v) => stride = Some(v),
-                                    Err(err) => {
-                                        compiler
-                                            .diag_error(format!("invalid stride: {err}"))
-                                            .location(&qual)
-                                            .emit();
+                let mut stride = None;
+
+                // process type qualifiers
+                for qual in array_type.qualifiers() {
+                    match qual {
+                        TypeQualifier::StrideQualifier(ref q) => {
+                            if let Some(stride_expr) = q.stride() {
+                                // const-eval the stride expression
+                                let stride_val = eval_non_specialization_constant_expr(
+                                    self.compiler,
+                                    source_file,
+                                    &stride_expr,
+                                    self.scopes,
+                                    &check_int_or_uint,
+                                    &mut self.diags,
+                                );
+                                let Some(stride_val) = stride_val else { continue };
+                                let user_stride = stride_val
+                                    .to_u32()
+                                    .expect("constant evaluation result did not have the expected type");
+
+                                if let Some(elem_layout) = elem_layout {
+                                    // stride must not be less than the element type size
+                                    let elem_ty_size = elem_layout.size;
+                                    if user_stride < elem_ty_size {
+                                        self.diags.push(InvalidArrayStride {
+                                            stride_qualifier: InFile::new_ast_ptr(source_file, q),
+                                            elem_ty_size,
+                                            stride: user_stride,
+                                        });
+                                        // ignore user-specified stride if it is invalid
+                                        stride = Some(elem_ty_size);
+                                    } else {
+                                        stride = Some(user_stride);
                                     }
-                                },
-                                Err(err) => {
-                                    compiler.diag_bug(format!("syntax error: {err}")).location(&qual).emit();
-                                }
-                            }
-                        } else {
-                            compiler.diag_bug(format!("syntax error")).location(&qual).emit();
-                        }
-                    }
-                    TypeQualifier::RowMajorQualifier(_) => {
-                        compiler
-                            .diag_warn(format!("unimplemented: row_major qualifier"))
-                            .location(&qual)
-                            .emit();
-                    }
-                    TypeQualifier::ColumnMajorQualifier(_) => {
-                        compiler
-                            .diag_warn(format!("unimplemented: column_major qualifier"))
-                            .location(&qual)
-                            .emit();
-                    }
-                }
-            }
-
-            // compute stride
-            if !element_type.is_opaque() {
-                match std_array_stride(compiler, &element_type, stride, Std430, Some(ty.clone())) {
-                    Ok(s) => {
-                        stride = Some(s);
-                    }
-                    Err(_err) => {
-                        // error already reported
-                        stride = None;
-                    }
-                }
-            }
-
-            if let Some(expr) = array_type.length() {
-                if let Some(size) = try_evaluate_constant_expression(compiler, &expr) {
-                    match size {
-                        ConstantValue::Int(size) => {
-                            // TODO validate array length
-                            match u32::try_from(size) {
-                                Ok(size) => tyctxt.ty(TypeKind::Array {
-                                    element_type,
-                                    size,
-                                    stride,
-                                }),
-                                Err(err) => {
-                                    compiler
-                                        .diag_error(format!("invalid array length: {err}"))
-                                        .location(expr)
-                                        .emit();
-                                    tyctxt.error.clone()
+                                } else {
+                                    // cannot specify stride on opaque array
+                                    self.diags.push(ArrayStrideOnOpaqueType {
+                                        stride_qualifier: InFile::new_ast_ptr(source_file, q),
+                                        element_type: element_type.clone(),
+                                    });
+                                    stride = None;
                                 }
                             }
                         }
-                        ConstantValue::Float(_) => {
-                            compiler
-                                .diag_error("array length must be an integer")
-                                .location(expr)
+                        TypeQualifier::RowMajorQualifier(_) => {
+                            self.compiler
+                                .diag_warn(format!("unimplemented: row_major qualifier"))
+                                .location(&qual)
                                 .emit();
-                            tyctxt.error.clone()
                         }
-                        ConstantValue::Bool(_) => {
-                            compiler
-                                .diag_error("array length must be an integer")
-                                .location(expr)
+                        TypeQualifier::ColumnMajorQualifier(_) => {
+                            self.compiler
+                                .diag_warn(format!("unimplemented: column_major qualifier"))
+                                .location(&qual)
                                 .emit();
-                            tyctxt.error.clone()
                         }
+                    }
+                }
+
+                if let Some(elem_layout) = element_type.layout() {
+                    // compute default stride if the user did not specify it
+                    if stride.is_none() {
+                        stride = Some(round_up(elem_layout.size, elem_layout.align));
+                    }
+                }
+
+                // compute stride or check user-specified stride
+                if let Some(elem_layout) = element_type.layout() {
+                    if let Some(ref mut stride) = stride {
+                    } else {
+                        // compute stride
+                        stride = Some(round_up(elem_layout.size, elem_layout.align));
+                    };
+                }
+
+                if let Some(expr) = array_type.length() {
+                    let length = eval_non_specialization_constant_expr(
+                        self.compiler,
+                        source_file,
+                        &expr,
+                        self.scopes,
+                        check_int_or_uint,
+                        &mut self.diags,
+                    );
+
+                    match length {
+                        Some(length) => {
+                            let length = length
+                                .to_u32()
+                                .expect("constant evaluation result did not have the expected type");
+                            tyctxt.ty(TypeKind::Array {
+                                element_type,
+                                size: length,
+                                stride,
+                            })
+                        }
+                        None => tyctxt.error.clone(),
                     }
                 } else {
-                    // TODO better error message
-                    compiler
-                        .diag_error("array length must be a constant expression")
-                        .location(expr)
-                        .emit();
-                    tyctxt.error.clone()
+                    // no length
+                    tyctxt.ty(TypeKind::RuntimeArray { element_type, stride })
                 }
-            } else {
-                // no length
-                tyctxt.ty(TypeKind::RuntimeArray { element_type, stride })
             }
-        }
-        ast::Type::ClosureType(_closure_type) => {
-            todo!("closure types")
+            ast::Type::ClosureType(_closure_type) => {
+                todo!("closure types")
+            }
         }
     }
 }

@@ -182,6 +182,7 @@ pub enum SyntaxKind {
     //
     // Nodes
     //
+    NAME,
     ATTRIBUTE,
     ATTR_ARGS,
     ATTR_LITERAL,

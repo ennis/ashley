@@ -17,6 +17,8 @@ pub enum ScalarType {
     Float,
     Double,
     Bool,
+    // TODO 64-bit scalars
+    // TODO 16-bit scalars? 8-bit? do we need them? does SPIR-V + vulkan support them? Do we gain anything by exposing these?
 }
 
 impl ScalarType {

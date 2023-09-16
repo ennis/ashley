@@ -194,6 +194,10 @@ impl<T, I: Idx> IndexVec<T, I> {
         self.items.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Returns the element at the given index.
     pub fn get(&self, id: I) -> Option<&T> {
         self.items.get(id.to_usize())
@@ -224,6 +228,7 @@ impl<T, I: Idx> IndexMut<I> for IndexVec<T, I> {
 /// Flat map using strongly-typed indices as keys.
 ///
 /// The map is backed by a vector.
+#[derive(Clone, Debug)]
 pub struct IndexVecMap<I, V> {
     items: Vec<Option<V>>,
     _phantom: PhantomData<fn() -> I>,
@@ -235,6 +240,51 @@ impl<I, V> IndexVecMap<I, V> {
             items: vec![],
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<I, V> PartialEq for IndexVecMap<I, V>
+where
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        for i in 0..self.items.len().max(other.items.len()) {
+            if self.items.get(i).and_then(Option::as_ref) != other.items.get(i).and_then(Option::as_ref) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<I, V> Eq for IndexVecMap<I, V> where V: Eq {}
+
+impl<I, V> Hash for IndexVecMap<I, V>
+where
+    V: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let n = self.trimmed_len();
+        Hash::hash(&self.items[0..n], state)
+    }
+}
+
+impl<I, V> Default for IndexVecMap<I, V> {
+    fn default() -> Self {
+        IndexVecMap {
+            items: vec![],
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<I, V> IndexVecMap<I, V> {
+    fn trimmed_len(&self) -> usize {
+        (0..self.items.len())
+            .rev()
+            .position(|i| self.items[i].is_some())
+            .unwrap_or(0)
+            + 1
     }
 }
 

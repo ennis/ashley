@@ -14,7 +14,8 @@
 				"script": "watch"
 			},
 			"env": {
-				"SERVER_PATH": "${workspaceRoot}/../target/debug/ashley-lsp"
+				"SERVER_PATH": "${workspaceRoot}/../target/debug/ashley-lsp",
+				"RUST_BACKTRACE": "1"
 			}
 		},
 		{

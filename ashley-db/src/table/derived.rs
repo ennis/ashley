@@ -99,7 +99,12 @@ where
                 let inserted = self
                     .temp_memos
                     .insert(key, Memo::new(key, value, current_rev, dependencies));
-                assert!(inserted);
+                if !inserted {
+                    // TODO more actionable error message
+                    eprintln!(
+                        "A memo for a value has already been inserted but the value has changed in the same revision"
+                    );
+                }
                 let new_memo = self.temp_memos.get(&key).unwrap();
                 (&new_memo.value, current_rev)
             }
@@ -200,5 +205,9 @@ where
         };
 
         changed_at > rev
+    }
+
+    fn on_new_revision(&mut self, _revision: Revision) {
+        self.clear_temp_memos()
     }
 }

@@ -10,7 +10,7 @@ pub mod transform;
 pub mod types;
 mod visit;
 
-use crate::{diagnostic::SourceLocation, hir, hir::types::ScalarType, utils::UniqueArena};
+use crate::{diagnostic::Span, hir, hir::types::ScalarType, utils::UniqueArena};
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::{spirv, spirv::LinkageType};
@@ -584,7 +584,7 @@ pub struct GlobalVariableData {
     /// Storage class.
     pub storage_class: spirv::StorageClass,
     /// Optional source location.
-    pub source_location: Option<SourceLocation>,
+    pub source_location: Option<Span>,
     /// SPIR-V variable decorations.
     pub decorations: Vec<Decoration>,
     /// Linkage information.

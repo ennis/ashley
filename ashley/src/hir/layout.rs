@@ -5,7 +5,7 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Contains information about the layout of a type.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Layout {
     /// Alignment
     pub align: u32,
@@ -25,9 +25,9 @@ impl Layout {
 pub struct StructLayout {
     /// Offsets of each field.
     pub offsets: Vec<u32>,
-    /// Individual layout information of each field.
-    /// TODO: not sure this is necessary: it can be derived easily for scalar types and should be specified explicitly for nested structs and arrays
-    pub layouts: Vec<Layout>,
+    // Individual layout information of each field.
+    // TODO: not sure this is necessary: it can be derived easily for scalar types and should be specified explicitly for nested structs and arrays
+    //pub layouts: Vec<Layout>,
 }
 
 /*impl StructLayout {

@@ -1,8 +1,9 @@
 //! Compilation cache
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticBuilder, DiagnosticSink, Diagnostics, TermDiagnosticSink},
+    diagnostic::{Diagnostic, DiagnosticBuilder, DiagnosticSink, Diagnostics, Span, TermDiagnosticSink},
     hir,
     resolver::{DummyPackageResolver, PackageResolver},
+    source_file::LineCharacterRange,
     syntax,
     syntax::{ast, AstNode, Lang, SyntaxNode, SyntaxNodePtr},
     tast,
@@ -132,6 +133,11 @@ pub struct ModuleData {
 define_database_tables! {
     struct CompilerQueryData [dyn CompilerDb] {
 
+        // --- Singletons ---
+        input tyctxt(()) -> TypeCtxt;
+        input resolver(()) -> Arc<dyn PackageResolver + Sync + Send>;
+        input custom_attributes(()) -> CustomAttributes;
+
         // --- Interned IDs ---
         intern module_id(String)-> ModuleId;
         intern def_id(DefName) -> DefId;
@@ -236,8 +242,11 @@ pub trait CompilerDb: HasTables<CompilerDbData> {
 
     // --- queries ---
 
+    /// Returns the `ModuleId` corresponding to the given module URL, or returns a new ModuleId.
+    fn module_id(&self, module_url: &str) -> ModuleId;
+
     /// Returns the `DefId` corresponding to the specified name and namespace.
-    fn def_id(&self, package: ModuleId, name: String, namespace: Namespace) -> DefId;
+    fn def_id(&self, module: ModuleId, name: String, namespace: Namespace) -> DefId;
 
     /// Returns information about the given module.
     fn module_data(&self, module: ModuleId) -> &ModuleData;
@@ -275,6 +284,8 @@ pub trait CompilerDb: HasTables<CompilerDbData> {
     /// Specifies that the given source file should be used as default location for subsequent diagnostics.
     ///
     /// This stays until `pop_diagnostic_source_file` is called.
+    ///
+    /// FIXME: ideally this should go away when AST nodes get an associated SourceFileId
     fn push_diagnostic_source_file(&self, source: SourceFileId);
 
     /// Restores the previous source file for diagnostic locations.
@@ -299,11 +310,6 @@ pub trait CompilerDb: HasTables<CompilerDbData> {
     ///
     /// A tuple `(module_id, source_file_id)` containing the ID of the created module and the ID of the
     /// source file associated to the module.
-    ///
-    /// # Notes
-    ///
-    /// This function cannot create instances of
-    ///
     fn create_module_from_source_file(&mut self, canonical_url: &str, contents: &str) -> (ModuleId, SourceFileId);
 
     /// Updates the contents of the specified source file.
@@ -324,6 +330,10 @@ where
 
     fn diag(&self) -> &Diagnostics {
         &self.tables().diag
+    }
+
+    fn module_id(&self, module_url: &str) -> ModuleId {
+        self.tables().query.module_id.intern(module_url.to_string())
     }
 
     fn def_id(&self, module: ModuleId, name: String, namespace: Namespace) -> DefId {
@@ -515,6 +525,10 @@ impl Database for Compiler {
             .expect("invalid database index")
     }
 
+    fn on_new_revision(&mut self, revision: Revision) {
+        self.db_data.query.on_new_revision(revision);
+    }
+
     fn runtime(&self) -> &Runtime {
         &self.db_runtime
     }
@@ -608,6 +622,12 @@ impl dyn CompilerDb {
         let source_file = md.source.expect("`module` should have an associated source file");
         let syntax_tree = self.syntax_tree(source_file);
         (source_file, syntax_tree)
+    }
+
+    /// Returns the line and byte offset within the line for the specified `Span`.
+    pub fn span_to_line_character_range(&self, span: Span) -> LineCharacterRange {
+        let source_file_data = self.source_file(span.file);
+        source_file_data.line_character_range(span.range)
     }
 }
 

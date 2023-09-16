@@ -1,4 +1,10 @@
-use crate::{builtins::BuiltinSignature, diagnostic::SourceLocation, hir::Interpolation, syntax::ast, tast::ty::Type};
+use crate::{
+    builtins::BuiltinSignature,
+    diagnostic::Span,
+    hir::Interpolation,
+    syntax::ast,
+    tast::{ty::Type, InFile},
+};
 use rowan::ast::AstPtr;
 use std::fmt;
 
@@ -44,13 +50,13 @@ impl fmt::Display for Qualifier {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
-    pub ast: Option<AstPtr<ast::StructDef>>,
+    pub ast: Option<InFile<AstPtr<ast::StructDef>>>,
     pub ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionParam {
-    pub ast: Option<AstPtr<ast::FnParam>>,
+    pub ast: Option<InFile<AstPtr<ast::FnParam>>>,
     pub ty: Type,
     /// Can be empty.
     pub name: String,
@@ -108,7 +114,7 @@ impl FunctionQualifiers {
 /// A function definition or declaration.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct FunctionDef {
-    pub ast: Option<ast::AstPtr<ast::FnDef>>,
+    pub ast: Option<InFile<ast::AstPtr<ast::FnDef>>>,
     pub has_body: bool,
     pub linkage: Option<spirv::LinkageType>,
     pub function_control: spirv::FunctionControl,
@@ -120,7 +126,7 @@ pub struct FunctionDef {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalDef {
-    pub ast: Option<ast::AstPtr<ast::Global>>,
+    pub ast: Option<InFile<ast::AstPtr<ast::Global>>>,
     pub linkage: Option<spirv::LinkageType>,
     pub ty: Type,
     pub qualifier: Option<Qualifier>,
@@ -149,7 +155,7 @@ pub struct Def {
     // `None` if defined in the current package.
     //pub package: Option<PackageImportId>,
     /// Source location, if available.
-    pub location: Option<SourceLocation>,
+    pub span: Option<Span>,
     pub builtin: bool,
     /// Name of the definition.
     pub name: String,

@@ -86,6 +86,9 @@ macro_rules! new_key_type {
 pub trait TableOps<DB: Database + ?Sized> {
     /// Returns whether the value at the specified index may have changed since the given revision.
     fn maybe_changed_after(&self, db: &DB, index: Index, revision: Revision) -> bool;
+
+    /// Called after each new revision.
+    fn on_new_revision(&mut self, _revision: Revision) {}
 }
 
 /// Trait implemented by databases that holds

@@ -1,5 +1,5 @@
 use crate::{
-    diagnostic::SourceLocation,
+    diagnostic::Span,
     session::{CompilerDb, SourceFileId},
     syntax::{
         syntax_kind::{Lexer, SyntaxKind::*},
@@ -7,7 +7,7 @@ use crate::{
     },
     T,
 };
-use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextRange, TextSize};
+use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextLen, TextRange, TextSize};
 use std::{
     collections::{HashSet, VecDeque},
     ops::Range,
@@ -344,14 +344,16 @@ impl<'a> Parser<'a> {
     }
 
     /// Returns the `Span` of the current token.
-    fn span(&self) -> Option<SourceLocation> {
-        if let Some((_, span)) = self.lookahead.front().clone() {
-            Some(SourceLocation {
-                file: Some(self.source_file),
-                range: TextRange::new(TextSize::from(span.start as u32), TextSize::from(span.end as u32)),
-            })
+    fn span(&self) -> Span {
+        let range = if let Some((_, span)) = self.lookahead.front().clone() {
+            TextRange::new(TextSize::from(span.start as u32), TextSize::from(span.end as u32))
         } else {
-            None
+            // EOF span
+            TextRange::empty(self.text.text_len())
+        };
+        Span {
+            file: self.source_file,
+            range,
         }
     }
 
@@ -380,10 +382,9 @@ impl<'a> Parser<'a> {
     //--------------------------------------------------------------------
     fn expect_ident(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
-            let span = self.span();
             self.compiler
                 .diag_error(format!("expected {ident_kind}"))
-                .primary_label_opt(span, "expected IDENT")
+                .primary_label(self.span(), "")
                 .emit();
             false
         } else {
@@ -394,27 +395,27 @@ impl<'a> Parser<'a> {
 
     fn expect_new_type_name(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
-            let span = self.span();
             self.compiler
                 .diag_error(format!("expected {ident_kind}"))
-                .primary_label_opt(span, "expected IDENT")
+                .primary_label(self.span(), "")
                 .emit();
             false
         } else {
             let text = self.text();
             self.types.insert(text.to_string());
+            self.start_node(NAME);
             self.eat();
+            self.finish_node();
             true
         }
     }
 
     fn expect(&mut self, kind: SyntaxKind) -> bool {
         if self.next() != Some(kind) {
-            let span = self.span();
             let msg = format!("expected {kind:?}");
             self.compiler
                 .diag_error(msg.clone())
-                .primary_label_opt(span, msg)
+                .primary_label(self.span(), msg)
                 .emit();
             false
         } else {
@@ -428,11 +429,10 @@ impl<'a> Parser<'a> {
     /// TODO stop recovery when encountering a closing terminator
     fn expect_recover(&mut self, kind: SyntaxKind) -> bool {
         if self.next() != Some(kind) {
-            let span = self.span();
             let msg = format!("expected {kind:?}");
             self.compiler
                 .diag_error(msg.clone())
-                .primary_label_opt(span, msg)
+                .primary_label(self.span(), msg)
                 .emit();
             while let Some(tk) = self.next() {
                 self.eat();
@@ -464,6 +464,19 @@ impl<'a> Parser<'a> {
     //
     // --- Nodes ---
     //
+
+    fn parse_name(&mut self, name_kind: &str) {
+        if self.next() == Some(IDENT) {
+            self.start_node(NAME);
+            self.eat();
+            self.finish_node();
+        } else {
+            self.compiler
+                .diag_error(format!("expected {name_kind}"))
+                .primary_label(self.span(), "here")
+                .emit();
+        }
+    }
 
     fn parse_function_or_variable(&mut self, start: Option<Checkpoint>) {
         //eprintln!("parse_function_or_variable");
@@ -497,7 +510,7 @@ impl<'a> Parser<'a> {
         self.parse_type();
 
         // name
-        self.expect_ident("function or variable name");
+        self.parse_name("function or variable name");
 
         match self.next() {
             Some(T!['(']) => {
@@ -514,10 +527,9 @@ impl<'a> Parser<'a> {
                     }
                     _ => {
                         // TODO better recovery
-                        let span = self.span();
                         self.compiler
                             .diag_error("unexpected token")
-                            .primary_label_opt(span, "")
+                            .primary_label(self.span(), "")
                             .emit();
                         self.eat();
                     }
@@ -578,10 +590,9 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 // assume expression?
-                let span = self.span();
                 self.compiler
                     .diag_error("expected literal or ident")
-                    .primary_label_opt(span, "")
+                    .primary_label(self.span(), "")
                     .emit();
             }
         }
@@ -595,7 +606,7 @@ impl<'a> Parser<'a> {
         // @attribute(sub_attribute(...))
         self.start_node(ATTRIBUTE);
         self.expect(T![@]);
-        self.expect_ident("attribute name");
+        self.parse_name("attribute name");
         if self.next() == Some(T!['(']) {
             self.start_node(ATTR_ARGS);
             self.eat();
@@ -652,10 +663,9 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }
             _ => {
-                let span = self.span();
                 self.compiler
                     .diag_error("expected package parameter")
-                    .primary_label_opt(span, "")
+                    .primary_label(self.span(), "")
                     .emit();
             }
         }
@@ -668,7 +678,7 @@ impl<'a> Parser<'a> {
             self.start_node(IMPORT_DECL);
         }
         self.expect(IMPORT_KW);
-        self.expect_ident("package name");
+        self.parse_name("package name");
         if let Some(T!['(']) = self.next() {
             self.start_node(IMPORT_PARAM_LIST);
             self.eat();
@@ -680,7 +690,7 @@ impl<'a> Parser<'a> {
         if let Some(T![as]) = self.next() {
             self.start_node(IMPORT_ALIAS);
             self.eat();
-            self.expect_ident("package import alias");
+            self.parse_name("package import alias");
             self.finish_node(); // IMPORT_ALIAS
         }
         self.expect(T![;]);
@@ -726,48 +736,10 @@ impl<'a> Parser<'a> {
         self.start_node(STRUCT_FIELD);
         self.parse_attributes();
         self.parse_type();
-        self.expect_ident("field name");
+        self.parse_name("field name");
         self.expect(T![;]);
         self.finish_node(); // STRUCT_FIELD
     }
-
-    /*// parse function after "extern"
-    fn parse_fn(&mut self, cp: Checkpoint) {
-        //self.start_node(FN_DEF);
-        if self.next() == Some(EXTERN_KW) {
-            self.start_node(EXTERN);
-            self.eat();
-            self.finish_node(); // EXTERN
-        }
-        self.expect(FN_KW);
-        self.expect_ident("function name");
-        self.parse_fn_param_list();
-        if self.next() == Some(THIN_ARROW) {
-            self.start_node(RET_TYPE);
-            self.eat();
-            self.parse_type();
-            self.finish_node();
-        }
-
-        match self.next() {
-            Some(T!['{']) => {
-                self.b.start_node_at(cp, FN_DEF.into());
-                self.parse_block();
-            }
-            Some(T![;]) => {
-                self.b.start_node_at(cp, FN_DECL.into());
-                self.eat();
-            }
-            _ => {
-                // TODO better recovery
-                let span = self.span();
-                self.compiler.diag_error("unexpected token").primary_label_opt(span, "").emit();
-                self.b.start_node_at(cp, FN_DEF.into());
-                self.eat();
-            }
-        }
-        self.finish_node();
-    }*/
 
     fn parse_fn_param_list(&mut self) {
         self.start_node(PARAM_LIST);
@@ -785,10 +757,9 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 None => {
-                    let cur_span = self.span();
                     self.compiler
                         .diag_error("unexpected end of file")
-                        .primary_label_opt(cur_span, "")
+                        .primary_label(self.span(), "")
                         .emit();
                     break;
                 }
@@ -819,7 +790,7 @@ impl<'a> Parser<'a> {
         self.start_node(FN_PARAM);
         self.parse_attributes();
         self.parse_type();
-        self.expect_ident("argument name");
+        self.parse_name("argument name");
         self.finish_node();
     }
 
@@ -878,7 +849,7 @@ impl<'a> Parser<'a> {
                         self.start_node(STRIDE_QUALIFIER);
                         self.eat();
                         self.expect(T!['(']);
-                        self.expect(INT_NUMBER);
+                        self.parse_expr();
                         self.expect(T![')']);
                         self.finish_node();
                     }
@@ -886,17 +857,15 @@ impl<'a> Parser<'a> {
                 }
             }
             None => {
-                let cur_span = self.span();
                 self.compiler
                     .diag_error("unexpected end of file")
-                    .primary_label_opt(cur_span, "")
+                    .primary_label(self.span(), "")
                     .emit();
             }
             _ => {
-                let cur_span = self.span();
                 self.compiler
                     .diag_error("syntax error")
-                    .primary_label_opt(cur_span, "")
+                    .primary_label(self.span(), "")
                     .emit();
                 // forward progress bump
                 self.eat();
@@ -913,7 +882,7 @@ impl<'a> Parser<'a> {
         mut parse_item: impl FnMut(&mut Self),
     ) {
         let mut trailing_sep = false;
-        let mut last_sep_span = None;
+        let mut last_sep_span = self.span();
         let mut item_count = 0;
         let mut progress = Progress::default();
         loop {
@@ -922,7 +891,7 @@ impl<'a> Parser<'a> {
                     if trailing_sep && !allow_trailing {
                         self.compiler
                             .diag_error("trailing separator not allowed here")
-                            .primary_label_opt(last_sep_span, "")
+                            .primary_label(last_sep_span, "")
                             .emit()
                     }
                     break;
@@ -938,7 +907,7 @@ impl<'a> Parser<'a> {
                         // should end with a comma
                         self.compiler
                             .diag_error("single-element tuple types should have a trailing `,`")
-                            .primary_label_opt(last_sep_span, "")
+                            .primary_label(self.span(), "")
                             .emit()
                     }
                     break;
@@ -949,10 +918,10 @@ impl<'a> Parser<'a> {
                     trailing_sep = true;
                 }
                 _ => {
-                    let span = self.span();
+                    // TODO better error message
                     self.compiler
                         .diag_error("syntax error (TODO)")
-                        .primary_label_opt(span, "")
+                        .primary_label(self.span(), "")
                         .emit();
                     trailing_sep = false;
                 }
@@ -1013,10 +982,9 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }
             _ => {
-                let span = self.span();
                 self.compiler
                     .diag_error("expected boolean, integer, float or string literal")
-                    .primary_label_opt(span, "")
+                    .primary_label(self.span(), "")
                     .emit();
                 self.eat();
             }
@@ -1075,10 +1043,9 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }*/
             _ => {
-                let span = self.span();
                 self.compiler
                     .diag_error("syntax error")
-                    .primary_label_opt(span, "")
+                    .primary_label(self.span(), "")
                     .emit();
                 self.eat();
             }
@@ -1129,13 +1096,11 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(_) => self.parse_expr_stmt(),
-            _ => {
-                let loc = self.span();
-                self.compiler
-                    .diag_error("syntax error")
-                    .primary_label_opt(loc, "")
-                    .emit()
-            }
+            _ => self
+                .compiler
+                .diag_error("syntax error")
+                .primary_label(self.span(), "")
+                .emit(),
         }
     }
 
@@ -1144,7 +1109,7 @@ impl<'a> Parser<'a> {
         //eprintln!("parse_local_variable_stmt");
         self.start_node(LOCAL_VARIABLE);
         self.parse_type();
-        self.expect_ident("variable name");
+        self.parse_name("variable name");
         if self.next() == Some(T![=]) {
             self.start_node(INITIALIZER);
             self.eat();
@@ -1276,10 +1241,9 @@ impl<'a> Parser<'a> {
                     self.eat();
                 }
                 _ => {
-                    let span = self.span();
                     self.compiler
                         .diag_error("syntax error (TODO)")
-                        .primary_label_opt(span, "")
+                        .primary_label(self.span(), "")
                         .emit();
                 }
             }
@@ -1287,29 +1251,6 @@ impl<'a> Parser<'a> {
 
         self.finish_node();
     }
-
-    /*fn parse_global_variable(&mut self, start: Checkpoint) {
-        self.b.start_node_at(start, GLOBAL.into());
-        if self.next() == Some(EXTERN_KW) {
-            self.start_node(LINKAGE);
-            self.eat();
-            self.finish_node(); // EXTERN
-        }
-        self.start_node(QUALIFIER);
-        self.expect_any(&[IN_KW, OUT_KW, CONST_KW, UNIFORM_KW, BUFFER_KW]);
-        self.finish_node(); // QUALIFIER
-        self.expect_ident("variable name");
-        self.expect(COLON);
-        self.parse_type();
-        if self.next() == Some(EQ) {
-            self.start_node(INITIALIZER);
-            self.eat();
-            self.parse_expr();
-            self.finish_node(); // INITIALIZER
-        }
-        self.expect(SEMICOLON);
-        self.finish_node(); // GLOBAL
-    }*/
 
     fn parse_expr(&mut self) {
         self.parse_expr_bp(0)
@@ -1395,7 +1336,7 @@ impl<'a> Parser<'a> {
                 Some(T![.]) => {
                     self.start_node_at(cp, FIELD_EXPR);
                     self.eat();
-                    self.expect_ident("field identifier");
+                    self.parse_name("field identifier");
                     self.finish_node();
                     continue;
                 }
@@ -1409,13 +1350,16 @@ impl<'a> Parser<'a> {
             if op == T![?] {
                 // ternary
                 self.start_node_at(cp, TERNARY_EXPR);
+                self.start_node_at(cp, CONDITION);
+                self.finish_node();
+                self.eat();
                 let _true_alt = self.parse_expr_bp(0);
                 self.expect(T![:]);
                 let _false_alt = self.parse_expr_bp(r_bp);
                 self.finish_node(); // TERNARY_EXPR
                 continue;
             } else {
-                self.b.start_node_at(cp, BIN_EXPR.into());
+                self.start_node_at(cp, BIN_EXPR.into());
                 self.eat();
                 self.parse_expr_bp(r_bp);
                 self.finish_node(); // BIN_EXPR
@@ -1434,6 +1378,7 @@ fn prefix_binding_power(op: SyntaxKind) -> u8 {
 
 fn infix_binding_power(op: SyntaxKind) -> (u8, u8) {
     match op {
+        // TODO comma operator
         T![=] | T![+=] | T![-=] | T![*=] | T![/=] | T![%=] | T![&=] | T![|=] | T![^=] | T![<<=] | T![>>=] => (2, 1),
         T![?] => (3, 2),
         T![||] => (4, 5),

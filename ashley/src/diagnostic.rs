@@ -1,20 +1,19 @@
 use crate::{
     session::{CompilerDb, SourceFileId},
-    termcolor,
+    termcolor, SourceFile,
 };
 use codespan_reporting::{
     diagnostic::{Diagnostic as CsDiagnostic, Label, LabelStyle, Severity},
     files::{Error, Files},
     term,
 };
-use rowan::TextRange;
+use rowan::{TextRange, TextSize};
 use std::{
     cell::{Cell, RefCell},
     ops::Range,
 };
 
-/// Represents a finalized diagnostic.
-pub type Diagnostic = CsDiagnostic<SourceFileId>;
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 impl<'a> Files<'a> for dyn CompilerDb {
     type FileId = SourceFileId;
@@ -33,7 +32,8 @@ impl<'a> Files<'a> for dyn CompilerDb {
 
     fn line_index(&'a self, id: SourceFileId, byte_index: usize) -> Result<usize, Error> {
         let src = self.source_file(id);
-        Ok(src.line_index(byte_index))
+        let text_pos = TextSize::try_from(byte_index).expect("byte index exceeds maximum supported value");
+        Ok(src.line_index(text_pos))
     }
 
     fn line_range(&'a self, id: SourceFileId, line_index: usize) -> Result<Range<usize>, Error> {
@@ -45,50 +45,64 @@ impl<'a> Files<'a> for dyn CompilerDb {
     }
 }
 
-/// Describes a source location.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Describes a source location: source file and byte range within the source file.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SourceLocation {
-    /// Module ID, or `None` to use the current source.
-    pub file: Option<SourceFileId>,
-    /// Byte range start
+pub struct Span {
+    /// Source file.
+    pub file: SourceFileId,
+    /// Byte range.
     pub range: TextRange,
 }
 
-impl SourceLocation {
-    pub fn new(file: Option<SourceFileId>, range: TextRange) -> SourceLocation {
-        SourceLocation { file, range }
+impl Span {
+    pub const fn new(file: SourceFileId, range: TextRange) -> Span {
+        Span { file, range }
     }
 }
 
-/// FIXME: replace by `From<X> for SourceLocation`?
-pub trait AsSourceLocation {
-    fn source_location(&self) -> SourceLocation;
+/// Types that can provide span information for diagnostic.
+pub trait DiagnosticSpan {
+    /// Returns the source file of the span.
+    ///
+    /// This can be `None`, in which case the diagnostic should use the "current" source file as a reference
+    /// (which is the one that was registered with the last call to  `CompilerDb::push_diagnostic_source_file`).
+    fn file(&self) -> Option<SourceFileId>;
+
+    /// Byte range of the span in the source file.
+    fn range(&self) -> TextRange;
 }
 
-impl AsSourceLocation for SourceLocation {
-    fn source_location(&self) -> SourceLocation {
-        *self
+impl DiagnosticSpan for Span {
+    fn file(&self) -> Option<SourceFileId> {
+        Some(self.file)
+    }
+
+    fn range(&self) -> TextRange {
+        self.range
     }
 }
 
-impl<T> AsSourceLocation for &T
-where
-    T: AsSourceLocation,
-{
-    fn source_location(&self) -> SourceLocation {
-        (*self).source_location()
+impl<T: DiagnosticSpan> DiagnosticSpan for &T {
+    fn file(&self) -> Option<SourceFileId> {
+        (*self).file()
+    }
+
+    fn range(&self) -> TextRange {
+        (*self).range()
     }
 }
 
-/*impl Default for SourceLocation {
-    fn default() -> Self {
-        SourceLocation {
-            file: None,
-            start: 0,
-            end: 0,
-        }
-    }
-}*/
+/// Types that can provide span information for diagnostic.
+pub trait Spanned {
+    fn span(&self) -> Span;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Represents a finalized diagnostic.
+pub type Diagnostic = CsDiagnostic<SourceFileId>;
 
 /// Diagnostic handlers
 pub trait DiagnosticSink {
@@ -117,53 +131,50 @@ impl DiagnosticSink for TermDiagnosticSink {
     }
 }
 
-struct DiagnosticsInner {
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Holds all diagnostic sinks to which emitted diagnostic should be sent, and keeps track of
+/// the number of diagnostics emitted of each kind.
+pub struct Diagnostics {
     sinks: Vec<Box<dyn DiagnosticSink + Send + 'static>>,
     bug_count: Cell<usize>,
     error_count: Cell<usize>,
     warning_count: Cell<usize>,
 }
 
-pub struct Diagnostics {
-    // TODO remove this, it doesn't serve any purpose now
-    inner: DiagnosticsInner,
-}
-
 impl Diagnostics {
     pub fn new() -> Diagnostics {
         Diagnostics {
-            inner: DiagnosticsInner {
-                sinks: vec![],
-                bug_count: Cell::new(0),
-                error_count: Cell::new(0),
-                warning_count: Cell::new(0),
-            },
+            sinks: vec![],
+            bug_count: Cell::new(0),
+            error_count: Cell::new(0),
+            warning_count: Cell::new(0),
         }
     }
 
     /// Removes all diagnostic sinks.
     pub fn clear_sinks(&mut self) {
-        self.inner.sinks.clear()
+        self.sinks.clear()
     }
 
     /// Adds a diagnostic sink.
     pub fn add_sink(&mut self, sink: impl DiagnosticSink + Send + 'static) {
-        self.inner.sinks.push(Box::new(sink))
+        self.sinks.push(Box::new(sink))
     }
 
     /// Returns the number of emitted error diagnostics.
     pub fn error_count(&self) -> usize {
-        self.inner.error_count.get()
+        self.error_count.get()
     }
 
     /// Returns the number of emitted warning diagnostics.
     pub fn warning_count(&self) -> usize {
-        self.inner.warning_count.get()
+        self.warning_count.get()
     }
 
     /// Returns the number of emitted bug diagnostics.
     pub fn bug_count(&self) -> usize {
-        self.inner.bug_count.get()
+        self.bug_count.get()
     }
 }
 
@@ -175,54 +186,54 @@ pub struct DiagnosticBuilder<'a> {
 }
 
 impl<'a> DiagnosticBuilder<'a> {
-    fn label<L: AsSourceLocation>(
+    fn label<S: DiagnosticSpan>(
         mut self,
-        loc: L,
+        span: S,
         style: LabelStyle,
         message: impl Into<String>,
     ) -> DiagnosticBuilder<'a> {
-        let span = loc.source_location();
-        let file_id = span.file.or_else(|| self.compiler.diagnostic_source_file());
-        if let Some(file_id) = file_id {
+        let range = span.range();
+        let source_file = span.file().or_else(|| self.compiler.diagnostic_source_file());
+
+        if let Some(source_file) = source_file {
             self.diag.labels.push(Label {
                 style,
-                file_id,
-                range: span.range.start().into()..span.range.end().into(),
+                file_id: source_file,
+                range: range.start().into()..range.end().into(),
                 message: message.into(),
             });
         } else {
-            // Downgrade to a note if we can't figure out which file it is
+            // Downgrade to a note if we can't figure out which file the span refers to
             self.diag.notes.push(message.into())
         }
         self
     }
 
-    /// Sets the primary label of the diagnostic.
-
-    pub fn location<L: AsSourceLocation>(self, loc: L) -> DiagnosticBuilder<'a> {
-        self.label(loc, LabelStyle::Primary, "")
+    /// Sets the primary span of the diagnostic.
+    pub fn location<S: DiagnosticSpan>(self, span: S) -> DiagnosticBuilder<'a> {
+        self.label(span, LabelStyle::Primary, "")
     }
 
     /// Sets the primary label of the diagnostic.
-    pub fn primary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
-        self.label(loc, LabelStyle::Primary, message)
+    pub fn primary_label<S: DiagnosticSpan>(self, span: S, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+        self.label(span, LabelStyle::Primary, message)
     }
 
     /// Sets the primary label of the diagnostic, only if `loc` is not `None`.
-    pub fn primary_label_opt<L: AsSourceLocation>(
+    pub fn primary_label_opt<S: DiagnosticSpan>(
         self,
-        loc: Option<L>,
+        span: Option<S>,
         message: impl Into<String>,
     ) -> DiagnosticBuilder<'a> {
-        if let Some(loc) = loc {
-            self.label(loc, LabelStyle::Primary, message)
+        if let Some(span) = span {
+            self.label(span, LabelStyle::Primary, message)
         } else {
             self
         }
     }
 
-    pub fn secondary_label<L: AsSourceLocation>(self, loc: L, message: impl Into<String>) -> DiagnosticBuilder<'a> {
-        self.label(loc, LabelStyle::Secondary, message)
+    pub fn secondary_label<S: DiagnosticSpan>(self, span: S, message: impl Into<String>) -> DiagnosticBuilder<'a> {
+        self.label(span, LabelStyle::Secondary, message)
     }
 
     pub fn note(mut self, message: impl Into<String>) -> DiagnosticBuilder<'a> {
@@ -234,19 +245,107 @@ impl<'a> DiagnosticBuilder<'a> {
         let d = self.compiler.diag();
         match self.diag.severity {
             Severity::Bug => {
-                d.inner.bug_count.set(d.inner.bug_count.get() + 1);
+                d.bug_count.set(d.bug_count.get() + 1);
             }
             Severity::Error => {
-                d.inner.error_count.set(d.inner.error_count.get() + 1);
+                d.error_count.set(d.error_count.get() + 1);
             }
             Severity::Warning => {
-                d.inner.warning_count.set(d.inner.warning_count.get() + 1);
+                d.warning_count.set(d.warning_count.get() + 1);
             }
             _ => {}
         }
 
-        for sink in d.inner.sinks.iter() {
+        for sink in d.sinks.iter() {
             sink.emit(&self.diag, self.compiler)
         }
     }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum Severity2 {
+    Bug,
+    Error,
+    Warning,
+}
+
+pub struct Label2 {
+    message: String,
+    secondary: bool,
+    span: Span,
+}
+
+#[must_use]
+pub struct Diagnostic2 {
+    severity: Severity2,
+    message: String,
+    code: Option<String>,
+    labels: Vec<Label2>,
+    notes: Vec<String>,
+}
+
+impl Diagnostic2 {
+    pub fn new(severity: Severity2, message: impl Into<String>) -> Diagnostic2 {
+        Diagnostic2 {
+            severity,
+            message: message.into(),
+            code: None,
+            labels: vec![],
+            notes: vec![],
+        }
+    }
+
+    pub fn bug(message: impl Into<String>) -> Diagnostic2 {
+        Diagnostic2::new(Severity2::Bug, message)
+    }
+
+    pub fn warn(message: impl Into<String>) -> Diagnostic2 {
+        Diagnostic2::new(Severity2::Warning, message)
+    }
+
+    pub fn error(message: impl Into<String>) -> Diagnostic2 {
+        Diagnostic2::new(Severity2::Error, message)
+    }
+
+    pub fn label<S: Spanned>(mut self, span: &S, message: impl Into<String>) -> Diagnostic2 {
+        self.labels.push(Label2 {
+            message: message.into(),
+            secondary: false,
+            span: span.into(),
+        });
+        self
+    }
+
+    /// Sets the primary span of the diagnostic.
+    pub fn span<S: Spanned>(self, span: &S) -> Diagnostic2 {
+        self.label(span, "")
+    }
+
+    pub fn note(mut self, message: impl Into<String>) -> Diagnostic2 {
+        self.notes.push(message.into());
+        self
+    }
+}
+
+#[macro_export]
+macro_rules! diag_span_bug {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::diagnostic::Diagnostic2::bug(format!($($arg)*)).span(&$span)
+    };
+}
+
+#[macro_export]
+macro_rules! diag_span_error {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::diagnostic::Diagnostic2::error(format!($($arg)*)).span(&$span)
+    };
+}
+
+#[macro_export]
+macro_rules! diag_span_warn {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::diagnostic::Diagnostic2::warn(format!($($arg)*)).span(&$span)
+    };
 }

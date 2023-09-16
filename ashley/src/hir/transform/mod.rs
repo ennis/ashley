@@ -181,10 +181,7 @@ impl<'a> ShaderInterfaceTransform<'a> {
                 interpolation: None,
             }]
             .into(),
-            layout: Some(StructLayout {
-                offsets: vec![0],
-                layouts: vec![],
-            }),
+            layout: Some(StructLayout { offsets: vec![0] }),
             block: true,
         });
         let block_ty = self.hir.define_type(block_ty_data);

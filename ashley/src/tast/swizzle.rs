@@ -1,6 +1,7 @@
 //! Component access & swizzle checks
 use smallvec::SmallVec;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum ComponentSyntaxError {
     InvalidSyntax,
     TooManyComponents,

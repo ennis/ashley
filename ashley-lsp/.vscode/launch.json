@@ -15,7 +15,9 @@
 			},
 			"env": {
 				"SERVER_PATH": "${workspaceRoot}/../target/debug/ashley-lsp",
-				"RUST_BACKTRACE": "1"
+				"RUST_BACKTRACE": "1",
+				"RUST_LOG": "trace",
+				"SHIT": "FUCK"
 			}
 		},
 		{

@@ -1813,3 +1813,145 @@ TODO:
 * keep typecheck/nameres/consteval in the same stage
 
 * There should be "Bodies" for (const) expressions appearing within types
+
+// Issue: parsing a custom attribute is involved
+// -> an attribute checker may want to evaluate a constant expression
+// -> attribute resolution (e.g. location(expr)) currently happens at the definition lowering stage
+// -> resolving the location expr needs name resolution, which in turn will invoke definition lowering -> infinite loop
+//
+// Solution:
+// - delay attribute value resolution: possible, but the same issue can happen with constant-dependent types (e.g. arrays with explicit strides)
+// - resolve names in a separate pass, before def check / type check
+//
+
+# Issue: parsing def-dependent types of declarations
+
+Assume that we're parsing the declarations of a module. 
+We encounter a global variable decl, with type `float[16] stride(N*4)`, with `N` another global variable.
+We can't resolve this type now, because we'd need to resolve `N`, but we're still parsing the declarations.
+
+
+New model:
+- In a first pass, the AST is lowered to `Items`, which are defs but without their types.
+- This is computed for each module. I.e. each module has an "ItemMap", which can be used to resolve a name to an `Item`. The item data is simply the kind of item (struct, function, global, etc.) ~~and a pointer to the AST~~ and data extracted from the AST, but not resolved.
+  - Issue: the pointer to the AST is not stable across changes
+  - Solution: instead of storing direct pointers to the AST, store a stable ID derived from either:
+    - the name of the item
+    - its position in the file
+  - each source file then has an associated "AST ID to Node" map.
+
+The item tree can just be a map from "Name" to AstId, and a separate map for getting the AstNodes from AstIds.
+
+How does this help with parsing def-dependent types?
+Now we can type-check individual items in any order.
+
+## What about expressions in attributes and inside types?
+They will be represented by stable AST pointers to expressions.
+
+
+Queries:
+
+```
+ItemTree {
+  types: Map<Name,AstNodeId>,
+  values: Map<Name,AstNodeId>,
+  
+  ast_map: Map<AstNodeId, AstNodePtr<>>,
+}
+```
+
+```
+
+
+BodyOwnerId: AttrParam(AttributeId,index) | 
+
+intern def_body(parent: BodyOwnerId, index: usize) -> BodyId       // ID of a body owned by a definition (through attributes, fields, or types inside the definition, except inside another body). 
+
+
+query body(body_owner: BodyId) -> Arc<Body>      // fully type-checked body
+
+query item_tree(module: ModuleId) -> Arc<ItemTree>    // item tree with 
+query definition(def: DefId) -> Arc<Definition>  // full definition information with resolved type
+query expr_ty(expr: )
+query evaluate_constant_expression(expr: AstExprId)   // Option<ConstantValue>
+
+
+struct Uniforms {
+  @offset(N) vec4 a;
+  @offset(N+32) vec3[16] stride(16) b;
+}
+
+// attribute on field: AttributeId (AttributeOwnerId + index)
+// AttributeOwnerId: StructId | MemberId | GlobalId | FunctionId | FunctionArgument(FunctionId, u32) | FunctionReturnValue(FunctionId)
+// BodyOwnerId: Attribute
+
+```
+
+
+## A principled approach for a query system usable with GUIs?
+
+Inspired by the query system of rustc, rust-analyzer, salsa.
+
+Recall the requirements:
+- no serialization code by hand except for tricky cases
+- serialize to whatever
+- ordered collections, works well with UI
+- undo/redo
+- objects cheap to copy
+- able to extract a diff between revisions
+- cascading deletes
+
+TODO:
+
+* efficient storage: IndexVecs, not HashMaps
+  * all keys must be Idx
+* more efficient tracking of dependency lists: smallvec?
+
+```
+
+// "input" => input data, not tracked separately
+
+table SourceFile (SourceFileId) -> {
+  // fields
+}
+
+
+
+
+// "query struct" => calculated together, but tracked separately
+query ModuleData(ModuleId) -> {
+    source_file: SourceFileId,    // implicit dependency on SourceFile table?
+    items: ModuleItems,
+    map: ModuleAstIdMap,
+} 
+[item::module_data_query] 
+
+// Maybe we can specify explicit dependencies on individual queries?
+// So that we don't need to track stuff.
+
+```
+
+## Minimal invalidation on changes
+
+```
+
+struct S {
+  float scale;
+  float[16] data;
+}
+
+float dot(vec2 a, vec2 b) {
+  return a.x * b.x + a.y * b.y;
+}
+
+void main() {
+  // ...
+}
+```
+
+Goals:
+1. changing anything inside a function body should not invalidate either the item tree or other bodies.
+2. changing the "16" const expr inside S should not invalidate bodies that don't depend on it.
+3. 4.changing any field inside S should not invalidate bodies that don't depend on it.
+
+ 

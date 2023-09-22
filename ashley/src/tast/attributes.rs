@@ -1,7 +1,7 @@
 //! Known attributes
 use crate::{
-    hir,
-    hir::{InterpolationKind, InterpolationSampling},
+    ir,
+    ir::{InterpolationKind, InterpolationSampling},
     session::CompilerDb,
     syntax::{
         ast,
@@ -222,8 +222,8 @@ macro_rules! define_attribute {
 #[derive(Clone, Debug)]
 pub enum KnownAttributeKind {
     Interpolate {
-        kind: hir::InterpolationKind,
-        sampling: Option<hir::InterpolationSampling>,
+        kind: ir::InterpolationKind,
+        sampling: Option<ir::InterpolationSampling>,
     },
     Location(u32),
     Offset(u32),
@@ -349,7 +349,7 @@ const R: AttributeTarget = AttributeTarget::RETURN_VALUE;
 const F: AttributeTarget = AttributeTarget::FUNCTION;
 
 impl_known_attributes!(
-     interpolate [M | G | A | R] []         Single (kind: hir::InterpolationKind, sampling: Option<hir::InterpolationSampling>) => KnownAttributeKind::Interpolate { kind, sampling };
+     interpolate [M | G | A | R] []         Single (kind: ir::InterpolationKind, sampling: Option<ir::InterpolationSampling>) => KnownAttributeKind::Interpolate { kind, sampling };
      location    [M | G | A | R] []         Single (location: u32) => KnownAttributeKind::Location(location);
      offset      [M]             []         Single (offset: u32)   => KnownAttributeKind::Offset(offset);
      align       [M]             []         Single (align: u32)    => KnownAttributeKind::Align(align);

@@ -1,0 +1,153 @@
+//! Type resolution.
+
+pub mod body;
+mod diagnostic;
+mod interner;
+mod lower;
+mod primitive;
+mod ty;
+
+use ashley_data_structures::Id;
+pub use diagnostic::TyDiagnostic;
+pub use primitive::PrimitiveTypes;
+pub use ty::{FunctionType, ImageSampling, ImageType, ScalarType, StructField, Type, TypeKind};
+
+use crate::{
+    item,
+    item::{BodyLoc, BodyOwnerId, DefId, FieldId, FunctionId, StructId},
+    session::ModuleId,
+    syntax::{ast::TypeRef, SyntaxNode},
+    ty::{interner::Interner, lower::TypeLoweringCtxt},
+    CompilerDb,
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Type-checking context.
+///
+/// Holds the interner for types, and pre-interned versions of commonly-used types.
+///
+/// TODO integrate with CompilerDB?
+pub struct TypeCtxt {
+    /// Types interner.
+    types: Interner,
+    /// Pre-interned primitive types.
+    pub(crate) prim_tys: primitive::PrimitiveTypes,
+    /// Error type (used for error recovery).
+    pub(crate) error: Type,
+}
+
+impl TypeCtxt {
+    pub fn new() -> Self {
+        let mut types = Interner::new();
+        let error_type = types.intern(TypeKind::Error);
+        let builtin_types = primitive::PrimitiveTypes::new(&mut types);
+        TypeCtxt {
+            types,
+            prim_tys: builtin_types,
+            error: error_type,
+        }
+    }
+
+    pub fn ty(&self, kind: impl Into<TypeKind>) -> Type {
+        self.types.intern(kind)
+    }
+}
+
+impl Default for TypeCtxt {
+    fn default() -> Self {
+        TypeCtxt::new()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Identifies something with a type.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum TyOwnerId {
+    Argument {
+        function: FunctionId,
+        argument: Id<item::FunctionParam>,
+    },
+    ReturnValue(FunctionId),
+    Field(FieldId),
+    ArrayElement(Box<TyOwnerId>),
+    LocalVariable {
+        function: FunctionId,
+        var: Id<item::body::LocalVar>,
+    },
+    // TODO Same as `BodyOwnerId`? Instead of having specific variants, store `AstId<ast::Type>`?
+}
+
+impl TyOwnerId {
+    pub fn module(&self) -> ModuleId {
+        match self {
+            TyOwnerId::Argument { function, .. } => function.module,
+            TyOwnerId::ReturnValue(function) => function.module,
+            TyOwnerId::Field(field) => field.strukt.module,
+            TyOwnerId::ArrayElement(owner) => owner.module(),
+            TyOwnerId::LocalVariable { function, .. } => function.module,
+        }
+    }
+
+    /*/// Returns the TypeRef
+    pub fn type_ref(&self, compiler: &dyn CompilerDb) -> &item::Type {
+        let items = self.module().items(compiler);
+        match self {
+            TyOwnerId::Argument { function, argument } => &items[function.function].parameters[*argument].ty,
+            TyOwnerId::ReturnValue(function) => &items[function.function]
+                .return_type
+                .as_ref()
+                .expect("invalid TyOwnerId: ReturnValue on function without return type"),
+            TyOwnerId::Field(field) => &items.structs[field.strukt.strukt].fields[field.field].ty,
+            TyOwnerId::ArrayElement(array_ty) => match array_ty.type_ref(compiler) {
+                item::Type::Array { element, stride, size } => &element,
+                _ => panic!("invalid TyOwnerId: ArrayElement on non-array type"),
+            },
+            TyOwnerId::LocalVariable { function, var } => {
+                let loc = compiler.body_id(BodyLoc { owner: BodyOwnerId::Function(function), kind: Bo })
+                &compiler.body(function.into()).local_vars[*var].ty
+            },
+        }
+    }*/
+}
+
+pub(crate) fn def_ty_with_diagnostics_query(compiler: &dyn CompilerDb, def_id: DefId) -> (Type, Vec<TyDiagnostic>) {
+    let module = def_id.module();
+    let module_items = compiler.module_items(module);
+    let source_file = compiler.module_source(module);
+    let mut diagnostics = vec![];
+    match def_id {
+        DefId::Struct(struct_id) => {
+            let resolver = def_id.resolver(compiler);
+            let struct_data = &module_items[struct_id.strukt];
+
+            let mut ctxt = TypeLoweringCtxt::new(compiler, &resolver, &mut diagnostics);
+            // lower fields
+            for (i_field, field) in struct_data.fields.iter_full() {
+                ctxt.lower_type(
+                    TyOwnerId::Field(FieldId {
+                        strukt: struct_id,
+                        field: i_field,
+                    }),
+                    &field.ty,
+                );
+            }
+        }
+        DefId::Global(_) => {}
+        DefId::Function(_) => {}
+    }
+
+    // tycheck cannot emit diagnostics with ast spans directly, otherwise it would be invalidated
+    // on every reparse (bad)
+    //
+    // instead use IDs:
+    // * struct => StructId
+    // * field => FieldId
+    // * type within a field => TypeOwnerId::Field(FieldId)
+    // * type within a constant expression within an attribute: TypeOwnerId::Expr(BodyId,ExprId), BodyId::ConstExprInAttributeItem(AttributeOwnerId)
+
+    todo!()
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////

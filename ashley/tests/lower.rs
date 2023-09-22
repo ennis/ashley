@@ -1,6 +1,6 @@
 use ashley::{
-    hir,
-    hir::TypeData,
+    ir,
+    ir::TypeData,
     tast::{lower_to_hir, Module},
     Compiler, CompilerDb, ModuleName,
 };
@@ -34,7 +34,7 @@ fn validate_spirv(module_name: &str, code: &[u32]) {
     }
 }
 
-fn print_interface(hir: &hir::Module) {
+fn print_interface(hir: &ir::Module) {
     let mut inputs = vec![];
     let mut outputs = vec![];
     let mut images = vec![];
@@ -119,11 +119,11 @@ fn test_lower_one(path: &Path) {
     let (pkg, _) = compiler.create_source_module(ModuleName::from(file_stem), file_name, &source);
 
     // 2. lower to HIR
-    let hir = lower_to_hir(&compiler, pkg).expect("failed to create hir");
+    let hir = lower_to_hir(&compiler, pkg).expect("failed to create ir");
     print_interface(&hir);
 
     // 3. emit SPIR-V bytecode
-    let spv_bytecode = hir::write_spirv(&hir);
+    let spv_bytecode = ir::write_spirv(&hir);
     validate_spirv(file_stem, &spv_bytecode);
 
     // 4. load bytecode with rspirv and disassemble

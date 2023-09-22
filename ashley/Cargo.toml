@@ -39,3 +39,5 @@ winit = "0.28.5"
 env_logger = "0.10.0"
 pollster = "0.3.0"
 image = "0.24.6"
+tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }
+tracing-tree = "0.2.4"

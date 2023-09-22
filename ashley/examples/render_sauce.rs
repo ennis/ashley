@@ -1,5 +1,5 @@
 use ashley::{
-    hir::{
+    ir::{
         transform::{ShaderInterfaceTransform, ShaderInterfaceTransformError},
         write_spirv,
     },

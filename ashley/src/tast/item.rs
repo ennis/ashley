@@ -1,8 +1,8 @@
 use crate::{
     diagnostic::Span,
-    hir::Interpolation,
+    ir::Interpolation,
     session::Namespace,
-    syntax::ast,
+    syntax::{ast, SyntaxNode, SyntaxNodePtr},
     tast,
     tast::{
         attributes::{check_attributes, AttributeTarget, KnownAttribute, KnownAttributeKind},
@@ -13,7 +13,13 @@ use crate::{
         Def, DefId, FunctionType, InFile, NameExt, TypeCheckItemCtxt, TypeKind, Visibility,
     },
 };
+use ashley_data_structures::{Id, IndexVec};
+use ashley_db::new_key_type;
+use indexmap::IndexMap;
 use rowan::ast::{AstNode, AstPtr};
+use std::{collections::HashMap, marker::PhantomData};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -72,6 +78,48 @@ impl VariableAttributes {
     }
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Context for item-level type-checking.
+pub(crate) struct TypeCheckItemCtxt<'a> {
+    compiler: &'a dyn CompilerDb,
+    module: ModuleId,
+    source_file: SourceFileId,
+    typed_module: &'a mut Module,
+    scopes: Vec<Scope>,
+    errors: Vec<TyDiagnostic>,
+}
+
+impl<'a> TypeCheckItemCtxt<'a> {
+    pub(crate) fn convert_type(&mut self, ty: ast::Type) -> Type {
+        let mut lower_ctxt = TypeLoweringCtxt::new(self.compiler, &self.scopes, &mut self.errors);
+        lower_ctxt.lower_type(ty, self.source_file)
+    }
+}
+
+pub(crate) fn typecheck_items(
+    compiler: &dyn CompilerDb,
+    module: ModuleId,
+    source_file: SourceFileId,
+    ast: ast::Module,
+) -> Module {
+    let mut typed_module = Module::new();
+
+    let mut ctxt = TypeCheckItemCtxt {
+        compiler,
+        module,
+        source_file,
+        typed_module: &mut typed_module,
+        scopes: Vec::new(),
+        errors: vec![],
+    };
+    ctxt.define_builtin_functions();
+    //compiler.push_diagnostic_source_file(source_file);
+    ctxt.typecheck_module(&ast);
+    //compiler.pop_diagnostic_source_file();
+
+    typed_module.errors = ctxt.errors;
+    typed_module
+}
 
 impl<'a> TypeCheckItemCtxt<'a> {
     pub(super) fn typecheck_module(&mut self, module: &ast::Module) {

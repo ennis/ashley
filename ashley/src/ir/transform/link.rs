@@ -1,4 +1,4 @@
-use crate::hir::{constant::ConstantData, Constant, Function, FunctionData, Module, Operand, Type, TypeData};
+use crate::ir::{constant::ConstantData, Constant, Function, FunctionData, Module, Operand, Type, TypeData};
 
 /*struct LinkInput<'a> {
     module: &'a Module,

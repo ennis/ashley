@@ -1,5 +1,5 @@
 use crate::{
-    hir::{Module, StructLayout, Type},
+    ir::{Module, StructLayout, Type},
     utils::write_list,
 };
 use rspirv::{

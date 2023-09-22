@@ -1,4 +1,4 @@
-use crate::hir::{
+use crate::ir::{
     id_map::IdMap,
     types::{ImageSampling, ImageType, ScalarType},
     Block, Constant, ConstantData, Decoration, EntryPoint, ExtInstSet, Function, GlobalVariable, IdRef, Module,

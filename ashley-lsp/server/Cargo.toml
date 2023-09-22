@@ -12,3 +12,6 @@ ashley = { path = "../../ashley" }
 anyhow = "1.0.69"
 tokio = { version = "1.17.0", features = ["full"] }
 url = "2.3.1"
+tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }
+tracing-tree = "0.2.4"
+tracing-tracy = "0.10.4"

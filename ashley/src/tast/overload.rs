@@ -141,7 +141,7 @@ pub(crate) struct OverloadCandidate {
 /// Helper function for `typecheck_builtin_operation`.
 ///
 /// Signatures of builtins are specified using `PseudoTypes` to make them more compact,
-/// so we use this function to convert them to `hir::Type`s before calling `check_signature`.
+/// so we use this function to convert them to `ir::Type`s before calling `check_signature`.
 ///
 /// Returns true if `check_signature` returned an exact match was found, false otherwise.
 fn typecheck_builtin_helper(

@@ -1,10 +1,10 @@
 use crate::{
-    hir,
-    hir::{Interpolation, Layout},
+    ir,
+    ir::{Interpolation, Layout},
     session::{CompilerDb, SourceFileId},
     syntax::{ast, ast::TypeQualifier},
     tast::{
-        consteval::{eval_non_specialization_constant_expr, try_evaluate_constant_expression, ConstantValue},
+        consteval::eval_non_specialization_constant_expr,
         def::DefKind,
         diagnostics::{
             TyDiagnostic,
@@ -17,7 +17,7 @@ use crate::{
     utils::round_up,
 };
 use ashley::tast::consteval::ConstEvalError;
-pub use hir::types::{ImageSampling, ImageType};
+pub use ir::types::{ImageSampling, ImageType};
 use rowan::ast::AstPtr;
 use spirv::Dim;
 use std::{
@@ -31,7 +31,72 @@ use std::{
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub type ScalarType = hir::types::ScalarType;
+/// Types interner.
+pub struct Types {
+    types: Mutex<HashSet<Arc<TypeKind>>>,
+}
+
+impl Types {
+    pub fn new() -> Self {
+        Types {
+            types: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Interns a type.
+    pub fn intern(&self, kind: impl Into<TypeKind>) -> Type {
+        // TODO replace with get_or_insert_owned once stabilized
+        let kind = kind.into();
+        let mut types = self.types.lock().unwrap();
+        if let Some(ty) = types.get(&kind) {
+            Type(ty.clone())
+        } else {
+            let ty = Arc::new(kind);
+            types.insert(ty.clone());
+            Type(ty)
+        }
+    }
+}
+
+/// Type-checking context.
+///
+/// Holds the interner for types, and pre-interned versions of commonly-used types.
+///
+/// TODO integrate with CompilerDB?
+pub struct TypeCtxt {
+    /// Types interner.
+    types: Types,
+    /// Pre-interned primitive types.
+    prim_tys: PrimitiveTypes,
+    /// Error type (used for error recovery).
+    error: Type,
+}
+
+impl TypeCtxt {
+    pub fn new() -> Self {
+        let mut types = Types::new();
+        let error_type = types.intern(TypeKind::Error);
+        let builtin_types = PrimitiveTypes::new(&mut types);
+        TypeCtxt {
+            types,
+            prim_tys: builtin_types,
+            error: error_type,
+        }
+    }
+
+    pub fn ty(&self, kind: impl Into<TypeKind>) -> Type {
+        self.types.intern(kind)
+    }
+}
+
+impl Default for TypeCtxt {
+    fn default() -> Self {
+        TypeCtxt::new()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+pub type ScalarType = ir::types::ScalarType;
 
 fn scalar_type_prefix(ty: ScalarType) -> &'static str {
     match ty {
@@ -225,7 +290,7 @@ pub enum TypeKind {
         layout: Option<StructLayout>,
     },
     /// Unsampled image type.
-    Image(hir::types::ImageType),
+    Image(ir::types::ImageType),
     /// Pointer.
     Pointer {
         pointee_type: Type,

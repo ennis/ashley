@@ -1,6 +1,6 @@
 use ashley::{
-    hir,
-    hir::{
+    ir,
+    ir::{
         types::{Field, StructType},
         Layout, Module, StructLayout, Type, TypeData,
     },
@@ -18,7 +18,7 @@ struct TestLayout {
 
 #[test]
 fn test_vertex_layout() {
-    let mut hir = hir::Module::new();
+    let mut hir = ir::Module::new();
 
     let ty = TestLayout::hir_type(&mut hir);
 

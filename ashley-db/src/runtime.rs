@@ -62,6 +62,16 @@ impl Runtime {
         }
     }
 
+    /// Returns the dependencies of the currently executing query.
+    pub fn current_dependencies(&self) -> HashSet<DbIndex> {
+        self.query_stack
+            .borrow_mut()
+            .last_mut()
+            .expect("`current_dependencies` must be called inside a query")
+            .dependencies
+            .clone()
+    }
+
     /// Returns the database index of the topmost active query in the stack.
     ///
     /// Panics if no query is active.

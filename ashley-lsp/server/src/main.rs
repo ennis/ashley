@@ -1,11 +1,13 @@
 use anyhow::{anyhow, bail};
-use ashley::{tast::DefKind, Compiler, CompilerDb, LineCharacterRange};
-use std::io;
+use ashley::{diagnostic::Span, Compiler, CompilerDb, LineCharacterRange};
+use std::{env, io, io::Stderr};
 use tokio::{
     fs::{canonicalize, File},
     sync::{MappedMutexGuard, Mutex, MutexGuard},
 };
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService, Server};
+use tracing::{error, info, trace};
+use tracing_subscriber::{fmt::MakeWriter, layer::SubscriberExt, Layer};
 
 const LANGUAGE_ID: &str = "glsl2";
 
@@ -66,6 +68,26 @@ macro_rules! client_warn {
     ($client:expr, $($arg:tt)*) => {
         $client.log_message(MessageType::WARNING, format!($($arg)*)).await;
     };
+}
+
+fn span_to_lsp_range(compiler: &dyn CompilerDb, span: Span) -> Range {
+    let range: LineCharacterRange = compiler.span_to_line_character_range(span);
+    let start_line: u32 = range.start.line.try_into().expect("line index overflow");
+    let end_line: u32 = range.end.line.try_into().expect("line index overflow");
+    let start_offset: u32 = range
+        .start
+        .character_offset
+        .try_into()
+        .expect("character offset overflow");
+    let end_offset: u32 = range
+        .end
+        .character_offset
+        .try_into()
+        .expect("character offset overflow");
+    Range {
+        start: Position::new(start_line, start_offset),
+        end: Position::new(end_line, end_offset),
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -165,6 +187,7 @@ impl LanguageServer for Backend {
             match read_source_file(&uri).await {
                 Ok(contents) => {
                     let mut compiler = self.compiler.lock().await;
+                    let compiler: &mut dyn CompilerDb = &mut *compiler;
                     let (module, source_file) = compiler.create_module_from_source_file(uri.as_str(), &contents);
                     client_info!(
                         self.client,
@@ -182,11 +205,17 @@ impl LanguageServer for Backend {
     // did_change
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let mut compiler = self.compiler.lock().await;
-        let module = compiler.module_id(params.text_document.uri.as_str());
+        let module = compiler.module_id(params.text_document.uri.to_string());
         let Some(source_file) = compiler.module_data(module).source else {
-            client_info!(self.client,"BUG: module `{}` does not have a source file", params.text_document.uri);
-            return
+            client_info!(
+                self.client,
+                "BUG: module `{}` does not have a source file",
+                params.text_document.uri
+            );
+            return;
         };
+
+        let compiler: &mut dyn CompilerDb = &mut *compiler;
         compiler.update_source_file(source_file, params.content_changes[0].text.clone());
         /*self.client
         .log_message(
@@ -201,43 +230,47 @@ impl LanguageServer for Backend {
     async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let mut compiler = self.compiler.lock().await;
         let compiler: &dyn CompilerDb = &*compiler;
-        let module = compiler.module_id(params.text_document.uri.as_str());
-        let definitions = compiler.module_definitions(module);
-
+        let module = compiler.module_id(params.text_document.uri.to_string());
+        let items = compiler.module_items(module);
         let mut document_symbols = vec![];
-        for &def in definitions.iter() {
-            let def_info = compiler.definition(def);
-            let Some(span) = def_info.span else { continue };
 
-            let range: LineCharacterRange = compiler.span_to_line_character_range(span);
-            let start_line: u32 = range.start.line.try_into().expect("line index overflow");
-            let end_line: u32 = range.end.line.try_into().expect("line index overflow");
-            let start_offset: u32 = range
-                .start
-                .character_offset
-                .try_into()
-                .expect("character offset overflow");
-            let end_offset: u32 = range
-                .end
-                .character_offset
-                .try_into()
-                .expect("character offset overflow");
-            let range = Range {
-                start: Position::new(start_line, start_offset),
-                end: Position::new(end_line, end_offset),
-            };
-            let name = def_info.name.clone();
-
-            let kind = match def_info.kind {
-                DefKind::Function(_) => SymbolKind::FUNCTION,
-                DefKind::Global(_) => SymbolKind::VARIABLE,
-                DefKind::Struct(_) => SymbolKind::STRUCT,
-            };
-
+        for strukt in items.structs.iter() {
+            let range = span_to_lsp_range(compiler, strukt.ast.to_node_with_source_file(compiler, module).span());
+            let name = strukt.name.clone();
             document_symbols.push(DocumentSymbol {
                 name,
                 detail: None,
-                kind,
+                kind: SymbolKind::STRUCT,
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range: range,
+                children: None,
+            });
+        }
+
+        for function in items.functions.iter() {
+            let range = span_to_lsp_range(compiler, function.ast.to_node_with_source_file(compiler, module).span());
+            let name = function.name.clone();
+            document_symbols.push(DocumentSymbol {
+                name,
+                detail: None,
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                deprecated: None,
+                range,
+                selection_range: range,
+                children: None,
+            });
+        }
+
+        for global in items.globals.iter() {
+            let range = span_to_lsp_range(compiler, global.ast.to_node_with_source_file(compiler, module).span());
+            let name = global.name.clone();
+            document_symbols.push(DocumentSymbol {
+                name,
+                detail: None,
+                kind: SymbolKind::VARIABLE,
                 tags: None,
                 deprecated: None,
                 range,
@@ -250,10 +283,35 @@ impl LanguageServer for Backend {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct MakeWriterStderr;
+
+impl MakeWriter<'_> for MakeWriterStderr {
+    type Writer = Stderr;
+
+    fn make_writer(&self) -> Self::Writer {
+        io::stderr()
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    //tracing::subscriber::set_global_default(tracing_subscriber::registry().with(tracing_tracy::TracyLayer::new()))
+    //    .expect("set up the subscriber");
+
+    let subscriber = tracing_subscriber::Registry::default().with(
+        tracing_tree::HierarchicalLayer::new(4)
+            .with_bracketed_fields(true)
+            .with_writer(io::stderr)
+            .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
+    );
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
+
+    info!("Ashley LSP server");
 
     let (service, socket) = LspService::new(|client| Backend {
         client,

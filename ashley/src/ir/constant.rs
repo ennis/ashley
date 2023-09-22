@@ -1,4 +1,4 @@
-use crate::hir::{Constant, Type};
+use crate::ir::{Constant, Type};
 use ordered_float::OrderedFloat;
 
 type F32Ord = OrderedFloat<f32>;

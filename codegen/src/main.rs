@@ -65,7 +65,7 @@ fn load_json<T: for<'a> Deserialize<'a>>(path: &str) -> T {
 
 /// Instructions excluded from automatic builder method generation.
 ///
-/// These should be implemented by hand in `hir::FunctionBuilder` or `hir::Module`
+/// These should be implemented by hand in `ir::FunctionBuilder` or `ir::Module`
 const EXCLUDED_INSTRUCTIONS: &[&str] = &[
     "OpLoopMerge",
     "OpSelectionMerge",
@@ -740,7 +740,7 @@ fn generate_decoration_enum() {}
 fn main() {
     // --- HIR instruction builders ---
     {
-        let path = "ashley/src/hir/autogen/builder.rs";
+        let path = "ashley/src/ir/autogen/builder.rs";
         let mut output = File::create(path).expect("failed to open output file");
         {
             let core_grammar = load_json(CORE_GRAMMAR);

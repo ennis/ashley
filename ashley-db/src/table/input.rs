@@ -2,7 +2,7 @@ use crate::{AsIndex, Database, DbIndex, Idx, Index, Revision, TableIndex, TableO
 use ashley_data_structures::IndexVec;
 use std::{cell::Cell, marker::PhantomData, mem};
 
-/// Represents an input to the query system.
+/*/// Represents an input to the query system.
 ///
 /// The purpose of this struct is just to generate unique IDs for the inputs.
 /// It doesn't contain any input data, which is stored in secondary tables using the generated IDs as keys.
@@ -40,7 +40,7 @@ where
     fn maybe_changed_after(&self, _db: &DB, _index: Index, _rev: Revision) -> bool {
         false
     }
-}
+}*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -60,7 +60,7 @@ pub struct InputTable<K, V> {
 impl<K, V> InputTable<K, V>
 where
     K: AsIndex,
-    V: Eq + Default + Clone,
+    V: Default + Clone,
 {
     pub fn new(table_index: TableIndex) -> InputTable<K, V> {
         InputTable {
@@ -74,29 +74,24 @@ where
 impl<K, V> InputTable<K, V>
 where
     K: AsIndex,
-    V: Eq + Default + Clone,
+    V: Default + Clone,
 {
     pub fn set(&mut self, rev: Revision, key: K, value: V) {
         // ensure that there's enough space in the vector,
         // initializing with the default value of the query result type
         let index = key.index();
         self.data.resize(index.to_usize() + 1, Default::default());
-        if self.data[index].value != value {
-            // value has changed, update changed_at
-            self.data[index].value = value;
-            self.data[index].changed_at = rev;
-        }
+        // value has changed, update changed_at
+        self.data[index].value = value;
+        self.data[index].changed_at = rev;
     }
 
     pub fn update(&mut self, rev: Revision, key: K, f: impl FnOnce(&mut V)) {
         let index = key.index();
         self.data.resize(index.to_usize() + 1, Default::default());
         let d = &mut self.data[index];
-        let prev_value = d.value.clone();
         f(&mut d.value);
-        if d.value != prev_value {
-            d.changed_at = rev;
-        }
+        d.changed_at = rev;
     }
 
     pub fn fetch<DB: ?Sized + Database>(&self, db: &DB, key: K) -> &V {

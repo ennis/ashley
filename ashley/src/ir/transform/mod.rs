@@ -2,8 +2,8 @@
 mod link;
 
 use crate::{
-    hir,
-    hir::{
+    ir,
+    ir::{
         types::{Field, StructType},
         Decoration, GlobalVariable, GlobalVariableData, InstructionData, Operand, StructLayout, Type, TypeData,
         ValueData,
@@ -42,7 +42,7 @@ pub struct UniformBufferField {
     pub ty: Type,
     pub offset: usize,
     /// Defines to which global variable the field maps to.
-    pub var: Option<hir::GlobalVariable>,
+    pub var: Option<ir::GlobalVariable>,
 }
 
 enum InterfaceItemKind {
@@ -57,12 +57,12 @@ struct InterfaceItem {
 }
 
 pub struct ShaderInterfaceTransform<'a> {
-    hir: &'a mut hir::Module,
+    hir: &'a mut ir::Module,
     compiler: &'a dyn CompilerDb,
     interface: Vec<InterfaceItem>,
 }
 
-fn find_interface_variables(hir: &hir::Module) -> Vec<hir::GlobalVariable> {
+fn find_interface_variables(hir: &ir::Module) -> Vec<ir::GlobalVariable> {
     let mut vars = vec![];
     for (g, gdata) in hir.globals.iter() {
         match gdata.storage_class {
@@ -83,9 +83,9 @@ fn find_interface_variables(hir: &hir::Module) -> Vec<hir::GlobalVariable> {
 
 /// Rewrites uniform reads into uniform buffer reads
 fn rewrite_uniform_access(
-    hir: &mut hir::Module,
-    var: hir::GlobalVariable,
-    buffer_var: hir::GlobalVariable,
+    hir: &mut ir::Module,
+    var: ir::GlobalVariable,
+    buffer_var: ir::GlobalVariable,
     field_index: i32,
 ) {
     let field_index = hir.const_i32(field_index);
@@ -135,7 +135,7 @@ fn rewrite_uniform_access(
 }
 
 impl<'a> ShaderInterfaceTransform<'a> {
-    pub fn new(hir: &'a mut hir::Module, compiler: &'a dyn CompilerDb) -> ShaderInterfaceTransform<'a> {
+    pub fn new(hir: &'a mut ir::Module, compiler: &'a dyn CompilerDb) -> ShaderInterfaceTransform<'a> {
         ShaderInterfaceTransform {
             hir,
             compiler,
@@ -143,7 +143,7 @@ impl<'a> ShaderInterfaceTransform<'a> {
         }
     }
 
-    pub fn module(&mut self) -> &mut hir::Module {
+    pub fn module(&mut self) -> &mut ir::Module {
         self.hir
     }
 
@@ -203,8 +203,8 @@ impl<'a> ShaderInterfaceTransform<'a> {
                         let global_ty_dbg = self.hir.debug_type(global.ty);
                         let field_name = field.name.as_deref().unwrap_or("<unnamed>");
                         let global_name = &global.name;
-                        self.compiler.diag_error(format!("type mismatch: shader expects `{global_ty_dbg:?} {global_name}` but the application provides `{field_ty_dbg:?} {field_name}`"))
-                            .primary_label_opt(global.source_location, "").emit();
+                        //self.compiler.diag_error(format!("type mismatch: shader expects `{global_ty_dbg:?} {global_name}` but the application provides `{field_ty_dbg:?} {field_name}`"))
+                        //    .primary_label_opt(global.source_location, "").emit();
                     } else {
                         global_to_field.push((global_id, field_index as i32));
                     }
@@ -244,11 +244,11 @@ impl<'a> ShaderInterfaceTransform<'a> {
         todo!()
     }*/
 
-    pub fn provide_input(&mut self, location: usize, ty: hir::Type) {
+    pub fn provide_input(&mut self, location: usize, ty: ir::Type) {
         todo!()
     }
 
-    pub fn expect_output(&mut self, location: usize, ty: hir::Type) {
+    pub fn expect_output(&mut self, location: usize, ty: ir::Type) {
         todo!()
     }
 
@@ -274,9 +274,9 @@ impl<'a> ShaderInterfaceTransform<'a> {
     /*/// Iterates over unbound uniform variables.
     pub fn uniforms(&self) -> impl Iterator<Item = (GlobalVariable, &'_ GlobalVariableData)> + '_ {
         self.unbound.iter().filter_map(|v| {
-            let gdata = &self.hir.globals[*v];
+            let gdata = &self.ir.globals[*v];
             match gdata.storage_class {
-                StorageClass::Uniform => match hir.type_data(gdata.ty) {
+                StorageClass::Uniform => match ir.type_data(gdata.ty) {
                     TypeData::Pointer {
                         storage_class,
                         pointee_type: _,

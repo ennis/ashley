@@ -1,4 +1,4 @@
-use crate::hir::{
+use crate::ir::{
     Block, BlockData, Constant, ExtInstSet, FunctionData, GlobalVariable, IdRef, InstructionData, LocalData, Module,
     Operand, TerminatingInstruction, Type, Value, ValueData, ValueOrConstant,
 };

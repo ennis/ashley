@@ -1,6 +1,7 @@
 use crate::{
-    syntax::{DiagnosticSpan, Lang, SourceFileId, SyntaxKind, SyntaxNode, SyntaxToken, TextRange},
-    tast, T,
+    item,
+    syntax::{Lang, SourceFileId, SyntaxKind, SyntaxNode, SyntaxToken, TextRange},
+    T,
 };
 use std::num::{ParseFloatError, ParseIntError};
 
@@ -106,16 +107,6 @@ macro_rules! impl_ast_token {
                 self.syntax.text()
             }
         }
-
-        impl DiagnosticSpan for $name {
-            fn file(&self) -> Option<SourceFileId> {
-                None
-            }
-
-            fn range(&self) -> TextRange {
-                self.syntax().range()
-            }
-        }
     };
 }
 
@@ -170,16 +161,6 @@ macro_rules! impl_ast_node {
                 impl_ast_node!(@getter $kind $method: $ast);
             )*
         }
-
-        impl DiagnosticSpan for $name {
-            fn file(&self) -> Option<SourceFileId> {
-                None
-            }
-
-            fn range(&self) -> TextRange {
-                self.syntax().range()
-            }
-        }
     };
 }
 
@@ -213,16 +194,6 @@ macro_rules! impl_ast_variant_node {
                 }
             }
         }
-
-        impl DiagnosticSpan for $name {
-            fn file(&self) -> Option<SourceFileId> {
-                None
-            }
-
-            fn range(&self) -> TextRange {
-                self.syntax().range()
-            }
-        }
     };
 }
 
@@ -252,7 +223,8 @@ impl_ast_node!(AttrKeyValue <ATTR_KEY_VALUE> [token key: Ident, node value: Expr
 impl_ast_node!(AttrNested  <ATTR_NESTED>  [token ident: Ident, node args: AttrArgs]);
 impl_ast_node!(AttrArgs    <ATTR_ARGS>  [nodes args: AttrItem]);
 impl_ast_node!(Module      <MODULE>       [nodes items: Item]);
-impl_ast_node!(ImportDecl  <IMPORT_DECL>  [node package_name: Name]);
+impl_ast_node!(ImportUri   <IMPORT_URI>   [token string: AstString]);
+impl_ast_node!(ImportDecl  <IMPORT_DECL>  [node uri: ImportUri]);
 impl_ast_node!(ImportParamList <IMPORT_PARAM_LIST>  []);
 impl_ast_node!(ImportAlias <IMPORT_ALIAS> [node name: Name]);
 impl_ast_node!(TypeRef     <TYPE_REF>     [node name: Name, nodes qualifiers: TypeQualifier]);
@@ -618,14 +590,14 @@ impl Qualifier {
         first_token(self.syntax())
     }
 
-    pub fn qualifier(&self) -> Option<tast::Qualifier> {
+    pub fn qualifier(&self) -> Option<item::Qualifier> {
         match self.token().kind() {
-            SyntaxKind::BUFFER_KW => Some(tast::Qualifier::Buffer),
-            SyntaxKind::SHARED_KW => Some(tast::Qualifier::Shared),
-            SyntaxKind::UNIFORM_KW => Some(tast::Qualifier::Uniform),
-            SyntaxKind::IN_KW => Some(tast::Qualifier::In),
-            SyntaxKind::OUT_KW => Some(tast::Qualifier::Out),
-            SyntaxKind::CONST_KW => Some(tast::Qualifier::Const),
+            SyntaxKind::BUFFER_KW => Some(item::Qualifier::Buffer),
+            SyntaxKind::SHARED_KW => Some(item::Qualifier::Shared),
+            SyntaxKind::UNIFORM_KW => Some(item::Qualifier::Uniform),
+            SyntaxKind::IN_KW => Some(item::Qualifier::In),
+            SyntaxKind::OUT_KW => Some(item::Qualifier::Out),
+            SyntaxKind::CONST_KW => Some(item::Qualifier::Const),
             _ => None,
         }
     }
@@ -649,9 +621,9 @@ impl Visibility {
         first_token(self.syntax())
     }
 
-    pub fn visibility(&self) -> Option<tast::Visibility> {
+    pub fn visibility(&self) -> Option<item::Visibility> {
         match self.token().kind() {
-            SyntaxKind::PUBLIC_KW => Some(tast::Visibility::Public),
+            SyntaxKind::PUBLIC_KW => Some(item::Visibility::Public),
             _ => None,
         }
     }

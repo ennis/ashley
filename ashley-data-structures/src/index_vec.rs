@@ -132,7 +132,7 @@ macro_rules! new_index {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Vector with strongly-typed indices.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct IndexVec<T, I = Id<T>> {
     items: Vec<T>,
     _phantom: PhantomData<fn() -> I>,

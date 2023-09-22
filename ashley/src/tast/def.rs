@@ -1,52 +1,12 @@
 use crate::{
     builtins::BuiltinSignature,
     diagnostic::Span,
-    hir::Interpolation,
+    ir::Interpolation,
     syntax::ast,
     tast::{ty::Type, InFile},
 };
 use rowan::ast::AstPtr;
 use std::fmt;
-
-/// Describes the kind of a global program variable.
-/// TODO remove this and use spirv::StorageClass directly?
-#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum Qualifier {
-    Buffer,
-    Shared,
-    Uniform,
-    Const,
-    In,
-    Out,
-}
-
-/*impl Qualifier {
-    fn from_token(token: &syntax::SyntaxToken) -> Option<Qualifier> {
-        match token.kind() {
-            SyntaxKind::UNIFORM_KW => Some(Qualifier::Uniform),
-            SyntaxKind::BUFFER_KW => Some(Qualifier::Buffer),
-            SyntaxKind::SHARED_KW => Some(Qualifier::Shared),
-            SyntaxKind::IN_KW => Some(Qualifier::In),
-            SyntaxKind::OUT_KW => Some(Qualifier::Out),
-            SyntaxKind::CONST_KW => Some(Qualifier::Const),
-            _ => None,
-        }
-    }
-}*/
-
-/// display impl for qualifier
-impl fmt::Display for Qualifier {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Qualifier::Buffer => write!(f, "buffer"),
-            Qualifier::Uniform => write!(f, "uniform"),
-            Qualifier::Shared => write!(f, "shared"),
-            Qualifier::Const => write!(f, "const"),
-            Qualifier::In => write!(f, "in"),
-            Qualifier::Out => write!(f, "out"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
@@ -62,55 +22,6 @@ pub struct FunctionParam {
     pub name: String,
 }
 
-/*/// Qualifiers on functions.
-#[derive(Default, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct FunctionQualifiers {
-    pub execution_model: Option<spirv::ExecutionModel>,
-}
-
-impl FunctionQualifiers {
-    pub(crate) fn from_attributes(
-        attrs: &[KnownAttribute],
-        srcloc: Option<SourceLocation>,
-        diag: &mut Diagnostics,
-    ) -> FunctionQualifiers {
-        let mut execution_model = None;
-        let mut specified_execution_model_more_than_once = false;
-
-        for attr in attrs {
-            match attr.kind {
-                KnownAttributeKind::Vertex => {
-                    if execution_model.is_some() {
-                        specified_execution_model_more_than_once = true;
-                    }
-                    execution_model = Some(spirv::ExecutionModel::Vertex);
-                }
-                KnownAttributeKind::Fragment => {
-                    if execution_model.is_some() {
-                        specified_execution_model_more_than_once = true;
-                    }
-                    execution_model = Some(spirv::ExecutionModel::Fragment);
-                }
-                _ => {
-                    //
-                    diag.error(format!("invalid attribute"))
-                        .primary_label_opt(srcloc, "")
-                        .emit();
-                }
-            }
-        }
-
-        if specified_execution_model_more_than_once {
-            // TODO more precise locations
-            diag.error(format!("execution model specified more than once"))
-                .primary_label_opt(srcloc, "")
-                .emit();
-        }
-
-        FunctionQualifiers { execution_model }
-    }
-}*/
-
 /// A function definition or declaration.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct FunctionDef {
@@ -118,10 +29,10 @@ pub struct FunctionDef {
     pub has_body: bool,
     pub linkage: Option<spirv::LinkageType>,
     pub function_control: spirv::FunctionControl,
-    pub function_type: Type,
+    //pub function_type: Type,
     pub parameters: Vec<FunctionParam>,
-    pub builtin: Option<&'static BuiltinSignature>,
-    pub execution_model: Option<spirv::ExecutionModel>,
+    //pub builtin: Option<&'static BuiltinSignature>,
+    //pub execution_model: Option<spirv::ExecutionModel>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -150,12 +61,7 @@ pub enum Visibility {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Def {
-    // The package containing the definition.
-    //
-    // `None` if defined in the current package.
-    //pub package: Option<PackageImportId>,
-    /// Source location, if available.
-    pub span: Option<Span>,
+    pub item: ItemId,
     pub builtin: bool,
     /// Name of the definition.
     pub name: String,

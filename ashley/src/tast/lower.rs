@@ -1,9 +1,9 @@
 //! Lowering to HIR
-//! TODO this should be in the `hir` module
+//! TODO this should be in the `ir` module
 use crate::{
     builtins::{BuiltinSignature, Constructor},
-    hir,
-    hir::{Decoration, FunctionData, IdRef, Interpolation, InterpolationKind, InterpolationSampling, StructLayout},
+    ir,
+    ir::{Decoration, FunctionData, IdRef, Interpolation, InterpolationKind, InterpolationSampling, StructLayout},
     session::{CompilerDb, ModuleId},
     syntax::{ast, ast::UnaryOp},
     tast::{
@@ -20,58 +20,58 @@ use spirv::StorageClass;
 use std::{borrow::Cow, collections::HashMap, ops::Deref};
 
 enum HirDef {
-    Variable(hir::GlobalVariable),
-    Function(hir::Function),
-    Constant(hir::Constant),
+    Variable(ir::GlobalVariable),
+    Function(ir::Function),
+    Constant(ir::Constant),
 }
 
 enum LocalOrParam {
     // Pointer-typed
-    Local(hir::Value),
+    Local(ir::Value),
     // Not necessarily pointer-typed
-    Param(hir::Value),
+    Param(ir::Value),
 }
 
 struct LowerCtxt<'a> {
     compiler: &'a dyn CompilerDb,
     module: &'a Module,
     def_map: HashMap<DefId, HirDef>,
-    local_map: HashMap<LocalVarId, hir::Value>,
+    local_map: HashMap<LocalVarId, ir::Value>,
 }
 
 struct TypedIdRef {
-    ty: hir::Type,
-    id: hir::IdRef,
+    ty: ir::Type,
+    id: ir::IdRef,
 }
 
 fn apply_interpolation_decorations(decorations: &mut Vec<Decoration>, interp: &Option<Interpolation>) {
     if let Some(interp) = interp {
         match interp.kind {
-            InterpolationKind::Flat => decorations.push(hir::Decoration::Flat),
-            InterpolationKind::NoPerspective => decorations.push(hir::Decoration::NoPerspective),
+            InterpolationKind::Flat => decorations.push(ir::Decoration::Flat),
+            InterpolationKind::NoPerspective => decorations.push(ir::Decoration::NoPerspective),
             InterpolationKind::Smooth => {}
         }
         match interp.sampling {
             InterpolationSampling::Center => {}
-            InterpolationSampling::Centroid => decorations.push(hir::Decoration::Centroid),
-            InterpolationSampling::Sample => decorations.push(hir::Decoration::Sample),
+            InterpolationSampling::Centroid => decorations.push(ir::Decoration::Centroid),
+            InterpolationSampling::Sample => decorations.push(ir::Decoration::Sample),
         }
     }
 }
 
 // TODO this might move to the HIR builder
 struct Place {
-    base: hir::IdRef,
+    base: ir::IdRef,
     /// Access chain
-    indices: Vec<hir::IdRef>,
+    indices: Vec<ir::IdRef>,
     /// The type of the place.
-    ty: hir::Type,
+    ty: ir::Type,
     ///
     storage_class: spirv::StorageClass,
 }
 
 impl<'a> LowerCtxt<'a> {
-    fn lower_module(&mut self, _module: ModuleId, hir: &mut hir::Module) {
+    fn lower_module(&mut self, _module: ModuleId, hir: &mut ir::Module) {
         for (def_id, def) in self.module.definitions() {
             if def.builtin {
                 continue;
@@ -80,18 +80,18 @@ impl<'a> LowerCtxt<'a> {
         }
     }
 
-    fn convert_type(&mut self, hir: &mut hir::Module, ty: &crate::tast::Type) -> hir::Type {
+    fn convert_type(&mut self, hir: &mut ir::Module, ty: &crate::tast::Type) -> ir::Type {
         let tydata = match *ty.0.deref() {
-            crate::tast::TypeKind::Error => hir::TypeData::Unknown,
-            crate::tast::TypeKind::Unit => hir::TypeData::Unit,
-            crate::tast::TypeKind::Scalar(scalar_type) => hir::TypeData::Scalar(scalar_type),
-            crate::tast::TypeKind::Vector(scalar_type, size) => hir::TypeData::Vector(scalar_type, size),
+            crate::tast::TypeKind::Error => ir::TypeData::Unknown,
+            crate::tast::TypeKind::Unit => ir::TypeData::Unit,
+            crate::tast::TypeKind::Scalar(scalar_type) => ir::TypeData::Scalar(scalar_type),
+            crate::tast::TypeKind::Vector(scalar_type, size) => ir::TypeData::Vector(scalar_type, size),
             crate::tast::TypeKind::Matrix {
                 component_type,
                 columns,
                 rows,
                 stride,
-            } => hir::TypeData::Matrix {
+            } => ir::TypeData::Matrix {
                 component_type,
                 columns,
                 rows,
@@ -103,7 +103,7 @@ impl<'a> LowerCtxt<'a> {
                 stride,
             } => {
                 let element_type = self.convert_type(hir, element_type);
-                hir::TypeData::Array {
+                ir::TypeData::Array {
                     element_type,
                     size,
                     stride,
@@ -117,7 +117,7 @@ impl<'a> LowerCtxt<'a> {
             } => {
                 let fields: Vec<_> = fields
                     .iter()
-                    .map(|f| hir::types::Field {
+                    .map(|f| ir::types::Field {
                         ty: self.convert_type(hir, &f.ty),
                         name: None,
                         interpolation: None, // TODO
@@ -132,7 +132,7 @@ impl<'a> LowerCtxt<'a> {
                     None
                 };
 
-                hir::TypeData::Struct(hir::types::StructType {
+                ir::TypeData::Struct(ir::types::StructType {
                     name: Some(Cow::Owned(name.clone())),
                     fields: fields.into(),
                     layout: hir_layout,
@@ -142,16 +142,16 @@ impl<'a> LowerCtxt<'a> {
             crate::tast::TypeKind::Pointer {
                 ref pointee_type,
                 storage_class,
-            } => hir::TypeData::Pointer {
+            } => ir::TypeData::Pointer {
                 pointee_type: self.convert_type(hir, pointee_type),
                 storage_class,
             },
-            crate::tast::TypeKind::Function(ref fty) => hir::TypeData::Function(hir::types::FunctionType {
+            crate::tast::TypeKind::Function(ref fty) => ir::TypeData::Function(ir::types::FunctionType {
                 return_type: self.convert_type(hir, &fty.return_type),
                 arg_types: Cow::Owned(fty.arg_types.iter().map(|p| self.convert_type(hir, p)).collect()),
             }),
-            crate::tast::TypeKind::Image(image_type) => hir::TypeData::Image(image_type),
-            crate::tast::TypeKind::Sampler => hir::TypeData::Sampler,
+            crate::tast::TypeKind::Image(image_type) => ir::TypeData::Image(image_type),
+            crate::tast::TypeKind::Sampler => ir::TypeData::Sampler,
             crate::tast::TypeKind::RuntimeArray { .. } => {
                 todo!("RuntimeArray")
             }
@@ -170,11 +170,11 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_global(
         &mut self,
-        hir: &mut hir::Module,
+        hir: &mut ir::Module,
         def_id: DefId,
         def: &Def,
         global_def: &GlobalDef,
-    ) -> hir::GlobalVariable {
+    ) -> ir::GlobalVariable {
         let storage_class = match global_def.qualifier {
             Some(q) => match q {
                 Qualifier::Const => {
@@ -208,7 +208,7 @@ impl<'a> LowerCtxt<'a> {
             decorations.push(Decoration::BuiltIn(builtin))
         }
 
-        let id = hir.define_global_variable(hir::GlobalVariableData {
+        let id = hir.define_global_variable(ir::GlobalVariableData {
             name: def.name.clone(),
             ty,
             storage_class,
@@ -223,12 +223,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_unary_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         op: ast::UnaryOp,
         sig: &BuiltinSignature,
         expr: ExprId,
-        result_type: hir::Type,
+        result_type: ir::Type,
     ) -> IdRef {
         match op {
             UnaryOp::Not | UnaryOp::Neg => {
@@ -262,12 +262,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_bin_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         sig: &BuiltinSignature,
         lhs: ExprId,
         rhs: ExprId,
-        result_type: hir::Type,
+        result_type: ir::Type,
     ) -> IdRef {
         let lhs = self.lower_expr(fb, body, lhs).expect("expected non-void expression");
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
@@ -275,7 +275,7 @@ impl<'a> LowerCtxt<'a> {
         val.into()
     }
 
-    fn lower_place(&mut self, fb: &mut hir::FunctionBuilder, place: Place) -> IdRef {
+    fn lower_place(&mut self, fb: &mut ir::FunctionBuilder, place: Place) -> IdRef {
         let ptr_ty = fb.pointer_type(place.ty, place.storage_class);
         if place.indices.is_empty() {
             place.base
@@ -286,11 +286,11 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_assign_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         lhs: ExprId,
         rhs: ExprId,
-        _result_type: hir::Type,
+        _result_type: ir::Type,
     ) {
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
         let lhs = self.lower_place_expr(fb, body, lhs);
@@ -300,12 +300,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_bin_assign_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         sig: &BuiltinSignature,
         lhs: ExprId,
         rhs: ExprId,
-        _result_type: hir::Type,
+        _result_type: ir::Type,
     ) {
         let rhs = self.lower_expr(fb, body, rhs).expect("expected non-void expression");
         let lhs = self.lower_place_expr(fb, body, lhs);
@@ -316,7 +316,7 @@ impl<'a> LowerCtxt<'a> {
         fb.emit_store(lhs_ptr, val.into(), None);
     }
 
-    fn lower_place_expr(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, place_expr: ExprId) -> Place {
+    fn lower_place_expr(&mut self, fb: &mut ir::FunctionBuilder, body: &TypedBody, place_expr: ExprId) -> Place {
         let expr = &body.exprs[place_expr];
         let ty = self.convert_type(fb.module, &expr.ty);
         match expr.kind {
@@ -381,12 +381,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_call_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         function_id: DefId,
         args: &[ExprId],
-        result_type: hir::Type,
-    ) -> Option<hir::IdRef> {
+        result_type: ir::Type,
+    ) -> Option<ir::IdRef> {
         let func = self
             .compiler
             .definition(function_id)
@@ -417,12 +417,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_implicit_conversion_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         expr: ExprId,
         conversion_kind: ConversionKind,
-        result_type: hir::Type,
-    ) -> hir::IdRef {
+        result_type: ir::Type,
+    ) -> ir::IdRef {
         let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
 
         let val = match conversion_kind {
@@ -442,12 +442,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_constructor_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         ctor: &Constructor,
         args: &[ExprId],
-        result_type: hir::Type,
-    ) -> hir::IdRef {
+        result_type: ir::Type,
+    ) -> ir::IdRef {
         // TODO smallvec(16) should be enough
         let mut arg_ids = Vec::with_capacity(args.len());
         for &arg in args {
@@ -457,7 +457,7 @@ impl<'a> LowerCtxt<'a> {
         (ctor.lower_fn)(fb, &arg_ids, result_type).into()
     }
 
-    fn lower_literal(&mut self, fb: &mut hir::FunctionBuilder, value: &ConstantValue) -> hir::IdRef {
+    fn lower_literal(&mut self, fb: &mut ir::FunctionBuilder, value: &ConstantValue) -> ir::IdRef {
         match *value {
             ConstantValue::Int(v) => fb.const_i32(v as i32).into(),
             ConstantValue::Float(v) => fb.const_f32(v.0).into(),
@@ -468,12 +468,12 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_component_access_expr(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         expr: ExprId,
         components: &ComponentIndices,
-        result_type: hir::Type,
-    ) -> hir::IdRef {
+        result_type: ir::Type,
+    ) -> ir::IdRef {
         let expr = self.lower_expr(fb, body, expr).expect("expected non-void expression");
         if components.len() == 1 {
             // extracting one component (`.x`)
@@ -484,7 +484,7 @@ impl<'a> LowerCtxt<'a> {
         }
     }
 
-    fn lower_expr(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, expr_id: ExprId) -> Option<TypedIdRef> {
+    fn lower_expr(&mut self, fb: &mut ir::FunctionBuilder, body: &TypedBody, expr_id: ExprId) -> Option<TypedIdRef> {
         let expr = &body.exprs[expr_id];
         let ty = self.convert_type(fb.module, &expr.ty);
         let id = match expr.kind {
@@ -563,7 +563,7 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_local_var(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         var_id: LocalVarId,
         initializer_id: Option<ExprId>,
@@ -579,7 +579,7 @@ impl<'a> LowerCtxt<'a> {
         }
     }
 
-    fn lower_return_stmt(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, ret: Option<ExprId>) {
+    fn lower_return_stmt(&mut self, fb: &mut ir::FunctionBuilder, body: &TypedBody, ret: Option<ExprId>) {
         if let Some(ret) = ret {
             let ret = self.lower_expr(fb, body, ret).expect("expected non-void expression");
             fb.ret_value(ret.id);
@@ -590,7 +590,7 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_select_stmt(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         condition: ExprId,
         true_branch: StmtId,
@@ -618,7 +618,7 @@ impl<'a> LowerCtxt<'a> {
 
     fn lower_for_loop(
         &mut self,
-        fb: &mut hir::FunctionBuilder,
+        fb: &mut ir::FunctionBuilder,
         body: &TypedBody,
         initializer: Option<StmtId>,
         condition: Option<ExprId>,
@@ -656,7 +656,7 @@ impl<'a> LowerCtxt<'a> {
         fb.select_block(merge_block);
     }
 
-    fn lower_stmt(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, stmt: StmtId) {
+    fn lower_stmt(&mut self, fb: &mut ir::FunctionBuilder, body: &TypedBody, stmt: StmtId) {
         let stmt = &body.stmts[stmt];
         //eprintln!("lowering stmt {:?}", stmt);
         match stmt.kind {
@@ -694,19 +694,19 @@ impl<'a> LowerCtxt<'a> {
         }
     }
 
-    fn lower_block(&mut self, fb: &mut hir::FunctionBuilder, body: &TypedBody, block: BlockId) {
+    fn lower_block(&mut self, fb: &mut ir::FunctionBuilder, body: &TypedBody, block: BlockId) {
         let block = &body.blocks[block];
         for stmt in block.stmts.iter() {
             self.lower_stmt(fb, body, *stmt);
         }
     }
 
-    fn lower_function(&mut self, hir: &mut hir::Module, def_id: DefId, def: &Def, function_def: &FunctionDef) {
+    fn lower_function(&mut self, hir: &mut ir::Module, def_id: DefId, def: &Def, function_def: &FunctionDef) {
         // build parameter list
         let params: Vec<_> = function_def
             .parameters
             .iter()
-            .map(|param| hir::FunctionParameter {
+            .map(|param| ir::FunctionParameter {
                 name: param.name.clone(),
                 ty: self.convert_type(hir, &param.ty),
             })
@@ -722,7 +722,7 @@ impl<'a> LowerCtxt<'a> {
         let hir_return_type = self.convert_type(hir, &return_type);
 
         // create function type
-        let func_type = hir.define_type(hir::TypeData::Function(hir::types::FunctionType {
+        let func_type = hir.define_type(ir::TypeData::Function(ir::types::FunctionType {
             arg_types: Cow::Owned(arg_types),
             return_type: hir_return_type,
         }));
@@ -743,7 +743,7 @@ impl<'a> LowerCtxt<'a> {
                     function_def.function_control,
                 )
             } else {
-                let (mut func_data, entry_block_id) = hir::FunctionData::new(
+                let (mut func_data, entry_block_id) = ir::FunctionData::new(
                     def.name.clone(),
                     func_type,
                     params,
@@ -751,14 +751,14 @@ impl<'a> LowerCtxt<'a> {
                     function_def.function_control,
                 );
 
-                // fill local map (LocalVarId -> hir::Value) with the function parameters
+                // fill local map (LocalVarId -> ir::Value) with the function parameters
                 // (reminder: in TAST, function parameters are also identified with LocalVarIds)
                 self.local_map.clear();
                 for (arg, local_var_id) in func_data.arguments.iter().zip(typed_body.params.iter()) {
                     self.local_map.insert(*local_var_id, *arg);
                 }
 
-                let mut builder = hir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
+                let mut builder = ir::FunctionBuilder::new(hir, &mut func_data, entry_block_id);
 
                 let entry_block = typed_body.entry_block.expect("function has no entry block");
                 self.lower_block(&mut builder, &typed_body, entry_block);
@@ -801,7 +801,7 @@ impl<'a> LowerCtxt<'a> {
         self.def_map.insert(def_id, HirDef::Function(hir_func));
     }
 
-    fn lower_def(&mut self, hir: &mut hir::Module, def: &Def, def_id: DefId) {
+    fn lower_def(&mut self, hir: &mut ir::Module, def: &Def, def_id: DefId) {
         //trace!("lowering def")
         match def.kind {
             DefKind::Function(ref function) => {
@@ -817,9 +817,9 @@ impl<'a> LowerCtxt<'a> {
     }
 }
 
-pub fn lower_to_hir(compiler: &dyn CompilerDb, module: ModuleId) -> Result<hir::Module, QueryError> {
+pub fn lower_to_hir(compiler: &dyn CompilerDb, module: ModuleId) -> Result<ir::Module, QueryError> {
     let dependencies = compiler.module_dependencies(module);
-    let mut hir = hir::Module::new();
+    let mut hir = ir::Module::new();
 
     // lower dependencies
     for dep in dependencies {

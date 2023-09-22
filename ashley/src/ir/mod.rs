@@ -10,7 +10,7 @@ pub mod transform;
 pub mod types;
 mod visit;
 
-use crate::{diagnostic::Span, hir, hir::types::ScalarType, utils::UniqueArena};
+use crate::{diagnostic::Span, ir, ir::types::ScalarType, utils::UniqueArena};
 use id_arena::Arena;
 use ordered_float::OrderedFloat;
 use rspirv::{spirv, spirv::LinkageType};
@@ -428,7 +428,7 @@ pub struct FunctionParameter {
 #[derive(Clone, Debug)]
 pub struct LocalData {
     pub name: String,
-    pub value: hir::Value,
+    pub value: ir::Value,
 }
 
 /// HIR functions or function declarations.

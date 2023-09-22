@@ -9,3 +9,4 @@ edition = "2021"
 memo-map = "0.3.2"
 dashmap = "5.4.0"
 ashley-data-structures = { path = "../ashley-data-structures" }
+tracing = "0.1.37"

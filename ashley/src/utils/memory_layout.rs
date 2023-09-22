@@ -1,12 +1,12 @@
 use crate::{
-    hir,
-    hir::{types::ScalarType, Module, Type, TypeData},
+    ir,
+    ir::{types::ScalarType, Module, Type, TypeData},
 };
 use std::mem;
 
 /// Trait implemented by types that can be shared with shaders.
 pub trait MemoryLayout: Sized + 'static {
-    fn hir_type(hir: &mut hir::Module) -> hir::Type;
+    fn hir_type(hir: &mut ir::Module) -> ir::Type;
 }
 
 impl MemoryLayout for f32 {

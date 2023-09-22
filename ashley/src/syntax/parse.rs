@@ -2,6 +2,7 @@ use crate::{
     diagnostic::Span,
     session::{CompilerDb, SourceFileId},
     syntax::{
+        diagnostics::SyntaxDiagnostic,
         syntax_kind::{Lexer, SyntaxKind::*},
         SyntaxKind,
     },
@@ -179,7 +180,11 @@ const BUILTIN_TYPE_NAMES: &[&str] = &[
     "usubpassInputMS",
 ];
 
-pub(crate) fn parse_raw(compiler: &dyn CompilerDb, text: &str, source_file: SourceFileId) -> GreenNode {
+pub(crate) fn parse_raw(
+    compiler: &dyn CompilerDb,
+    text: &str,
+    source_file: SourceFileId,
+) -> (GreenNode, Vec<SyntaxDiagnostic>) {
     let mut lex: Lexer = SyntaxKind::create_lexer(text);
     let b = GreenNodeBuilder::new();
     let mut lookahead = VecDeque::default();
@@ -190,7 +195,6 @@ pub(crate) fn parse_raw(compiler: &dyn CompilerDb, text: &str, source_file: Sour
     for ty in BUILTIN_TYPE_NAMES {
         types.insert(ty.to_string());
     }
-    compiler.push_diagnostic_source_file(source_file);
     let parser = Parser {
         compiler,
         source_file,
@@ -200,10 +204,9 @@ pub(crate) fn parse_raw(compiler: &dyn CompilerDb, text: &str, source_file: Sour
         b,
         types,
         consumed_tokens: 0,
+        diagnostics: vec![],
     };
-    let result = parser.parse();
-    compiler.pop_diagnostic_source_file();
-    result
+    parser.parse()
 }
 
 struct Parser<'a> {
@@ -219,6 +222,7 @@ struct Parser<'a> {
     /// the in-progress tree.
     b: GreenNodeBuilder<'static>,
     types: HashSet<String>,
+    diagnostics: Vec<SyntaxDiagnostic>,
 }
 
 fn is_trivia(kind: SyntaxKind) -> bool {
@@ -234,13 +238,13 @@ impl Default for Progress {
 }
 
 impl<'a> Parser<'a> {
-    fn parse(mut self) -> GreenNode {
+    fn parse(mut self) -> (GreenNode, Vec<SyntaxDiagnostic>) {
         // Don't skip whitespace for the root module
         self.b.start_node(MODULE.into());
         self.parse_items();
         self.eat_ws();
         self.b.finish_node();
-        self.b.finish()
+        (self.b.finish(), self.diagnostics)
     }
 
     // TODO parser recovery situations:
@@ -382,10 +386,7 @@ impl<'a> Parser<'a> {
     //--------------------------------------------------------------------
     fn expect_ident(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
-            self.compiler
-                .diag_error(format!("expected {ident_kind}"))
-                .primary_label(self.span(), "")
-                .emit();
+            self.syntax_error(format!("expected {ident_kind}"));
             false
         } else {
             self.eat();
@@ -395,10 +396,7 @@ impl<'a> Parser<'a> {
 
     fn expect_new_type_name(&mut self, ident_kind: &str) -> bool {
         if self.next() != Some(IDENT) {
-            self.compiler
-                .diag_error(format!("expected {ident_kind}"))
-                .primary_label(self.span(), "")
-                .emit();
+            self.syntax_error(format!("expected {ident_kind}"));
             false
         } else {
             let text = self.text();
@@ -412,11 +410,7 @@ impl<'a> Parser<'a> {
 
     fn expect(&mut self, kind: SyntaxKind) -> bool {
         if self.next() != Some(kind) {
-            let msg = format!("expected {kind:?}");
-            self.compiler
-                .diag_error(msg.clone())
-                .primary_label(self.span(), msg)
-                .emit();
+            self.syntax_error(format!("expected {kind:?}"));
             false
         } else {
             self.eat();
@@ -429,11 +423,7 @@ impl<'a> Parser<'a> {
     /// TODO stop recovery when encountering a closing terminator
     fn expect_recover(&mut self, kind: SyntaxKind) -> bool {
         if self.next() != Some(kind) {
-            let msg = format!("expected {kind:?}");
-            self.compiler
-                .diag_error(msg.clone())
-                .primary_label(self.span(), msg)
-                .emit();
+            self.syntax_error_at(self.span(), format!("expected {kind:?}"));
             while let Some(tk) = self.next() {
                 self.eat();
                 if tk == kind {
@@ -445,6 +435,16 @@ impl<'a> Parser<'a> {
             self.eat();
             true
         }
+    }
+
+    fn syntax_error(&mut self, message: impl Into<String>) {
+        self.diagnostics
+            .push(SyntaxDiagnostic::syntax_error(self.span(), message.into()));
+    }
+
+    fn syntax_error_at(&mut self, span: Span, message: impl Into<String>) {
+        self.diagnostics
+            .push(SyntaxDiagnostic::syntax_error(span, message.into()));
     }
 
     /*fn expect_any(&mut self, kinds: &[SyntaxKind]) -> bool {
@@ -471,10 +471,7 @@ impl<'a> Parser<'a> {
             self.eat();
             self.finish_node();
         } else {
-            self.compiler
-                .diag_error(format!("expected {name_kind}"))
-                .primary_label(self.span(), "here")
-                .emit();
+            self.syntax_error(format!("expected {name_kind}"));
         }
     }
 
@@ -527,10 +524,7 @@ impl<'a> Parser<'a> {
                     }
                     _ => {
                         // TODO better recovery
-                        self.compiler
-                            .diag_error("unexpected token")
-                            .primary_label(self.span(), "")
-                            .emit();
+                        self.syntax_error("unexpected token");
                         self.eat();
                     }
                 }
@@ -590,10 +584,7 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 // assume expression?
-                self.compiler
-                    .diag_error("expected literal or ident")
-                    .primary_label(self.span(), "")
-                    .emit();
+                self.syntax_error("expected literal or ident");
             }
         }
     }
@@ -663,10 +654,7 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }
             _ => {
-                self.compiler
-                    .diag_error("expected package parameter")
-                    .primary_label(self.span(), "")
-                    .emit();
+                self.syntax_error("expected package parameter");
             }
         }
     }
@@ -678,7 +666,9 @@ impl<'a> Parser<'a> {
             self.start_node(IMPORT_DECL);
         }
         self.expect(IMPORT_KW);
-        self.parse_name("package name");
+        self.start_node(IMPORT_URI);
+        self.expect(STRING);
+        self.finish_node();
         if let Some(T!['(']) = self.next() {
             self.start_node(IMPORT_PARAM_LIST);
             self.eat();
@@ -757,10 +747,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 None => {
-                    self.compiler
-                        .diag_error("unexpected end of file")
-                        .primary_label(self.span(), "")
-                        .emit();
+                    self.syntax_error("unexpected EOF");
                     break;
                 }
                 _ => {}
@@ -857,16 +844,10 @@ impl<'a> Parser<'a> {
                 }
             }
             None => {
-                self.compiler
-                    .diag_error("unexpected end of file")
-                    .primary_label(self.span(), "")
-                    .emit();
+                self.syntax_error("unexpected EOF");
             }
             _ => {
-                self.compiler
-                    .diag_error("syntax error")
-                    .primary_label(self.span(), "")
-                    .emit();
+                self.syntax_error("unexpected EOF");
                 // forward progress bump
                 self.eat();
             }
@@ -889,10 +870,7 @@ impl<'a> Parser<'a> {
             match self.next_ensure_progress(&mut progress) {
                 Some(x) if x == end => {
                     if trailing_sep && !allow_trailing {
-                        self.compiler
-                            .diag_error("trailing separator not allowed here")
-                            .primary_label(last_sep_span, "")
-                            .emit()
+                        self.syntax_error_at(last_sep_span, "trailing separator not allowed here");
                     }
                     break;
                 }
@@ -905,10 +883,7 @@ impl<'a> Parser<'a> {
                 Some(x) if x == end => {
                     if item_count == 1 && tuple_rule {
                         // should end with a comma
-                        self.compiler
-                            .diag_error("single-element tuple types should have a trailing `,`")
-                            .primary_label(self.span(), "")
-                            .emit()
+                        self.syntax_error("single-element tuple types should have a trailing `,`");
                     }
                     break;
                 }
@@ -919,10 +894,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     // TODO better error message
-                    self.compiler
-                        .diag_error("syntax error (TODO)")
-                        .primary_label(self.span(), "")
-                        .emit();
+                    self.syntax_error("syntax error (TODO)");
                     trailing_sep = false;
                 }
             }
@@ -982,10 +954,7 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }
             _ => {
-                self.compiler
-                    .diag_error("expected boolean, integer, float or string literal")
-                    .primary_label(self.span(), "")
-                    .emit();
+                self.syntax_error("expected boolean, integer, float or string literal");
                 self.eat();
             }
         }
@@ -1043,10 +1012,7 @@ impl<'a> Parser<'a> {
                 self.finish_node();
             }*/
             _ => {
-                self.compiler
-                    .diag_error("syntax error")
-                    .primary_label(self.span(), "")
-                    .emit();
+                self.syntax_error("syntax error");
                 self.eat();
             }
         }
@@ -1096,11 +1062,7 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(_) => self.parse_expr_stmt(),
-            _ => self
-                .compiler
-                .diag_error("syntax error")
-                .primary_label(self.span(), "")
-                .emit(),
+            _ => self.syntax_error("syntax error"),
         }
     }
 
@@ -1240,12 +1202,7 @@ impl<'a> Parser<'a> {
                     // continue arg list
                     self.eat();
                 }
-                _ => {
-                    self.compiler
-                        .diag_error("syntax error (TODO)")
-                        .primary_label(self.span(), "")
-                        .emit();
-                }
+                _ => self.syntax_error("syntax error (TODO)"),
             }
         }
 

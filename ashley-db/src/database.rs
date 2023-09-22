@@ -3,7 +3,7 @@ use crate::{DbIndex, Revision, Runtime};
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Operations on a database type.
-pub trait Database: 'static {
+pub trait Database: Send + 'static {
     ///
     fn maybe_changed_after(&self, dbindex: DbIndex, after: Revision) -> bool;
 

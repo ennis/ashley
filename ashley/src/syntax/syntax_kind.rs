@@ -190,6 +190,7 @@ pub enum SyntaxKind {
     ATTR_IDENT,
     ATTR_KEY_VALUE,
     IMPORT_DECL,
+    IMPORT_URI,
     IMPORT_PARAM_LIST,
     IMPORT_ALIAS,
     VISIBILITY,

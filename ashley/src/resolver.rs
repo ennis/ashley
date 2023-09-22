@@ -25,11 +25,12 @@ pub trait PackageResolver {
 }
 
 /// A package resolver that does nothing.
+#[derive(Default)]
 pub struct DummyPackageResolver;
 
 impl PackageResolver for DummyPackageResolver {
     fn resolve(&self, compiler: &dyn CompilerDb, name: &ModuleName) -> Option<PackageResolution> {
-        compiler.diag_error(format!("unknown package `{name}`")).emit();
+        //compiler.diag_error(format!("unknown package `{name}`")).emit();
         None
     }
 }

@@ -1,17 +1,10 @@
-use crate::{
-    session::{CompilerDb, SourceFileId},
-    termcolor, SourceFile,
-};
+use crate::session::{CompilerDb, SourceFileId};
 use codespan_reporting::{
-    diagnostic::{Diagnostic as CsDiagnostic, Label, LabelStyle, Severity},
     files::{Error, Files},
     term,
 };
 use rowan::{TextRange, TextSize};
-use std::{
-    cell::{Cell, RefCell},
-    ops::Range,
-};
+use std::ops::Range;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -63,6 +56,24 @@ impl Span {
 }
 
 /// Types that can provide span information for diagnostic.
+pub trait Spanned {
+    fn span(&self) -> Span;
+}
+
+impl Spanned for Span {
+    fn span(&self) -> Span {
+        *self
+    }
+}
+
+impl<S: Spanned> Spanned for &S {
+    fn span(&self) -> Span {
+        (*self).span()
+    }
+}
+
+/*
+/// Types that can provide span information for diagnostic.
 pub trait DiagnosticSpan {
     /// Returns the source file of the span.
     ///
@@ -94,10 +105,6 @@ impl<T: DiagnosticSpan> DiagnosticSpan for &T {
     }
 }
 
-/// Types that can provide span information for diagnostic.
-pub trait Spanned {
-    fn span(&self) -> Span;
-}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -193,7 +200,7 @@ impl<'a> DiagnosticBuilder<'a> {
         message: impl Into<String>,
     ) -> DiagnosticBuilder<'a> {
         let range = span.range();
-        let source_file = span.file().or_else(|| self.compiler.diagnostic_source_file());
+        let source_file = span.file().or_else(|| todo!());
 
         if let Some(source_file) = source_file {
             self.diag.labels.push(Label {
@@ -242,7 +249,7 @@ impl<'a> DiagnosticBuilder<'a> {
     }
 
     pub fn emit(self) {
-        let d = self.compiler.diag();
+        /*let d = self.compiler.diag();
         match self.diag.severity {
             Severity::Bug => {
                 d.bug_count.set(d.bug_count.get() + 1);
@@ -258,37 +265,38 @@ impl<'a> DiagnosticBuilder<'a> {
 
         for sink in d.sinks.iter() {
             sink.emit(&self.diag, self.compiler)
-        }
+        }*/
     }
 }
+*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum Severity2 {
+pub enum Severity {
     Bug,
     Error,
     Warning,
 }
 
-pub struct Label2 {
+pub struct Label {
     message: String,
     secondary: bool,
     span: Span,
 }
 
 #[must_use]
-pub struct Diagnostic2 {
-    severity: Severity2,
+pub struct Diagnostic {
+    severity: Severity,
     message: String,
     code: Option<String>,
-    labels: Vec<Label2>,
+    labels: Vec<Label>,
     notes: Vec<String>,
 }
 
-impl Diagnostic2 {
-    pub fn new(severity: Severity2, message: impl Into<String>) -> Diagnostic2 {
-        Diagnostic2 {
+impl Diagnostic {
+    pub fn new(severity: Severity, message: impl Into<String>) -> Diagnostic {
+        Diagnostic {
             severity,
             message: message.into(),
             code: None,
@@ -297,38 +305,39 @@ impl Diagnostic2 {
         }
     }
 
-    pub fn bug(message: impl Into<String>) -> Diagnostic2 {
-        Diagnostic2::new(Severity2::Bug, message)
+    pub fn bug(message: impl Into<String>) -> Diagnostic {
+        Diagnostic::new(Severity::Bug, message)
     }
 
-    pub fn warn(message: impl Into<String>) -> Diagnostic2 {
-        Diagnostic2::new(Severity2::Warning, message)
+    pub fn warn(message: impl Into<String>) -> Diagnostic {
+        Diagnostic::new(Severity::Warning, message)
     }
 
-    pub fn error(message: impl Into<String>) -> Diagnostic2 {
-        Diagnostic2::new(Severity2::Error, message)
+    pub fn error(message: impl Into<String>) -> Diagnostic {
+        Diagnostic::new(Severity::Error, message)
     }
 
-    pub fn label<S: Spanned>(mut self, span: &S, message: impl Into<String>) -> Diagnostic2 {
-        self.labels.push(Label2 {
+    pub fn label<S: Spanned>(mut self, span: S, message: impl Into<String>) -> Diagnostic {
+        self.labels.push(Label {
             message: message.into(),
             secondary: false,
-            span: span.into(),
+            span: span.span(),
         });
         self
     }
 
     /// Sets the primary span of the diagnostic.
-    pub fn span<S: Spanned>(self, span: &S) -> Diagnostic2 {
+    pub fn span<S: Spanned>(self, span: S) -> Diagnostic {
         self.label(span, "")
     }
 
-    pub fn note(mut self, message: impl Into<String>) -> Diagnostic2 {
+    pub fn note(mut self, message: impl Into<String>) -> Diagnostic {
         self.notes.push(message.into());
         self
     }
 }
 
+/*
 #[macro_export]
 macro_rules! diag_span_bug {
     ($span:expr, $($arg:tt)*) => {
@@ -349,3 +358,4 @@ macro_rules! diag_span_warn {
         $crate::diagnostic::Diagnostic2::warn(format!($($arg)*)).span(&$span)
     };
 }
+*/

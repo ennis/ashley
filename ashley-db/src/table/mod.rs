@@ -2,11 +2,7 @@ mod derived;
 mod input;
 mod interned;
 
-pub use self::{
-    derived::DerivedQueryTable,
-    input::{InputIndex, InputTable},
-    interned::InternTable,
-};
+pub use self::{derived::DerivedQueryTable, input::InputTable, interned::InternTable};
 
 use crate::{Database, Revision};
 use ashley_data_structures::{new_index, Idx};
@@ -46,6 +42,17 @@ impl Idx for Index {
 pub trait AsIndex: Copy + Clone + Eq + PartialEq + Hash + Ord + PartialOrd {
     fn from_index(id: Index) -> Self;
     fn index(self) -> Index;
+}
+
+impl AsIndex for () {
+    fn from_index(id: Index) -> Self {
+        assert_eq!(id.as_u32(), 0);
+        ()
+    }
+
+    fn index(self) -> Index {
+        Index::from_u32(0)
+    }
 }
 
 /// Defines a new key type for tables.

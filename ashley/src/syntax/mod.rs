@@ -4,10 +4,10 @@ mod operators;
 mod parse;
 mod syntax_kind;
 
+pub use self::diagnostics::SyntaxDiagnostic;
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{
-    diagnostic::DiagnosticSpan,
     session::{CompilerDb, SourceFileId},
     syntax::parse::parse_raw,
 };
@@ -34,32 +34,36 @@ pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 pub type SyntaxNodePtr = rowan::ast::SyntaxNodePtr<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 
-impl DiagnosticSpan for SyntaxToken {
-    fn file(&self) -> Option<SourceFileId> {
-        None
-    }
-
-    fn range(&self) -> TextRange {
-        self.text_range()
-    }
-}
-
-impl DiagnosticSpan for SyntaxNode {
-    fn file(&self) -> Option<SourceFileId> {
-        None
-    }
-
-    fn range(&self) -> TextRange {
-        self.text_range()
-    }
-}
-
 /// Main entry point for parsing.
-pub fn parse(compiler: &dyn CompilerDb, text: &str, file: SourceFileId) -> GreenNode {
+fn parse(compiler: &dyn CompilerDb, text: &str, file: SourceFileId) -> (GreenNode, Vec<SyntaxDiagnostic>) {
     parse_raw(compiler, text, file)
 }
 
-//--------------------------------------------------------------------------------------------------
+#[derive(Clone, PartialEq)]
+pub struct SyntaxTree {
+    pub green_node: GreenNode,
+    pub root: SyntaxNodePtr,
+}
+
+impl SyntaxTree {
+    pub fn to_root(&self) -> SyntaxNode {
+        SyntaxNode::new_root(self.green_node.clone())
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub(crate) fn syntax_tree_with_diagnostics_query(compiler: &dyn CompilerDb, source_file: SourceFileId) {
+    //compiler.runtime().set_query_label("query_source_file_syntax_tree");
+    let _span = trace_span!("syntax_tree_with_diagnostics_query", ?source_file).entered();
+    let src = compiler.source_file(source_file);
+    let (green_node, diagnostics) = parse(compiler, &src.contents, source_file);
+
+    compiler.set_syntax_tree(source_file, green_node);
+    compiler.set_syntax_diagnostics(source_file, diagnostics);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,5 @@
 use crate::{
-    diagnostic::{Diagnostic2, Span},
+    diagnostic::{Diagnostic, Span},
     session::DefId,
     syntax::{
         ast,
@@ -146,9 +146,10 @@ impl From<BlockLayoutDiagnostic> for TyDiagnostic {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-impl From<&TyDiagnostic> for Diagnostic2 {
+impl From<&TyDiagnostic> for Diagnostic {
     fn from(value: &TyDiagnostic) -> Self {
-        match value {
+        todo!()
+        /*match value {
             TyDiagnostic::NoMatchingConstructor { expr, ty, arg_tys } => {
                 Diagnostic2::error(format!("no matching constructor for `{ty}`"))
                     .label(expr, "")
@@ -180,6 +181,6 @@ impl From<&TyDiagnostic> for Diagnostic2 {
             TyDiagnostic::Unimplemented { .. } => {}
             TyDiagnostic::ConstEvalError(_) => {}
             TyDiagnostic::BlockLayoutError(_) => {}
-        }
+        }*/
     }
 }

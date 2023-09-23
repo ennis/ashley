@@ -13,9 +13,9 @@ pub use primitive::PrimitiveTypes;
 pub use ty::{FunctionType, ImageSampling, ImageType, ScalarType, StructField, Type, TypeKind};
 
 use crate::{
+    db::ModuleId,
     item,
     item::{BodyLoc, BodyOwnerId, DefId, FieldId, FunctionId, StructId},
-    session::ModuleId,
     syntax::{ast::TypeRef, SyntaxNode},
     ty::{interner::Interner, lower::TypeLoweringCtxt},
     CompilerDb,

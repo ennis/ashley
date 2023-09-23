@@ -2,13 +2,13 @@
 mod link;
 
 use crate::{
+    db::CompilerDb,
     ir,
     ir::{
         types::{Field, StructType},
         Decoration, GlobalVariable, GlobalVariableData, InstructionData, Operand, StructLayout, Type, TypeData,
         ValueData,
     },
-    session::CompilerDb,
     utils,
 };
 use ::spirv::StorageClass;

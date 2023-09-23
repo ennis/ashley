@@ -16,7 +16,7 @@ use crate::{
     ty,
     ty::TypeCtxt,
     utils::Counter,
-    ConstantValue, SourceFile,
+    ConstantValue, SourceFile, SourceFileId,
 };
 
 use crate::item::AstId;
@@ -27,6 +27,7 @@ use rowan::{ast::AstPtr, GreenNode};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    fmt::Formatter,
     sync::Arc,
 };
 
@@ -78,12 +79,6 @@ impl ModuleId {
     pub fn items<'a>(&self, compiler: &'a dyn CompilerDb) -> &'a ModuleItems {
         compiler.module_items(*self)
     }
-}
-
-new_key_type! {
-    /// Identifies a source file.
-    // TODO move to source_file.rs
-    pub struct SourceFileId;
 }
 
 /*
@@ -146,9 +141,9 @@ define_database_tables! {
     pub trait CompilerDb [CompilerDbStorage] {
 
         // --- Singletons ---
-        input source_file_counter[set_source_file_counter](_dummy: ()) -> Arc<Counter<SourceFileId>>;
-        input tyctxt_instance[set_tyctxt](_dummy: ()) -> Arc<TypeCtxt>;
-        input resolver_instance[set_resolver](_dummy: ()) -> Arc<DummyPackageResolver>;
+        input source_file_counter[set_source_file_counter, update_source_file_counter](_dummy: ()) -> Arc<Counter<SourceFileId>>;
+        input tyctxt_instance[set_tyctxt, update_tyctxt](_dummy: ()) -> Arc<TypeCtxt>;
+        input resolver_instance[set_resolver, update_resolver](_dummy: ()) -> Arc<DummyPackageResolver>;
         //input custom_attributes_instance[set_custom_attributes](_dummy: ()) -> Arc<CustomAttributes>;
 
         // --- Interned IDs ---
@@ -160,8 +155,8 @@ define_database_tables! {
 
         // --- Input data ---
         //input module_source[set_module_source](module: ModuleId) -> SourceFileId;
-        input source_file[set_source_file](source_file: SourceFileId) -> SourceFile;
-        input module_data[set_module_data](module: ModuleId) -> ModuleData;
+        input source_file[set_source_file, update_source_file](source_file: SourceFileId) -> SourceFile;
+        input module_data[set_module_data, update_module_data](module: ModuleId) -> ModuleData;
 
         // --- Queries ---
         query (source_id: SourceFileId) -> {
@@ -415,15 +410,8 @@ impl dyn CompilerDb {
         self.module_data(module_id).source.expect("no source for module")
     }
 
-    pub fn update_source_file(&mut self, source_file: SourceFileId, new_contents: String) {
-        let prev_source_file = (*self.source_file(source_file)).clone();
-        self.set_source_file(
-            source_file,
-            SourceFile {
-                contents: new_contents,
-                ..prev_source_file
-            },
-        );
+    pub fn update_source_file_contents(&mut self, source_file: SourceFileId, new_contents: &str) {
+        self.update_source_file(source_file, &move |src| src.update(new_contents));
     }
 
     /*/// Dereferences a pointer to an AST node that is contained in the same module as `def_id`.
@@ -471,6 +459,28 @@ impl dyn CompilerDb {
     /*pub fn parent_module(&self, definition: DefId) -> ModuleId {
         self.lookup_def_id(definition).module
     }*/
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct DebugWith<'a, T>(&'a dyn CompilerDb, &'a T);
+
+impl<'a, T> fmt::Debug for DebugWith<'a, T>
+where
+    T: DebugWithDb,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.1.fmt(f, self.0)
+    }
+}
+
+// Again, inspired by salsa
+pub trait DebugWithDb: Sized {
+    fn debug_with<'a>(&'a self, compiler: &'a dyn CompilerDb) -> DebugWith<'a, Self> {
+        DebugWith(compiler, self)
+    }
+
+    fn fmt<'a>(&'a self, formatter: &mut fmt::Formatter<'_>, compiler: &'a dyn CompilerDb) -> fmt::Result;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

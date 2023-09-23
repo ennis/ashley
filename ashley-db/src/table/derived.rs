@@ -208,11 +208,15 @@ where
             } else {
                 // verify memo
                 let mut has_changed = false;
-                let deps = memo.dependencies.borrow();
-                for dep in deps.iter() {
-                    has_changed |= db.maybe_changed_after(*dep, memo.verified.get());
+
+                // introduce a scope so that we don't borrow the deps for too long
+                {
+                    let deps = memo.dependencies.borrow();
+                    for dep in deps.iter() {
+                        has_changed |= db.maybe_changed_after(*dep, memo.verified.get());
+                    }
+                    memo.verified.set(rev);
                 }
-                memo.verified.set(rev);
 
                 if !has_changed {
                     // inputs haven't changed since last verification,

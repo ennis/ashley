@@ -1,7 +1,8 @@
-use crate::syntax::TextRange;
+use crate::{db::DebugWithDb, syntax::TextRange, CompilerDb};
+use ashley_db::new_key_type;
 use codespan_reporting::files::line_starts;
 use rowan::TextSize;
-use std::ops::Range;
+use std::{fmt::Formatter, ops::Range};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LineCharacterPosition {
@@ -114,5 +115,19 @@ impl SourceFile {
             start: self.line_character_position(text_range.start()),
             end: self.line_character_position(text_range.end()),
         }
+    }
+}
+
+new_key_type! {
+    /// Identifies a source file.
+    // TODO move to source_file.rs
+    pub struct SourceFileId;
+}
+
+impl DebugWithDb for SourceFileId {
+    fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
+        let uri = &compiler.source_file(*self).url;
+        write!(formatter, "SourceFileId(`{uri}`)")?;
+        Ok(())
     }
 }

@@ -1,5 +1,6 @@
 pub mod body;
 mod const_expr;
+mod debug;
 mod diagnostic;
 mod lower;
 mod resolver;
@@ -19,12 +20,12 @@ pub(crate) use self::{
 };
 
 use crate::{
+    db::DebugWithDb,
     diagnostic::{Span, Spanned},
     item::{diagnostic::ItemDiagnostic, lower::ItemLowerCtxt},
-    session::{ModuleId, SourceFileId},
     syntax::{ast, Lang, SyntaxNode, SyntaxNodePtr, SyntaxToken, SyntaxTree},
     ty::TyOwnerId,
-    CompilerDb,
+    CompilerDb, ModuleId, SourceFileId,
 };
 use ashley_data_structures::{Id, IndexVec};
 use ashley_db::new_key_type;
@@ -34,6 +35,7 @@ use rowan::{
 };
 use std::{
     fmt,
+    fmt::Write,
     hash::{Hash, Hasher},
     marker::PhantomData,
     ops::Index,
@@ -496,12 +498,40 @@ new_key_type!(
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+fn dump_module_items(compiler: &dyn CompilerDb, module: ModuleId, items: &ModuleItems) {
+    let mut o = String::new();
+
+    writeln!(o, "=== imports ===");
+    for (i, _s) in items.structs.iter_full() {
+        let id = StructId { module, strukt: i };
+        writeln!(o, "{:?}", id.debug_with(compiler));
+    }
+    writeln!(o, "=== structs ===");
+    for (i, _s) in items.structs.iter_full() {
+        let id = StructId { module, strukt: i };
+        writeln!(o, "{:?}", id.debug_with(compiler));
+    }
+    writeln!(o, "=== functions ===");
+    for (i, _f) in items.functions.iter_full() {
+        let id = FunctionId { module, function: i };
+        writeln!(o, "{:?}", id.debug_with(compiler));
+    }
+    writeln!(o, "=== globals ===");
+    for (i, _g) in items.globals.iter_full() {
+        let id = GlobalId { module, global: i };
+        writeln!(o, "{:?}", id.debug_with(compiler));
+    }
+
+    trace!("{}", o);
+}
+
 pub(crate) fn module_items_and_ast_map_query(compiler: &dyn CompilerDb, module_id: ModuleId) {
-    let _span = trace_span!("module_items_and_ast_map_query", ?module_id).entered();
+    let _span = trace_span!("module_items_and_ast_map_query", module_id = ?module_id.debug_with(compiler)).entered();
     let (_source_file_id, syntax) = compiler.module_syntax_tree(module_id);
     let mut ctxt = ItemLowerCtxt::new(compiler, syntax);
     let (items, ast_id_map) = ctxt.lower_module();
 
     compiler.set_module_items(module_id, items);
     compiler.set_module_map(module_id, ast_id_map);
+    //dump_module_items(compiler, module_id, &items);
 }

@@ -1,4 +1,4 @@
-use crate::session::{CompilerDb, SourceFileId};
+use crate::{db::CompilerDb, SourceFileId};
 use codespan_reporting::{
     files::{Error, Files},
     term,
@@ -280,18 +280,18 @@ pub enum Severity {
 }
 
 pub struct Label {
-    message: String,
-    secondary: bool,
-    span: Span,
+    pub message: String,
+    pub secondary: bool,
+    pub span: Span,
 }
 
 #[must_use]
 pub struct Diagnostic {
-    severity: Severity,
-    message: String,
-    code: Option<String>,
-    labels: Vec<Label>,
-    notes: Vec<String>,
+    pub severity: Severity,
+    pub message: String,
+    pub code: Option<String>,
+    pub labels: Vec<Label>,
+    pub notes: Vec<String>,
 }
 
 impl Diagnostic {

@@ -7,6 +7,7 @@ pub mod table;
 
 // Re-export stuff used by our macros
 pub use ashley_data_structures::{new_index, Idx};
+pub use tracing;
 
 pub use database::{Database, DatabaseExt};
 pub use db_index::DbIndex;
@@ -18,7 +19,7 @@ pub use table::{AsIndex, Index, TableIndex, TableOps};
 #[macro_export]
 macro_rules! define_database_tables {
     (@ $(#[$m:meta])* $v:vis $db_trait:ident [$storage:ident] { }
-        -> ($($input_name:ident [$input_setter:ident] ($input_key_name:ident: $input_key_ty:ty) -> $input_result_ty:ty;)*)
+        -> ($($input_name:ident [$input_setter:ident, $input_update:ident] ($input_key_name:ident: $input_key_ty:ty) -> $input_result_ty:ty;)*)
         -> ($($intern_name:ident [$lookup_name:ident] ($intern_key_name:ident: $intern_key_ty:ty) -> $intern_result_ty:ty;)*)
         -> ($($query_name:ident ($query_key_name:ident: $query_key_ty:ty) -> $query_result_ty:ty;)*)
         -> ($($specify_name:ident [$specify_query_name:ident] ($specify_key_ty:ty, $specify_result_ty:ty);)*)
@@ -55,6 +56,7 @@ macro_rules! define_database_tables {
         $v trait $db_trait: $crate::Database {
             $(fn $input_name (&self, $input_key_name: $input_key_ty) -> &<&$input_result_ty as ::std::ops::Deref>::Target;)*
             $(fn $input_setter (&mut self, $input_key_name: $input_key_ty, value: $input_result_ty);)*
+            $(fn $input_update (&mut self, $input_key_name: $input_key_ty, f: &dyn Fn(&mut $input_result_ty));)*
             $(fn $intern_name (&self, $intern_key_name: $intern_key_ty) -> $intern_result_ty;)*
             $(fn $lookup_name (&self, key: $intern_result_ty) -> $intern_key_ty;)*
             $(fn $query_name (&self, $query_key_name: $query_key_ty) -> &<&$query_result_ty as ::std::ops::Deref>::Target;)*
@@ -73,6 +75,14 @@ macro_rules! define_database_tables {
                     db.tables_mut()
                         .$input_name
                         .update(rev, $input_key_name, move |v| { *v = value; });
+                });
+            }
+
+            fn $input_update (&mut self, $input_key_name: $input_key_ty, f: &dyn Fn(&mut $input_result_ty)) {
+                self.with_new_revision(move |db, rev| {
+                    db.tables_mut()
+                        .$input_name
+                        .update(rev, $input_key_name, f);
                 });
             })
             *
@@ -95,6 +105,7 @@ macro_rules! define_database_tables {
 
             $(
             fn $specify_name (&self, key: $specify_key_ty, value: $specify_result_ty) {
+                let _span = tracing::trace_span!(std::stringify!($specify_name)).entered();
                 self.tables().$specify_query_name.specify(self, key, value);
             }
             )*
@@ -144,7 +155,7 @@ macro_rules! define_database_tables {
     };*/
 
     // input
-    (@ $(#[$m:meta])* $v:vis $db_trait:ident [$storage:ident] { $(#[$qm:meta])* input $tabname:ident [$setter:ident] ($argkey:ident: $tykey:ty) -> $tydata:ty; $($rest:tt)* }
+    (@ $(#[$m:meta])* $v:vis $db_trait:ident [$storage:ident] { $(#[$qm:meta])* input $tabname:ident [$setter:ident,$update:ident] ($argkey:ident: $tykey:ty) -> $tydata:ty; $($rest:tt)* }
         -> ($($input_methods:tt)*)
         -> ($($intern_methods:tt)*)
         -> ($($query_methods:tt)*)
@@ -154,7 +165,7 @@ macro_rules! define_database_tables {
     ) => {
         define_database_tables!(
             @ $(#[$m])* $v $db_trait [$storage] { $($rest)* }
-            -> ( $($input_methods)* $tabname [$setter] ($argkey: $tykey) -> $tydata; )
+            -> ( $($input_methods)* $tabname [$setter,$update] ($argkey: $tykey) -> $tydata; )
             -> ( $($intern_methods)* )
             -> ( $($query_methods)* )
             -> ( $($specify_methods)* )

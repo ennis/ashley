@@ -1,11 +1,12 @@
 use crate::{
+    db::CompilerDb,
     ir,
     ir::{Interpolation, Layout},
     item::{InFile, StructId},
     layout::{std_scalar_type_layout, std_vector_type_layout},
-    session::{CompilerDb, SourceFileId},
     syntax::{ast, ast::TypeQualifier},
     utils::round_up,
+    SourceFileId,
 };
 pub use ir::types::{ImageSampling, ImageType};
 use rowan::ast::AstPtr;

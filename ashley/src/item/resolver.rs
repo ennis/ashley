@@ -1,6 +1,6 @@
 use crate::{
+    db::ModuleId,
     item::{DefId, FunctionId, Scope, StructId, TypeRes, ValueRes},
-    session::ModuleId,
     ty::TypeCtxt,
 };
 use ashley::CompilerDb;

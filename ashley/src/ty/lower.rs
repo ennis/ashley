@@ -1,10 +1,9 @@
 use crate::{
     item,
     item::{AstIdMap, BodyOwnerId, Resolver, Scope, TypeRes, ValueRes},
-    session::SourceFileId,
     syntax::ast,
     ty::{ScalarType, TyDiagnostic, TyOwnerId, Type, TypeCtxt, TypeKind},
-    CompilerDb,
+    CompilerDb, SourceFileId,
 };
 use std::sync::Arc;
 

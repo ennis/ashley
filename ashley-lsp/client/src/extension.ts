@@ -25,7 +25,7 @@ export function activate(context: ExtensionContext) {
 			env: {
 				...process.env,
 				// eslint-disable-next-line @typescript-eslint/naming-convention
-				RUST_LOG: "trace",
+				RUST_LOG: "ashley=trace,ashley_db=trace",
 			},
 		},
 	};

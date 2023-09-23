@@ -1,8 +1,8 @@
 use crate::{
     builtins::BuiltinOperationPtr,
+    db::ModuleId,
     item,
     item::{AstId, AttributeOwnerId, DefId, FunctionId, GlobalId, StructId},
-    session::ModuleId,
     syntax::ast,
     ty,
     ty::Type,

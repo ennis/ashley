@@ -634,7 +634,7 @@ impl Visibility {
 #[cfg(test)]
 mod tests {
     use crate::{
-        session::{ModuleName, Session},
+        db::{ModuleName, Session},
         syntax::ast::{Item, Module},
     };
     use codespan_reporting::{

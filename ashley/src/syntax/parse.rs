@@ -1,12 +1,12 @@
 use crate::{
+    db::CompilerDb,
     diagnostic::Span,
-    session::{CompilerDb, SourceFileId},
     syntax::{
         diagnostics::SyntaxDiagnostic,
         syntax_kind::{Lexer, SyntaxKind::*},
         SyntaxKind,
     },
-    T,
+    SourceFileId, T,
 };
 use rowan::{Checkpoint, GreenNode, GreenNodeBuilder, TextLen, TextRange, TextSize};
 use std::{

@@ -8,8 +8,9 @@ pub use self::diagnostics::SyntaxDiagnostic;
 pub(crate) use self::syntax_kind::SyntaxKind;
 use self::syntax_kind::SyntaxKind::*;
 use crate::{
-    session::{CompilerDb, SourceFileId},
+    db::{CompilerDb, DebugWithDb},
     syntax::parse::parse_raw,
+    SourceFileId,
 };
 use rowan::GreenNode;
 pub use rowan::{ast::AstNode, TextRange};
@@ -55,7 +56,8 @@ impl SyntaxTree {
 
 pub(crate) fn syntax_tree_with_diagnostics_query(compiler: &dyn CompilerDb, source_file: SourceFileId) {
     //compiler.runtime().set_query_label("query_source_file_syntax_tree");
-    let _span = trace_span!("syntax_tree_with_diagnostics_query", ?source_file).entered();
+    let _span =
+        trace_span!("syntax_tree_with_diagnostics_query", source_file_id = ?source_file.debug_with(compiler)).entered();
     let src = compiler.source_file(source_file);
     let (green_node, diagnostics) = parse(compiler, &src.contents, source_file);
 

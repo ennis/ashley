@@ -41,3 +41,5 @@ pollster = "0.3.0"
 image = "0.24.6"
 tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }
 tracing-tree = "0.2.4"
+notify = "6.1.1"
+miette = "5.10.0"

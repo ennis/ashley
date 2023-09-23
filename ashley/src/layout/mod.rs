@@ -2,11 +2,11 @@
 mod diagnostic;
 
 use crate::{
+    db::CompilerDb,
     diagnostic::Span,
     ir::{types::ScalarType, Layout},
     item::{InFile, StructId},
     layout::diagnostic::BlockLayoutDiagnostic,
-    session::CompilerDb,
     syntax::{ast, ast::Name},
     utils::round_up,
 };

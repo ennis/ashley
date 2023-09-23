@@ -5,14 +5,13 @@ use crate::{
         body::{BodyDiagnostic, BodyMap},
         FunctionId, InFile,
     },
-    session::SourceFileId,
     syntax::{ast, SyntaxNode},
     ty::{
         body::{Body, Expr},
         Type,
     },
     utils::CommaSeparated,
-    CompilerDb,
+    CompilerDb, SourceFileId,
 };
 use ashley_data_structures::Id;
 use std::sync::Arc;

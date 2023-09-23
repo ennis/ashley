@@ -1,5 +1,5 @@
 //! Package resolvers.
-use crate::{session::CompilerDb, ModuleName};
+use crate::{db::CompilerDb, ModuleName};
 use std::path::PathBuf;
 
 /*/// Error trying to resolve a package name.

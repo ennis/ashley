@@ -216,7 +216,7 @@ impl LanguageServer for Backend {
         };
 
         let compiler: &mut dyn CompilerDb = &mut *compiler;
-        compiler.update_source_file(source_file, params.content_changes[0].text.clone());
+        compiler.update_source_file_contents(source_file, &params.content_changes[0].text);
         /*self.client
         .log_message(
             INFO,
@@ -228,6 +228,7 @@ impl LanguageServer for Backend {
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // DOCUMENT SYMBOLS
     async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+        trace!("document_symbol");
         let mut compiler = self.compiler.lock().await;
         let compiler: &dyn CompilerDb = &*compiler;
         let module = compiler.module_id(params.text_document.uri.to_string());
@@ -252,6 +253,7 @@ impl LanguageServer for Backend {
         for function in items.functions.iter() {
             let range = span_to_lsp_range(compiler, function.ast.to_node_with_source_file(compiler, module).span());
             let name = function.name.clone();
+            trace!("document_symbol: function {name} range {range:?}");
             document_symbols.push(DocumentSymbol {
                 name,
                 detail: None,
@@ -267,6 +269,7 @@ impl LanguageServer for Backend {
         for global in items.globals.iter() {
             let range = span_to_lsp_range(compiler, global.ast.to_node_with_source_file(compiler, module).span());
             let name = global.name.clone();
+            trace!("document_symbol: global {name} range {range:?}");
             document_symbols.push(DocumentSymbol {
                 name,
                 detail: None,
@@ -304,6 +307,7 @@ async fn main() {
         tracing_tree::HierarchicalLayer::new(4)
             .with_bracketed_fields(true)
             .with_writer(io::stderr)
+            .with_timer(())
             .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
     );
     tracing::subscriber::set_global_default(subscriber).unwrap();

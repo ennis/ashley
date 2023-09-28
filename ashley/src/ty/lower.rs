@@ -1,10 +1,13 @@
+//! Lowering of `def::TypeRef`s to `ty::Type`s
+
 use crate::{
-    item,
-    item::{AstIdMap, BodyOwnerId, Resolver, Scope, TypeRes, ValueRes},
+    def,
+    def::{AstId, AstIdMap, BodyOwnerId, DefLoc, Resolver, Scope, TypeRes, ValueRes},
     syntax::ast,
     ty::{ScalarType, TyDiagnostic, TyOwnerId, Type, TypeCtxt, TypeKind},
     CompilerDb, SourceFileId,
 };
+use ashley::def::DefAstId;
 use std::sync::Arc;
 
 /*fn check_int_or_uint(
@@ -29,7 +32,8 @@ use std::sync::Arc;
 pub(crate) struct TypeLoweringCtxt<'a> {
     compiler: &'a dyn CompilerDb,
     tyctxt: Arc<TypeCtxt>,
-    resolver: &'a Resolver,
+    owner: DefLoc,
+    resolver: &'a Resolver<'a>,
     diags: &'a mut Vec<TyDiagnostic>,
 }
 
@@ -38,23 +42,36 @@ pub(crate) struct TypeLoweringCtxt<'a> {
 impl<'a> TypeLoweringCtxt<'a> {
     pub(crate) fn new(
         compiler: &'a dyn CompilerDb,
-        resolver: &'a Resolver,
+        resolver: &'a Resolver<'a>,
+        owner: DefLoc,
         diags: &'a mut Vec<TyDiagnostic>,
     ) -> TypeLoweringCtxt<'a> {
         let tyctxt = compiler.tyctxt();
         TypeLoweringCtxt {
             compiler,
             tyctxt,
+            owner,
             resolver,
             diags,
         }
     }
 
-    pub(crate) fn lower_type(&mut self, type_owner: TyOwnerId, ty: &item::Type) -> Type {
-        match ty {
-            item::Type::Name { ref name } => match self.resolver.resolve_type_name(name) {
+    pub(crate) fn lower_type(&mut self, ty: &def::Type) -> Type {
+        // Don't bother if there's no ast_id: the only case where it happens is if
+        // there was no type at all.
+        if ty.kind == def::TypeKind::Error || ty.ast_id.is_none() {
+            return self.tyctxt.error.clone();
+        }
+
+        let ty_loc = DefAstId::new(self.owner, ty.ast_id.unwrap());
+
+        match ty.kind {
+            def::TypeKind::Name { ref name } => match self.resolver.resolve_type_name(name) {
                 None => {
-                    self.diags.push(TyDiagnostic::UnresolvedType { type_owner });
+                    self.diags.push(TyDiagnostic::UnresolvedType {
+                        ty_loc,
+                        name: name.clone(),
+                    });
                     self.tyctxt.error.clone()
                 }
                 Some(res) => match res {
@@ -65,8 +82,12 @@ impl<'a> TypeLoweringCtxt<'a> {
                     TypeRes::Primitive(ty) => return ty,
                 },
             },
-            item::Type::Array { element, size, stride } => {
-                let element_type = self.lower_type(TyOwnerId::ArrayElement(Box::new(type_owner)), &element);
+            def::TypeKind::Array {
+                ref element,
+                size,
+                stride,
+            } => {
+                let element_type = self.lower_type(element);
 
                 //let mut stride_val = None;
                 if let Some(stride) = stride {

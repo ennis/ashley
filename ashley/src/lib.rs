@@ -5,9 +5,9 @@ extern crate tracing; // to get the log macros without the need for `use`
 pub mod builtins;
 mod constant_value;
 mod db;
+mod def;
 pub mod diagnostic;
 pub mod ir;
-mod item;
 mod layout;
 mod package_name;
 pub mod resolver;

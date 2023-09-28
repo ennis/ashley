@@ -373,7 +373,7 @@ fn print_struct_type(m: &Module, ty: &StructType, f: &mut fmt::Formatter) -> fmt
         ""
     };
     write!(f, "struct {name}<")?;
-    write_list!(f, field in ty.fields.iter() => {
+    write_list!(f, ",", field in ty.fields.iter() => {
         write!(f, "{:?}", m.debug_type(field.ty))?;
     });
     write!(f, ">")?;
@@ -382,7 +382,7 @@ fn print_struct_type(m: &Module, ty: &StructType, f: &mut fmt::Formatter) -> fmt
 
 fn print_function_type(m: &Module, ty: &FunctionType, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "function (")?;
-    write_list!(f, arg in ty.arg_types.iter() => {
+    write_list!(f, ",", arg in ty.arg_types.iter() => {
         write!(f, "{:?}", m.debug_type(*arg))?;
     });
     write!(f, ") -> {:?}", m.debug_type(ty.return_type))?;

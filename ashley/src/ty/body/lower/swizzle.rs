@@ -1,6 +1,5 @@
 //! Component access & swizzle checks
 use crate::ty::body::ComponentIndices;
-use smallvec::SmallVec;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum ComponentSyntaxError {

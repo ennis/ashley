@@ -621,7 +621,7 @@ impl Deref for BuiltinOperationPtr {
     type Target = BuiltinOperation;
 
     fn deref(&self) -> &Self::Target {
-        todo!()
+        self.0
     }
 }
 

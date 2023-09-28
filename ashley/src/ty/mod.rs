@@ -13,10 +13,13 @@ pub use primitive::PrimitiveTypes;
 pub use ty::{FunctionType, ImageSampling, ImageType, ScalarType, StructField, Type, TypeKind};
 
 use crate::{
-    db::ModuleId,
-    item,
-    item::{BodyLoc, BodyOwnerId, DefId, FieldId, FunctionId, StructId},
-    syntax::{ast::TypeRef, SyntaxNode},
+    db::{DebugWithDb, ModuleId},
+    def,
+    def::{
+        AstId, BodyLoc, BodyOwnerId, DefLoc, FieldLoc, FunctionId, FunctionLoc, HasSource, Resolver, StructId,
+        StructLoc,
+    },
+    syntax::{ast, ast::TypeRef, SyntaxNode},
     ty::{interner::Interner, lower::TypeLoweringCtxt},
     CompilerDb,
 };
@@ -65,16 +68,16 @@ impl Default for TypeCtxt {
 /// Identifies something with a type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TyOwnerId {
-    Argument {
+    /*Argument {
         function: FunctionId,
-        argument: Id<item::FunctionParam>,
-    },
-    ReturnValue(FunctionId),
-    Field(FieldId),
+        argument: Id<def::FunctionParam>,
+    },*/
+    ReturnValue(FunctionLoc),
+    Field(FieldLoc),
     ArrayElement(Box<TyOwnerId>),
     LocalVariable {
-        function: FunctionId,
-        var: Id<item::body::LocalVar>,
+        function: FunctionLoc,
+        var: Id<def::body::LocalVar>,
     },
     // TODO Same as `BodyOwnerId`? Instead of having specific variants, store `AstId<ast::Type>`?
 }
@@ -82,7 +85,7 @@ pub enum TyOwnerId {
 impl TyOwnerId {
     pub fn module(&self) -> ModuleId {
         match self {
-            TyOwnerId::Argument { function, .. } => function.module,
+            //TyOwnerId::Argument { function, .. } => function.module,
             TyOwnerId::ReturnValue(function) => function.module,
             TyOwnerId::Field(field) => field.strukt.module,
             TyOwnerId::ArrayElement(owner) => owner.module(),
@@ -112,17 +115,87 @@ impl TyOwnerId {
     }*/
 }
 
-pub(crate) fn def_ty_with_diagnostics_query(compiler: &dyn CompilerDb, def_id: DefId) -> (Type, Vec<TyDiagnostic>) {
-    let module = def_id.module();
+/*
+fn struct_ty(compiler: &dyn CompilerDb, strukt: StructId, diagnostics: &mut Vec<TyDiagnostic>) {
+    let struct_data = compiler.struct_data(strukt);
+}*/
+
+fn lower_ty(
+    compiler: &dyn CompilerDb,
+    resolver: &Resolver,
+    owner: DefLoc,
+    ty: &def::Type,
+    diagnostics: &mut Vec<TyDiagnostic>,
+) -> Type {
+    let mut ctxt = TypeLoweringCtxt::new(compiler, resolver, owner, diagnostics);
+    ctxt.lower_type(ty)
+}
+
+pub(crate) fn struct_field_types_query(db: &dyn CompilerDb, struct_id: StructId) {
+    let _span = trace_span!("struct_field_types_query", struct_id = ?struct_id.debug_with(db)).entered();
+
+    let struct_loc = db.lookup_struct_id(struct_id);
+    let struct_item = db.struct_data(struct_id);
+    let resolver = struct_loc.module.resolver(db);
+
+    let mut diagnostics = Vec::new();
+    let mut types = Vec::with_capacity(struct_item.fields.len());
+    // lower field types
+    for (i, field) in struct_item.fields.iter_full() {
+        let ty = lower_ty(db, &resolver, struct_loc.into(), &field.ty, &mut diagnostics);
+        trace!("field `{}` has type `{}`", field.name, ty);
+        types.push(ty);
+    }
+
+    db.set_struct_field_types(struct_id, types);
+    db.set_struct_field_types_diagnostics(struct_id, diagnostics);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct FunctionSignature {
+    pub parameter_types: Vec<Type>,
+    pub return_type: Type,
+}
+
+pub(crate) fn function_signature_query(db: &dyn CompilerDb, function_id: FunctionId) {
+    let _span = trace_span!("function_signature_query", function_id = ?function_id.debug_with(db)).entered();
+    let func_data = db.function_data(function_id);
+    let func_loc = function_id.loc(db);
+    let resolver = func_loc.module.resolver(db);
+
+    let mut diagnostics = Vec::new();
+    let mut parameter_types = Vec::with_capacity(func_data.parameters.len());
+    for (i, param) in func_data.parameters.iter_full() {
+        parameter_types.push(lower_ty(db, &resolver, func_loc.into(), &param.ty, &mut diagnostics));
+    }
+
+    let return_type = if let Some(ref return_type) = func_data.return_type {
+        lower_ty(db, &resolver, func_loc.into(), return_type, &mut diagnostics)
+    } else {
+        db.tyctxt().prim_tys.void.clone()
+    };
+
+    db.set_function_signature(
+        function_id,
+        FunctionSignature {
+            parameter_types,
+            return_type,
+        },
+    );
+    db.set_function_signature_diagnostics(function_id, diagnostics);
+}
+
+pub(crate) fn def_ty_with_diagnostics_query(compiler: &dyn CompilerDb, def_id: DefLoc) -> (Type, Vec<TyDiagnostic>) {
+    /*let module = def_id.module();
     let module_items = compiler.module_items(module);
     let source_file = compiler.module_source(module);
+
     let mut diagnostics = vec![];
     match def_id {
         DefId::Struct(struct_id) => {
             let resolver = def_id.resolver(compiler);
             let struct_data = &module_items[struct_id.strukt];
 
-            let mut ctxt = TypeLoweringCtxt::new(compiler, &resolver, &mut diagnostics);
             // lower fields
             for (i_field, field) in struct_data.fields.iter_full() {
                 ctxt.lower_type(
@@ -134,9 +207,11 @@ pub(crate) fn def_ty_with_diagnostics_query(compiler: &dyn CompilerDb, def_id: D
                 );
             }
         }
-        DefId::Global(_) => {}
+        DefId::Global(_) => {
+            todo!()
+        }
         DefId::Function(_) => {}
-    }
+    }*/
 
     // tycheck cannot emit diagnostics with ast spans directly, otherwise it would be invalidated
     // on every reparse (bad)

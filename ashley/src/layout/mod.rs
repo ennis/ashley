@@ -3,12 +3,10 @@ mod diagnostic;
 
 use crate::{
     db::CompilerDb,
-    diagnostic::Span,
+    def::{InFile, StructLoc},
     ir::{types::ScalarType, Layout},
-    item::{InFile, StructId},
     layout::diagnostic::BlockLayoutDiagnostic,
-    syntax::{ast, ast::Name},
-    utils::round_up,
+    syntax::ast,
 };
 use rowan::ast::AstPtr;
 use std::sync::Arc;
@@ -394,6 +392,6 @@ pub struct LayoutInfo {
     pub diagnostics: Vec<BlockLayoutDiagnostic>,
 }
 
-pub(crate) fn layout_query(compiler: &dyn CompilerDb, strukt: StructId) -> LayoutInfo {
+pub(crate) fn layout_query(compiler: &dyn CompilerDb, strukt: StructLoc) -> LayoutInfo {
     todo!()
 }

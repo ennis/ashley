@@ -1,6 +1,6 @@
 //! Overload resolution.
 use crate::{
-    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, ImageClass, PseudoType},
+    builtins::{pseudo_type_to_concrete_type, ImageClass, PseudoType},
     ty::{PrimitiveTypes, ScalarType, Type, TypeKind},
 };
 use smallvec::SmallVec;

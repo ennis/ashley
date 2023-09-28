@@ -106,6 +106,33 @@ fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
     for diag in db.syntax_diagnostics(source_file) {
         emit_diagnostic(db, diag.render(db));
     }
+
+    // dump struct field types
+    let module_scope = db.module_scope(module);
+    for struct_id in module_scope.structs() {
+        let (field_types, diags) = db.struct_field_types(struct_id);
+
+        for diag in diags {
+            emit_diagnostic(db, diag.render(db));
+        }
+
+        let sd = db.struct_data(struct_id);
+        let name = &sd.name;
+        let visibility = sd.visibility;
+        trace!("=== struct `{name}` ({visibility:?}) ===");
+        let field_names = sd.fields.iter().map(|f| &f.name);
+        for (ty, name) in field_types.iter().zip(field_names) {
+            trace!("    {name}: {ty}")
+        }
+    }
+
+    for function_id in module_scope.functions() {
+        let body = db.function_body(function_id);
+        let body_map = db.function_body_map(function_id);
+        let func_data = db.function_data(function_id);
+        trace!("=== Function `{}` ===", func_data.name);
+        trace!("{body:#?}")
+    }
 }
 
 impl Session {

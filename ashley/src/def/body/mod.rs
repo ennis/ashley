@@ -4,10 +4,14 @@ mod lower;
 pub use self::diagnostic::BodyDiagnostic;
 
 use crate::{
-    item::{body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, BodyId, BodyKind, BodyOwnerId, HasSource, Type},
+    def::{
+        body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, BodyId, BodyKind, BodyOwnerId, DefLoc, DefMap,
+        FunctionLoc, HasSource, Type,
+    },
     syntax::ast,
     CompilerDb, ConstantValue,
 };
+use ashley::def::{BodyOwnerLoc, FunctionId};
 use ashley_data_structures::{Id, IndexVec};
 use rowan::ast::AstPtr;
 use std::{collections::HashMap, ops::Index, sync::Arc};
@@ -32,6 +36,10 @@ pub enum Statement {
         loop_expr: Option<Id<Expr>>,
         stmt: Id<Statement>,
     },
+    WhileLoop {
+        condition: Id<Expr>,
+        stmt: Id<Statement>,
+    },
     Local {
         var: Id<LocalVar>,
         initializer: Option<Id<Expr>>,
@@ -45,6 +53,9 @@ pub enum Statement {
     Block {
         block: Id<Block>,
     },
+    Break,
+    Continue,
+    Discard,
     Error,
 }
 
@@ -98,6 +109,10 @@ pub enum Expr {
         expr: Id<Expr>,
         name: String,
     },
+    Constructor {
+        ty: Type,
+        args: Vec<Id<Expr>>,
+    },
     Literal {
         value: ConstantValue,
     },
@@ -117,6 +132,9 @@ pub struct BodyMap {
 
     local_var_map: HashMap<AstPtr<ast::LocalVariable>, Id<LocalVar>>,
     local_var_map_back: IndexVec<AstPtr<ast::LocalVariable>, Id<LocalVar>>,
+
+    /// Used for AstIds in def::Type
+    def_map: DefMap,
 }
 
 impl Index<Id<Expr>> for BodyMap {
@@ -155,18 +173,19 @@ impl BodyMap {
             block_map_back: Default::default(),
             local_var_map: Default::default(),
             local_var_map_back: Default::default(),
+            def_map: DefMap::new(),
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
     pub statements: IndexVec<Statement>,
     pub expressions: IndexVec<Expr>,
     pub local_vars: IndexVec<LocalVar>,
     pub blocks: IndexVec<Block>,
     pub params: Vec<Id<LocalVar>>,
-    pub errors: Vec<BodyDiagnostic>,
+    pub diagnostics: Vec<BodyDiagnostic>,
     pub entry_block: Option<Id<Block>>,
 }
 
@@ -178,7 +197,7 @@ impl Body {
             local_vars: Default::default(),
             blocks: Default::default(),
             params: vec![],
-            errors: vec![],
+            diagnostics: vec![],
             entry_block: None,
         }
     }
@@ -196,17 +215,39 @@ impl Body {
     }
 }
 
-pub(crate) fn body_and_map_query(db: &dyn CompilerDb, body_id: BodyId) {
+pub(crate) fn function_body_query(db: &dyn CompilerDb, function_id: FunctionId) {
+    let _span = trace_span!("function_body_query", ?function_id).entered();
+    let func_data = db.function_data(function_id);
+    let Some(body) = func_data.body else {
+        return;
+    };
+    let body_src = function_id.loc(db).node_from_id(db, body);
+
+    let ctxt = BodyLowerCtxt::new(db, body_src.file);
+    let (body, body_map) = ctxt.lower_body_block(body_src.data);
+
+    db.set_function_body(function_id, body);
+    db.set_function_body_map(function_id, body_map);
+}
+
+/*pub(crate) fn body_and_map_query(db: &dyn CompilerDb, body_id: BodyId) {
     let _span = trace_span!("body_and_map_query", ?body_id).entered();
     let ctxt = BodyLowerCtxt::new(db);
     let body_loc = db.lookup_body_id(body_id);
-    let module = body_loc.owner.module();
 
-    let (body, body_map) = match body_loc.kind {
-        BodyKind::Block(ref block) => ctxt.lower_body_block_opt(Some(block.to_node(db, module))),
-        BodyKind::Expr(ref expr) => ctxt.lower_const_expr(expr.to_node(db, module)),
+    let module = match body_loc.owner {
+        BodyOwnerLoc::Def(def_loc) => def_loc.module(),
+        BodyOwnerLoc::FunctionBody(function) => {}
     };
 
-    db.set_body(body_id, body);
-    db.set_body_map(body_id, body_map);
+    /*let (body, body_map) = match body_loc.kind {
+        BodyKind::Block(ref block) => ctxt.lower_body_block_opt(Some(block.to_node(db, module))),
+        BodyKind::Expr(ref expr) => ctxt.lower_const_expr(expr.to_node(db, module)),
+    };*/
+
+    //db.set_body(body_id, body);
+    //db.set_body_map(body_id, body_map);
+
+    todo!()
 }
+*/

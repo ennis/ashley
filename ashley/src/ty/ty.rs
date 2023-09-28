@@ -1,11 +1,11 @@
 use crate::{
     db::CompilerDb,
+    def::{InFile, StructId, StructLoc},
     ir,
     ir::{Interpolation, Layout},
-    item::{InFile, StructId},
     layout::{std_scalar_type_layout, std_vector_type_layout},
     syntax::{ast, ast::TypeQualifier},
-    utils::round_up,
+    utils::{round_up, write_list},
     SourceFileId,
 };
 pub use ir::types::{ImageSampling, ImageType};
@@ -134,34 +134,18 @@ pub struct ExplicitStructLayout {
     pub offsets: Vec<u32>,
 }
 
-/// Structure field
+/// Structure field. Used only for built-in types.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StructField {
     /// Name of the field.
     pub name: String,
     /// Type of the field.
     pub ty: Type,
-    /// Syntax node.
-    pub syntax: Option<InFile<AstPtr<ast::StructField>>>,
-    pub location: Option<u32>,
-    pub interpolation: Option<Interpolation>,
-    pub builtin: Option<spirv::BuiltIn>,
-    pub offset: Option<u32>,
-    pub align: Option<u32>,
 }
 
 impl StructField {
     pub fn new(name: String, ty: Type, syntax: Option<InFile<AstPtr<ast::StructField>>>) -> StructField {
-        StructField {
-            name,
-            ty,
-            syntax,
-            location: None,
-            interpolation: None,
-            builtin: None,
-            offset: None,
-            align: None,
-        }
+        StructField { name, ty }
     }
 }
 
@@ -172,6 +156,7 @@ pub enum MatrixOrder {
     ColumnMajor,
     RowMajor,
 }*/
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StructLayout {
     pub offsets: Vec<u32>,
@@ -211,10 +196,7 @@ pub enum TypeKind {
     Struct {
         /// Name of the struct, only used for display purposes. Can be empty, or can be different from the name in the def.
         name: String,
-        fields: Vec<StructField>,
-        def: Option<StructId>,
-        /// Field offsets
-        layout: Option<StructLayout>,
+        def: StructId,
     },
     /// Unsampled image type.
     Image(ir::types::ImageType),
@@ -222,6 +204,11 @@ pub enum TypeKind {
     Pointer {
         pointee_type: Type,
         storage_class: spirv::StorageClass,
+    },
+    /// Built-in structure type. The name is optional, if the type can't be named (e.g. tuple results of modf and frexp).
+    BuiltinStruct {
+        name: String,
+        fields: Vec<StructField>,
     },
     /// Function or closure type.
     Function(FunctionType),
@@ -265,18 +252,18 @@ impl fmt::Display for TypeKind {
                 write!(f, "{}[{}]", &element_type.0, size)
             }
             TypeKind::RuntimeArray { element_type, .. } => write!(f, "{}[]", element_type),
-            TypeKind::Struct { fields, name, .. } => {
+            TypeKind::Struct { name, .. } => {
                 // TODO display layout
                 if !name.is_empty() {
                     return write!(f, "{}", name);
                 } else {
                     write!(f, "struct {{ ")?;
-                    for (i, StructField { name, ty, .. }) in fields.iter().enumerate() {
+                    /*for (i, StructField { name, ty, .. }) in fields.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
                         write!(f, "{}: {}", name, ty)?;
-                    }
+                    }*/
                     write!(f, " }}")
                 }
             }
@@ -304,6 +291,14 @@ impl fmt::Display for TypeKind {
             TypeKind::String => write!(f, "string"),
             TypeKind::Unknown => write!(f, "unknown"),
             TypeKind::Error => write!(f, "error"),
+            TypeKind::BuiltinStruct { name, ref fields } => {
+                write!(f, "{name} {{ ")?;
+                for field in fields {
+                    write!(f, "{} {};", field.ty, field.name)?;
+                }
+                write!(f, " }}")?;
+                Ok(())
+            }
         }
     }
 }
@@ -383,7 +378,7 @@ impl TypeKind {
         }
     }
 
-    pub fn is_opaque(&self) -> bool {
+    pub fn is_opaque(&self, db: &dyn CompilerDb) -> bool {
         match self {
             TypeKind::Image(_)
             | TypeKind::String
@@ -391,8 +386,12 @@ impl TypeKind {
             | TypeKind::SamplerShadow
             | TypeKind::Unknown
             | TypeKind::Error
+            | TypeKind::BuiltinStruct { .. }
             | TypeKind::Function(_) => true,
-            TypeKind::Struct { fields, .. } => fields.iter().any(|f| f.ty.is_opaque()),
+            TypeKind::Struct { name, def, .. } => {
+                let field_types = db.struct_field_types(*def);
+                field_types.iter().any(|ty| ty.is_opaque(db))
+            }
             _ => false,
         }
     }
@@ -407,7 +406,7 @@ impl TypeKind {
     }
 
     /// Returns the layout of a type.
-    pub fn layout(&self) -> Option<Layout> {
+    pub fn layout(&self, db: &dyn CompilerDb) -> Option<Layout> {
         let layout = match *self {
             TypeKind::Unit => Layout { align: 1, size: 0 },
             TypeKind::Scalar(s) => std_scalar_type_layout(s),
@@ -426,12 +425,13 @@ impl TypeKind {
                     return None;
                 }
             }
-            TypeKind::Struct { ref layout, .. } => {
-                if let Some(layout) = layout {
+            TypeKind::Struct { .. } => {
+                todo!()
+                /*if let Some(layout) = layout {
                     layout.layout
                 } else {
                     return None;
-                }
+                }*/
             }
             TypeKind::RuntimeArray { .. }
             | TypeKind::Image(_)
@@ -441,6 +441,7 @@ impl TypeKind {
             | TypeKind::SamplerShadow
             | TypeKind::String
             | TypeKind::Unknown
+            | TypeKind::BuiltinStruct { .. }
             | TypeKind::Error => {
                 return None;
             }

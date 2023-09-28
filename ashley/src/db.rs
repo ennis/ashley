@@ -1,13 +1,14 @@
 //! Compilation cache
 use crate::{
-    diagnostic::Span,
-    ir, item,
-    item::{
+    def,
+    def::{
         body,
         body::{Body, BodyMap},
-        AstIdMap, BodyId, BodyLoc, DefId, ModuleItems, Scope, StructId,
+        module_scope_query, scope_for_body_query, AstIdMap, BodyId, BodyLoc, BodyOwnerId, BodyOwnerLoc, DefLoc,
+        FunctionId, FunctionLoc, GlobalId, GlobalLoc, InFile, ModuleItemMap, ModuleItems, Scope, StructId, StructLoc,
     },
-    layout,
+    diagnostic::Span,
+    ir, layout,
     layout::LayoutInfo,
     resolver::{DummyPackageResolver, PackageResolver},
     source_file::LineCharacterRange,
@@ -18,8 +19,6 @@ use crate::{
     utils::Counter,
     ConstantValue, SourceFile, SourceFileId,
 };
-
-use crate::item::AstId;
 use ashley_db::{
     define_database_tables, new_key_type, table::HasTables, Database, DatabaseExt, DbIndex, Revision, Runtime, TableOps,
 };
@@ -144,13 +143,17 @@ define_database_tables! {
         input source_file_counter[set_source_file_counter, update_source_file_counter](_dummy: ()) -> Arc<Counter<SourceFileId>>;
         input tyctxt_instance[set_tyctxt, update_tyctxt](_dummy: ()) -> Arc<TypeCtxt>;
         input resolver_instance[set_resolver, update_resolver](_dummy: ()) -> Arc<DummyPackageResolver>;
+        input builtin_scope[set_builtin_scope, update_builtin_scope](_dummy: ()) -> Scope;
         //input custom_attributes_instance[set_custom_attributes](_dummy: ()) -> Arc<CustomAttributes>;
 
         // --- Interned IDs ---
         intern module_id[lookup_module_id](module_name: String)-> ModuleId;
         intern body_id[lookup_body_id](body_loc: BodyLoc) -> BodyId;
+        intern body_owner_id[lookup_body_owner_id](body_owner: BodyOwnerLoc) -> BodyOwnerId;
 
-        //intern struct_id[lookup_struct_id](loc: StructLoc) -> StructId;
+        intern struct_id[lookup_struct_id](loc: StructLoc) -> StructId;
+        intern global_id[lookup_global_id](loc: GlobalLoc) -> GlobalId;
+        intern function_id[lookup_function_id](loc: FunctionLoc) -> FunctionId;
         //intern def_id[lookup_def_id](def_name: DefName) -> DefId;
 
         // --- Input data ---
@@ -167,7 +170,7 @@ define_database_tables! {
         } => syntax::syntax_tree_with_diagnostics_query;
 
         // Definitions in a module (not including imports).
-        query module_definitions(module: ModuleId) -> Vec<DefId> => module_definitions_query;
+        query module_definitions(module: ModuleId) -> Vec<DefLoc> => module_definitions_query;
 
         /// Module imports (import statements).
         query module_imports(module: ModuleId) -> Vec<ModuleId> => module_imports_query;
@@ -175,35 +178,47 @@ define_database_tables! {
         /// Module dependencies (transitive imports).
         query module_dependencies(module: ModuleId) -> Vec<ModuleId> => module_dependencies_query;
 
-        // Results of definition type-checking.
-        //query typechecked_module(module: ModuleId) -> Arc<tast::Module> => typechecked_module_query;
-
-        // Results of body type-checking.
-        //query typechecked_body(def: DefId) -> Arc<tast::TypedBody> => typechecked_body_query;
-
         // ----------
         query (module: ModuleId) -> {
             module_items: ModuleItems   [set_module_items],
-            module_map: AstIdMap        [set_module_map]
-        } => item::module_items_and_ast_map_query;
+            module_item_map: ModuleItemMap        [set_module_item_map]
+        } => def::module_items_and_item_map_query;
 
-        //query module_items_and_ast_map(module: ModuleId) -> (Arc<ModuleItems>, Arc<AstIdMap>) => item::module_items_and_ast_map_query;
-        //query module_items(module: ModuleId) -> Arc<ModuleItems>  => item::module_items_query;
+        query module_scope(module: ModuleId) -> Scope => module_scope_query;
 
-        query scope_for_body(body: BodyId) -> Scope  => item::scope_for_body_query;
-
+        //query scope_for_body_owner(body: BodyId) -> Scope  => scope_for_body_query;
+        //query type_scope(def: DefId) -> Scope;
         //query scope_for_definition(definition: DefId) -> Scope  => item::scope_for_definition_query;
         //query def_ty(definition: DefWithTypeId) -> ty::Type => ty::def_ty_query;
 
-        query (body: BodyId) -> {
+        query struct_data(strukt: StructId) -> def::Struct => def::struct_data_query;
+        query global_data(global: GlobalId) -> def::Global => def::global_data_query;
+        query function_data(function: FunctionId) -> def::Function => def::function_data_query;
+
+        /*query (body: BodyId) -> {
             body: Body  [set_body],
             body_map: BodyMap  [set_body_map]
-        } => item::body::body_and_map_query;
+        } => body::body_and_map_query;*/
+
+        query (function_id: FunctionId) -> {
+            function_body: Body  [set_function_body],
+            function_body_map: BodyMap  [set_function_body_map]
+        } => def::body::function_body_query;
 
         query (body: BodyId) -> {
             ty_body: Body  [set_ty_body],
-            ty_body_diagnostics: Vec<ty::body::TyBodyDiagnostic>  [set_ty_body_diagnostics]
+            ty_body_diagnostics: Vec<ty::TyDiagnostic>  [set_ty_body_diagnostics]
         } => ty::body::ty_body_query;
+
+        query (struct_id: StructId) -> {
+            struct_field_types: Vec<ty::Type> [set_struct_field_types],
+            struct_field_types_diagnostics: Vec<ty::TyDiagnostic> [set_struct_field_types_diagnostics]
+        } => ty::struct_field_types_query;
+
+        query (function_id: FunctionId) -> {
+            function_signature: ty::FunctionSignature [set_function_signature],
+            function_signature_diagnostics: Vec<ty::TyDiagnostic> [set_function_signature_diagnostics]
+        } => ty::function_signature_query;
 
         /*query (body: BodyId) -> {
             const_eval: Option<ConstantValue>  [set_const_eval],
@@ -216,7 +231,7 @@ define_database_tables! {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-fn module_definitions_query(compiler: &dyn CompilerDb, module: ModuleId) -> Vec<DefId> {
+fn module_definitions_query(compiler: &dyn CompilerDb, module: ModuleId) -> Vec<DefLoc> {
     let _span = trace_span!("module_definitions_query").entered();
     //compiler.runtime().set_query_label("query_package_definitions");
     //compiler.typechecked_module(module).defs.keys().cloned().collect()
@@ -267,11 +282,14 @@ impl Compiler {
 
         let tyctxt = TypeCtxt::new();
         let resolver = Arc::new(DummyPackageResolver);
+        let mut builtin_scope = Scope::new();
+        builtin_scope.add_builtins();
         //let custom_attributes = Default::default();
 
         compiler.set_tyctxt((), Arc::new(tyctxt));
         compiler.set_resolver((), resolver);
         compiler.set_source_file_counter((), Arc::new(Counter::new()));
+        compiler.set_builtin_scope((), builtin_scope);
         //compiler.set_custom_attributes((), custom_attributes);
         compiler
     }
@@ -441,10 +459,18 @@ impl dyn CompilerDb {
         source_file_data.line_character_range(span.range)
     }
 
-    /*pub fn ast_id_to_node<N: AstNode>(&self, module: ModuleId, id: AstId<N>) -> N {
-        let module_map = self.module_map(module);
-        module_map.get_node_ptr(id)
-    }*/
+    pub fn deref_ast_ptr<N: AstNode<Language = Lang>>(&self, module: ModuleId, ptr: AstPtr<N>) -> N {
+        self.deref_ast_ptr_with_source_file(module, ptr).data
+    }
+
+    pub fn deref_ast_ptr_with_source_file<N: AstNode<Language = Lang>>(
+        &self,
+        module: ModuleId,
+        ptr: AstPtr<N>,
+    ) -> InFile<N> {
+        let (source_file_id, green_node) = self.module_syntax_tree(module);
+        InFile::new(source_file_id, ptr.to_node(&SyntaxNode::new_root(green_node)))
+    }
 
     /*pub fn definition(&self, definition: DefId) -> Arc<Def> {
         let module = self.parent_module(definition);

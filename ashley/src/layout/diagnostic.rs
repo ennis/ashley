@@ -1,19 +1,19 @@
-use crate::{diagnostic::Diagnostic, item::FieldId, ty::Type, CompilerDb};
+use crate::{def::FieldLoc, diagnostic::Diagnostic, ty::Type, CompilerDb};
 
 // Layout-check diagnostics
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BlockLayoutDiagnostic {
     MemberOverlap {
-        member: FieldId,
+        member: FieldLoc,
         explicit_offset: u32,
         computed_next_offset: u32,
     },
     OpaqueType {
-        ref_chain: Vec<FieldId>,
+        ref_chain: Vec<FieldLoc>,
         ty: Type,
     },
     InvalidStd140ArrayStride {
-        ref_chain: Vec<FieldId>,
+        ref_chain: Vec<FieldLoc>,
         ty: Type,
         stride: u32,
     },
@@ -22,16 +22,16 @@ pub enum BlockLayoutDiagnostic {
     // note: in member {{ref_chain[...]}}
     // note: matrix type {{ty}} has a layout incompatible with std140 rules, consider using {{std140_matrix_alternative}}
     InvalidStd140MatrixLayout {
-        ref_chain: Vec<FieldId>,
+        ref_chain: Vec<FieldLoc>,
         ty: Type,
     },
     MisalignedOffset {
-        ref_chain: Vec<FieldId>,
+        ref_chain: Vec<FieldLoc>,
         explicit_offset: u32,
         required_alignment: u32,
     },
     LayoutMismatch {
-        ref_chain: Vec<FieldId>,
+        ref_chain: Vec<FieldLoc>,
         computed_offset: u32,
         expected_offset: u32,
     },

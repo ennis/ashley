@@ -1,13 +1,15 @@
 use crate::{
-    ty::body::{diagnostic::ConstEvalDiagnostic, Body, Expr},
-    CompilerDb, ConstantValue,
+    ty::{
+        body::{Body, Expr},
+        TyDiagnostic,
+    },
+    CompilerDb,
 };
-use ashley_data_structures::Id;
 
 struct ConstEvalCtxt<'a> {
     compiler: &'a dyn CompilerDb,
     body: &'a Body,
-    diagnostics: Vec<ConstEvalDiagnostic>,
+    diagnostics: Vec<TyDiagnostic>,
 }
 
 impl<'a> ConstEvalCtxt<'a> {

@@ -1949,9 +1949,50 @@ void main() {
 }
 ```
 
+
 Goals:
 1. changing anything inside a function body should not invalidate either the item tree or other bodies.
 2. changing the "16" const expr inside S should not invalidate bodies that don't depend on it.
 3. 4.changing any field inside S should not invalidate bodies that don't depend on it.
 
- 
+
+    // now lower_ty depends on the def map, which is invalidated on every change, even trivia:
+    // types are recomputed on every keystroke!
+    //
+    // Conclusion:
+    // -> lower_ty cannot depend on the AST directly
+    // -> lower_ty must only depend on module_items data
+    // -> module_items must contain types
+    //      -> issue: adding a field to a struct will invalidate module_items, which in turn will dirty all tys, even unrelated
+    //      -> a projection query is necessary: extract one definition (struct, function, global) from module_items
+    // Actually, lower_ty can directly get the &def::Type, it doesn't need to depend on module_items
+    //
+    // Is it a problem if types are invalidated on every trivial change?
+    //
+    // After all, it's not certain that type inference is actually more costly than building AST maps and intermediate representations.
+    // It might be possible to put the "firewall" at a higher level: i.e. compare the typed IR instead of
+    // the unresolved HIR.
+    //
+    // The question is: are name resolution and type checking so costly that we want to avoid doing it on every keystroke?
+    // => probably yes?
+    //
+    // Also: how do we represent a def::Type in diagnostics? We don't know it's location since there's no AstId associated to it.
+    // We could use an ID enum to represent e.g. Function parameter types, field, types, etc. but in general the ID is going to have
+    // a tree structure (path inside the item tree).
+    //
+    // r-a doesn't emit any diagnostic during lowering of types? why? is it even implemented? (TyLoweringContext has no "diagnostics" field)
+    // => it doesn't emit any diagnostic (t
+    //
+    // Alternatives:
+    // * store AstId<ast::Type> alongside def::Types; the Ids are relative to the definition so they are going to be relatively stable.
+    //      * basically, put an AstId alongside anything that can fail during name resolution / const evaluation
+    // * allocate def::Types in an arena, in Struct/Function/Global, store mapping to AstPtr<ast::Type> in DefMap (roughly equivalent to the first solution)
+    // * don't emit diagnostics during type lowering: after all, the calling code knows best the context in which the type appears
+
+
+# Issue: diagnostics are spread across multiple queries
+
+# Proposal: lower and type-check bodies (structs, etc.) at the same time (but still on-demand)
+
+Concretely:
+- There's no more def::StructData, def::FunctionData, and def::Body

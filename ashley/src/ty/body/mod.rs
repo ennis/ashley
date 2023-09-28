@@ -1,10 +1,9 @@
 mod const_eval;
-mod diagnostic;
 mod lower;
 
 use crate::{
     builtins::BuiltinSignature,
-    item::{BodyOwnerId, FunctionId, GlobalId},
+    def::{BodyOwnerId, FunctionLoc, GlobalLoc},
     ty::{body::lower::TyBodyLowerCtxt, TyOwnerId, Type},
     CompilerDb, ConstantValue,
 };
@@ -12,15 +11,9 @@ use ashley_data_structures::{Id, IndexVec};
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-use crate::{builtins::Constructor, item::BodyId, syntax::ast};
-pub use diagnostic::{ConstEvalDiagnostic, TyBodyDiagnostic};
+use crate::{builtins::Constructor, def::BodyId, syntax::ast, ty::TyDiagnostic};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/*pub type Id<Expr = Id<Expr>;
-pub type StmtId = Id<Stmt>;
-pub type BlockId = Id<Block>;
-pub type LocalVarId = Id<LocalVar>;*/
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stmt {
@@ -49,13 +42,20 @@ pub enum Stmt {
     Block {
         block: Id<Block>,
     },
+    Discard,
+    Break,
+    Continue,
     Error,
 }
 
 /// Represents an expression with its inferred type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expr {
+    /// Inferred type of the expression.
     pub ty: Type,
+    /// Original expression in the `def::Body`
+    pub original: Option<Id<def::>>
+    /// Expression kind.
     pub kind: ExprKind,
 }
 
@@ -127,14 +127,14 @@ pub enum ExprKind {
         false_expr: Id<Expr>,
     },
     Call {
-        function: FunctionId,
+        function: FunctionLoc,
         args: Vec<Id<Expr>>,
     },
     LocalVar {
         var: Id<LocalVar>,
     },
     GlobalVar {
-        var: GlobalId,
+        var: GlobalLoc,
     },
     //FunctionRef {},
     Index {
@@ -171,7 +171,7 @@ pub struct Body {
     pub local_var: IndexVec<LocalVar>,
     pub blocks: IndexVec<Block>,
     pub params: Vec<Id<LocalVar>>,
-    pub diagnostics: Vec<TyBodyDiagnostic>,
+    pub diagnostics: Vec<TyDiagnostic>,
 }
 
 pub(crate) fn ty_body_query(compiler: &dyn CompilerDb, body: BodyId) {

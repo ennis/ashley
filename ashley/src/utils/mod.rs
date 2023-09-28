@@ -10,14 +10,23 @@ use std::fmt;
 pub(crate) use ashley_data_structures::{Id, IndexVec};
 pub(crate) use interner::UniqueArena;
 
-/// Helper macro to write a comma-separated list.
+/// Helper macro to write a separated list.
+///
+/// # Example
+///
+/// ```rust
+/// let mut vs = vec![0,1,2,3];
+/// let mut string = String::new();
+/// write_list!(&mut string, ",", i in vs => { write!(&mut string, "{i}"); } );       
+/// assert_eq!(string, "0,1,2,3");
+/// ```
 // implemented as a macro to avoid borrowing woes
 macro_rules! write_list {
-    ($w:expr, $i:ident in $coll:expr => $b:block) => {
+    ($w:expr, $sep:literal, $i:ident in $coll:expr => $b:block) => {
         let mut first = true;
         for $i in $coll {
             if !first {
-                write!($w, ",").unwrap();
+                write!($w, "{}", $sep).unwrap();
             }
             $b
             first = false;
@@ -74,4 +83,15 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
         return value;
     }
     value + multiple - remainder
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_write_list() {
+        let mut vs = vec![0, 1, 2, 3];
+        let mut string = String::new();
+        write_list!(string, i in vs => { write!(string, "{i}"); } );
+        assert_eq!(string, "0,1,2,3");
+    }
 }

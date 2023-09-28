@@ -1,8 +1,9 @@
 use crate::{
     db::{DebugWithDb, ModuleId},
-    item::{BodyId, FieldId, FunctionId, GlobalId, StructId},
+    def::{BodyId, FieldLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
 };
-use ashley::{item::BodyOwnerId, CompilerDb};
+use ashley::{def::BodyOwnerId, CompilerDb};
+use ashley_db::AsIndex;
 use std::fmt::Formatter;
 
 impl DebugWithDb for ModuleId {
@@ -13,7 +14,7 @@ impl DebugWithDb for ModuleId {
     }
 }
 
-impl DebugWithDb for StructId {
+impl DebugWithDb for StructLoc {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
         let mod_uri = &compiler.module_data(self.module).url;
         let name = &self.module.items(compiler)[self.strukt].name;
@@ -24,7 +25,7 @@ impl DebugWithDb for StructId {
     }
 }
 
-impl DebugWithDb for FunctionId {
+impl DebugWithDb for FunctionLoc {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
         let mod_uri = &compiler.module_data(self.module).url;
         let name = &self.module.items(compiler)[self.function].name;
@@ -35,7 +36,7 @@ impl DebugWithDb for FunctionId {
     }
 }
 
-impl DebugWithDb for GlobalId {
+impl DebugWithDb for GlobalLoc {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
         let mod_uri = &compiler.module_data(self.module).url;
         let name = &self.module.items(compiler)[self.global].name;
@@ -46,7 +47,7 @@ impl DebugWithDb for GlobalId {
     }
 }
 
-impl DebugWithDb for FieldId {
+impl DebugWithDb for FieldLoc {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
         let mod_uri = &compiler.module_data(self.strukt.module).url;
         let module_id = self.strukt.module.0;
@@ -59,6 +60,36 @@ impl DebugWithDb for FieldId {
             formatter,
             "FieldId(`{struct_name}::{field_name}` {module_id:04x}:{struct_id:04x}:{field_index})"
         )?;
+        Ok(())
+    }
+}
+
+impl DebugWithDb for StructId {
+    fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
+        let item = compiler.struct_data(*self);
+        let name = &item.name;
+        let raw_id = self.index().as_u32();
+        write!(formatter, "StructId(`{name}` {raw_id:04x})")?;
+        Ok(())
+    }
+}
+
+impl DebugWithDb for FunctionId {
+    fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
+        let item = compiler.function_data(*self);
+        let name = &item.name;
+        let raw_id = self.index().as_u32();
+        write!(formatter, "FunctionId(`{name}` {raw_id:04x})")?;
+        Ok(())
+    }
+}
+
+impl DebugWithDb for GlobalId {
+    fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
+        let item = compiler.global_data(*self);
+        let name = &item.name;
+        let raw_id = self.index().as_u32();
+        write!(formatter, "GlobalId(`{name}` {raw_id:04x})")?;
         Ok(())
     }
 }

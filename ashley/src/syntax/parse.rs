@@ -815,7 +815,7 @@ impl<'a> Parser<'a> {
                 // if lookahead is `[` -> start array_type
                 let cp = self.checkpoint();
                 self.start_node(TYPE_REF);
-                self.eat();
+                self.parse_name("type name");
                 match self.next() {
                     Some(ROW_MAJOR_KW | COLUMN_MAJOR_KW) => {
                         // row_major or column_major qualifier on matrix type
@@ -984,7 +984,7 @@ impl<'a> Parser<'a> {
                     self.parse_constructor();
                 } else {
                     self.start_node(PATH_EXPR);
-                    self.eat();
+                    self.parse_name("path");
                     self.finish_node();
                 }
             }

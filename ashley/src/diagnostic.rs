@@ -1,8 +1,5 @@
 use crate::{db::CompilerDb, SourceFileId};
-use codespan_reporting::{
-    files::{Error, Files},
-    term,
-};
+use codespan_reporting::files::{Error, Files};
 use rowan::{TextRange, TextSize};
 use std::ops::Range;
 

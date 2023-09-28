@@ -1,23 +1,17 @@
 use crate::{
     builtins::BuiltinOperationPtr,
     db::ModuleId,
-    item,
-    item::{AstId, AttributeOwnerId, DefId, FunctionId, GlobalId, StructId},
+    def,
+    def::{body::LocalVar, AstId, BodyId, DefLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
     syntax::ast,
     ty,
     ty::Type,
     CompilerDb,
 };
-use ashley::item::BodyId;
 use ashley_data_structures::Id;
 use std::{collections::HashMap, sync::Arc};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// Scopes are the set of definitions visible to some piece of code.
-//
-// They are important for incremental computation because if the scope
-// of an item (a "body") hasn't changed, then we don't need to recheck it.
 
 ///
 #[derive(Clone, Eq, PartialEq)]
@@ -27,7 +21,7 @@ pub struct Scope {
 }
 
 pub(crate) struct OverloadSet {
-    functions: Vec<FunctionId>,
+    functions: Vec<FunctionLoc>,
 }
 
 /// Resolution of names in the value namespace.
@@ -39,8 +33,8 @@ pub enum ValueRes {
     Global(GlobalId),
     /// Builtin function.
     BuiltinFunction(BuiltinOperationPtr),
-    // The name resolves to a local variable in the current scope.
-    //Local(LocalVarId),
+    /// The name resolves to a local variable in the current scope.
+    Local(Id<LocalVar>),
 }
 
 /// Resolution of names in the type namespace.
@@ -65,12 +59,41 @@ impl Scope {
         }
     }
 
+    pub(crate) fn add_local_var(&mut self, name: &str, local_var: Id<LocalVar>) {
+        // NOTE: shadowing is OK
+        self.values.insert(name.to_string(), ValueRes::Local(local_var));
+    }
+
     pub(crate) fn resolve_type_name(&self, name: &str) -> Option<TypeRes> {
         self.types.get(name).cloned()
     }
 
     pub(crate) fn resolve_value_name(&self, name: &str) -> Option<ValueRes> {
         self.values.get(name).cloned()
+    }
+
+    /// Returns an iterator over all structs defined in the module.
+    pub fn structs(&self) -> impl Iterator<Item = StructId> + '_ {
+        self.types.values().filter_map(|ty_res| match ty_res {
+            TypeRes::Struct(s) => Some(*s),
+            TypeRes::Primitive(_) => None,
+        })
+    }
+
+    /// Returns an iterator over all global variables defined in the module.
+    pub fn globals(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.values.values().filter_map(|value_res| match value_res {
+            ValueRes::Global(g) => Some(*g),
+            _ => None,
+        })
+    }
+
+    /// Returns an iterator over all functions defined in the module.
+    pub fn functions(&self) -> impl Iterator<Item = FunctionId> + '_ {
+        self.values.values().filter_map(|value_res| match value_res {
+            ValueRes::Function(f) => Some(*f),
+            _ => None,
+        })
     }
 
     /*/// Associates a name to a resolution in this scope.
@@ -152,8 +175,8 @@ pub(crate) fn scope_for_body_query(compiler: &dyn CompilerDb, body: BodyId) -> S
     todo!()
 }
 
-pub(crate) fn scope_for_definition_query(compiler: &dyn CompilerDb, def: DefId) -> Scope {
-    todo!()
+pub(crate) fn scope_for_definition_query(compiler: &dyn CompilerDb, def: DefLoc) -> Scope {
+    module_scope_query(compiler, def.module())
 }
 
 pub(crate) fn module_scope_query(compiler: &dyn CompilerDb, module: ModuleId) -> Scope {
@@ -168,31 +191,25 @@ pub(crate) fn module_scope_query(compiler: &dyn CompilerDb, module: ModuleId) ->
         todo!("import resolution")
     }
     for (struct_id, struct_data) in items.structs.iter_full() {
-        scope.types.insert(
-            struct_data.name.clone(),
-            TypeRes::Struct(StructId {
-                module,
-                strukt: struct_id,
-            }),
-        );
+        let id = compiler.struct_id(StructLoc {
+            module,
+            strukt: struct_id,
+        });
+        scope.types.insert(struct_data.name.clone(), TypeRes::Struct(id));
     }
     for (function_id, function_data) in items.functions.iter_full() {
-        scope.values.insert(
-            function_data.name.clone(),
-            ValueRes::Function(FunctionId {
-                module,
-                function: function_id,
-            }),
-        );
+        let id = compiler.function_id(FunctionLoc {
+            module,
+            function: function_id,
+        });
+        scope.values.insert(function_data.name.clone(), ValueRes::Function(id));
     }
     for (global_id, global_data) in items.globals.iter_full() {
-        scope.values.insert(
-            global_data.name.clone(),
-            ValueRes::Global(GlobalId {
-                module,
-                global: global_id,
-            }),
-        );
+        let id = compiler.global_id(GlobalLoc {
+            module,
+            global: global_id,
+        });
+        scope.values.insert(global_data.name.clone(), ValueRes::Global(id));
     }
 
     scope

@@ -1,6 +1,6 @@
 use crate::{
-    item,
-    syntax::{Lang, SourceFileId, SyntaxKind, SyntaxNode, SyntaxToken, TextRange},
+    def,
+    syntax::{Lang, SyntaxKind, SyntaxNode, SyntaxToken},
     T,
 };
 use std::num::{ParseFloatError, ParseIntError};
@@ -204,6 +204,10 @@ impl_ast_token!(FloatNumber<FLOAT_NUMBER>);
 impl_ast_token!(Else<ELSE_KW>);
 impl_ast_token!(Eq<EQ>);
 
+// TODO: there should be a way in impl_ast_node to say that a child node or token is "guaranteed", i.e. that it will always be there in the AST, even if there are syntax errors.
+// This could avoid redundant Option checks in lowering code when, by construction, the parser always produces a child node of the expected kind.
+// TODO Alternatively, remove useless nodes with only one child?
+
 impl_ast_variant_node!(TypeQualifier, [
     STRIDE_QUALIFIER => StrideQualifier,
     ROW_MAJOR_QUALIFIER => RowMajorQualifier,
@@ -234,7 +238,7 @@ impl_ast_node!(RowMajorQualifier   <ROW_MAJOR_QUALIFIER>   []);
 impl_ast_node!(ColumnMajorQualifier   <COLUMN_MAJOR_QUALIFIER>   []);
 impl_ast_node!(ArrayType   <ARRAY_TYPE>   [node element_type: Type, node length: Expr, nodes qualifiers: TypeQualifier]);
 impl_ast_node!(ClosureType <CLOSURE_TYPE> [node param_list: ClosureParamList, node return_type: Type]);
-impl_ast_node!(StructDef   <STRUCT_DEF>   [node visibility: Visibility, node name: Name, nodes fields: StructField]);
+impl_ast_node!(StructDef   <STRUCT_DEF>   [nodes attrs: Attribute, node visibility: Visibility, node name: Name, nodes fields: StructField]);
 impl_ast_node!(StructField <STRUCT_FIELD> [nodes attrs: Attribute, node name: Name, node ty: Type]);
 impl_ast_node!(Block       <BLOCK>        [nodes stmts: Stmt]);
 impl_ast_node!(FnParam     <FN_PARAM>     [node name: Name, node ty: Type]);
@@ -249,14 +253,6 @@ impl_ast_node!(FnDef<FN_DEF>
                 node param_list: ParamList,
                 node block: Block,
                 node name: Name]);
-
-/*impl_ast_node!(FnDecl<FN_DECL>
-[node extern_: Extern,
- node ret_type: RetType,
- node param_list: ParamList,
- node block: Block,
- token name: Ident]);*/
-
 impl_ast_node!(Name          <NAME>        [token ident: Ident]);
 impl_ast_node!(Condition     <CONDITION>   [node expr: Expr]);
 impl_ast_node!(ArgList       <ARG_LIST>    [nodes arguments: Expr]);
@@ -269,13 +265,12 @@ impl_ast_node!(DiscardStmt   <DISCARD_STMT> []);
 impl_ast_node!(IfStmt        <IF_STMT>     [node condition: Condition, node stmt: Stmt, node else_branch: ElseBranch]);
 impl_ast_node!(WhileStmt     <WHILE_STMT>  [node condition: Condition, node stmt: Stmt]);
 impl_ast_node!(LoopExpr      <LOOP_EXPR>   [node expr: Expr]); // actually an expression statement
-impl_ast_node!(ForStmt       <FOR_STMT>    [node initializer: ForInit, node condition: Condition, node loop_expr: LoopExpr, node body: Stmt]);
-impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: Stmt]);
+impl_ast_node!(ForStmt       <FOR_STMT>    [node initializer: ForInit, node condition: Condition, node loop_expr: LoopExpr, node body: Stmt]); // FIXME: this can be confusing: FOR_INIT, CONDITION, and LOOP_EXPR are always present, but the expression nodes inside them are optional.
+impl_ast_node!(ForInit       <FOR_INIT>    [node stmt: Stmt]); // STMT is optional
 impl_ast_node!(ElseBranch    <ELSE_BRANCH> [token else_: Else, node stmt: Stmt]);
 impl_ast_node!(BinExpr       <BIN_EXPR>    []);
 impl_ast_node!(TernaryExpr   <TERNARY_EXPR> []);
-// FIXME the name can be confusing: this is the whole "indexing expression", i.e. `array[index]` and not just `index`
-impl_ast_node!(IndexExpr     <INDEX_EXPR>  []);
+impl_ast_node!(IndexExpr     <INDEX_EXPR>  []); // FIXME the name can be confusing: this is the whole "indexing expression", i.e. `array[index]` and not just `index`
 impl_ast_node!(ParenExpr     <PAREN_EXPR>  [node expr: Expr]);
 impl_ast_node!(CallExpr      <CALL_EXPR>   [node callee: Expr, node arg_list: ArgList]);
 impl_ast_node!(PrefixExpr    <PREFIX_EXPR> []);
@@ -285,7 +280,7 @@ impl_ast_node!(LitExpr       <LIT_EXPR>    []);
 impl_ast_node!(PathExpr      <PATH_EXPR>   [node name: Name]);
 impl_ast_node!(TupleExpr     <TUPLE_EXPR>  [nodes fields: Expr]);
 impl_ast_node!(ArrayExpr     <ARRAY_EXPR>  [nodes elements: Expr]);
-impl_ast_node!(ConstructorExpr <CONSTRUCTOR>  [node ty: Type, node args: ArgList]);
+impl_ast_node!(ConstructorExpr <CONSTRUCTOR>  [node ty: Type, node arg_list: ArgList]);
 impl_ast_node!(Initializer   <INITIALIZER> [token eq_: Eq, node expr: Expr]);
 impl_ast_node!(Qualifier     <QUALIFIER>   []);
 impl_ast_node!(Visibility    <VISIBILITY>  []);
@@ -389,7 +384,12 @@ impl IntNumber {
         (prefix, text, suffix)
     }
 
-    pub fn value(&self) -> Result<i64, ParseIntError> {
+    pub fn value_i32(&self) -> Result<i32, ParseIntError> {
+        let (_, text, _) = self.split_into_parts();
+        i32::from_str_radix(&text.replace('_', ""), self.radix() as u32)
+    }
+
+    pub fn value_i64(&self) -> Result<i64, ParseIntError> {
         let (_, text, _) = self.split_into_parts();
         i64::from_str_radix(&text.replace('_', ""), self.radix() as u32)
     }
@@ -410,6 +410,11 @@ impl IntNumber {
 }
 
 impl FloatNumber {
+    pub fn value_f32(&self) -> Result<f32, ParseFloatError> {
+        // TODO hex floats
+        self.text().parse::<f32>()
+    }
+
     pub fn value(&self) -> Result<f64, ParseFloatError> {
         // TODO hex floats
         self.text().parse::<f64>()
@@ -590,14 +595,14 @@ impl Qualifier {
         first_token(self.syntax())
     }
 
-    pub fn qualifier(&self) -> Option<item::Qualifier> {
+    pub fn qualifier(&self) -> Option<def::Qualifier> {
         match self.token().kind() {
-            SyntaxKind::BUFFER_KW => Some(item::Qualifier::Buffer),
-            SyntaxKind::SHARED_KW => Some(item::Qualifier::Shared),
-            SyntaxKind::UNIFORM_KW => Some(item::Qualifier::Uniform),
-            SyntaxKind::IN_KW => Some(item::Qualifier::In),
-            SyntaxKind::OUT_KW => Some(item::Qualifier::Out),
-            SyntaxKind::CONST_KW => Some(item::Qualifier::Const),
+            SyntaxKind::BUFFER_KW => Some(def::Qualifier::Buffer),
+            SyntaxKind::SHARED_KW => Some(def::Qualifier::Shared),
+            SyntaxKind::UNIFORM_KW => Some(def::Qualifier::Uniform),
+            SyntaxKind::IN_KW => Some(def::Qualifier::In),
+            SyntaxKind::OUT_KW => Some(def::Qualifier::Out),
+            SyntaxKind::CONST_KW => Some(def::Qualifier::Const),
             _ => None,
         }
     }
@@ -621,9 +626,9 @@ impl Visibility {
         first_token(self.syntax())
     }
 
-    pub fn visibility(&self) -> Option<item::Visibility> {
+    pub fn visibility(&self) -> Option<def::Visibility> {
         match self.token().kind() {
-            SyntaxKind::PUBLIC_KW => Some(item::Visibility::Public),
+            SyntaxKind::PUBLIC_KW => Some(def::Visibility::Public),
             _ => None,
         }
     }

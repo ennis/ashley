@@ -17,7 +17,6 @@ tracing = "0.1.37"
 parking_lot = "0.12.1"
 id-arena = "2.2.1"
 slotmap = "1.0.6"
-fxhash = "0.2.1"
 ashley-derive = { path = "../ashley-derive" }
 ashley-data-structures = { path = "../ashley-data-structures" }
 ashley-db = { path = "../ashley-db" }
@@ -29,6 +28,7 @@ anyhow = "1.0.69"
 bitflags = "2.2.1"
 bytemuck = {version="1.13.1", features=["derive"]}
 url = "2.3.1"
+rustc-hash = "1.1.0"
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }

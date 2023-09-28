@@ -152,6 +152,13 @@ impl<T, I> IndexVec<T, I> {
             _phantom: PhantomData,
         }
     }
+
+    pub fn with_capacity(capacity: usize) -> IndexVec<T, I> {
+        IndexVec {
+            items: Vec::with_capacity(capacity),
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<T, I: Idx> IndexVec<T, I> {

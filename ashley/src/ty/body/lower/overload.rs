@@ -1,6 +1,6 @@
 //! Overload resolution.
 use crate::{
-    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, ImageClass, PseudoType},
+    builtins::{BuiltinOperation, ImageClass, PseudoType},
     def::Function,
     ty::{
         body::{lower::TyBodyLowerCtxt, DefExprId, ExprAstId},
@@ -57,17 +57,14 @@ fn resolve_preferred_overload(ranks: &mut [(usize, ImplicitConversionRanks)]) ->
 /// If you have multiple possible signatures, just call `check_signature` on all of them, keeping only the
 /// one with the lower `ImplicitConversionRanks` (it implements `Ord`)
 ///
-pub(crate) fn check_signature(
-    signature: &[Type],
-    arguments: &[Type],
-) -> Result<ImplicitConversionRanks, OverloadResolutionError> {
+pub(crate) fn check_signature(signature: &[Type], arguments: &[Type]) -> Option<ImplicitConversionRanks> {
     use TypeKind as TK;
 
     //eprintln!("chksig: {:?} against arguments {:?}", signature, arguments);
 
     if arguments.len() != signature.len() {
         // return early on arg count mismatch
-        return Err(OverloadResolutionError::NoMatch);
+        return None;
     }
 
     let mut conversion_ranks = SmallVec::new();
@@ -126,106 +123,126 @@ pub(crate) fn check_signature(
 
     if conversion_ranks.len() != signature.len() {
         // we exited the loop early, meaning that we failed to match an argument
-        return Err(OverloadResolutionError::NoMatch);
+        return None;
     }
 
     //eprintln!("chksig OK: {:?} against arguments {:?}", signature, arguments);
-    Ok(conversion_ranks)
+    Some(conversion_ranks)
 }
 
 //--------------------------------------------------------------------------------------------------
 
-/// Represents a candidate for function (or operator) overload resolution.
+/// Represents one match during overload resolution.
 #[derive(Clone, Debug)]
-pub(crate) struct OverloadCandidate {
-    pub(crate) index: usize,
-    pub(crate) conversion_ranks: ImplicitConversionRanks,
-    pub(crate) parameter_types: SmallVec<[Type; 2]>,
-    pub(crate) result_type: Type,
+struct Match {
+    index: usize,
+    conversion_ranks: ImplicitConversionRanks,
 }
 
-/// Helper function for `typecheck_builtin_operation`.
-///
-/// Signatures of builtins are specified using `PseudoTypes` to make them more compact,
-/// so we use this function to convert them to `Type`s before calling `check_signature`.
-///
-/// Returns true if `check_signature` returned an exact match, false otherwise.
-/// Regardless of the return value, potential candidates are appended to `candidates`.
-fn typecheck_builtin_helper(
-    builtin_types: &PrimitiveTypes,
-    overload_index: usize,
-    parameter_types: &[PseudoType],
-    result_type: PseudoType,
-    vec_len: u8,
-    image_class: ImageClass,
-    arguments: &[Type],
-    candidates: &mut Vec<OverloadCandidate>,
-) -> bool {
-    let sig: SmallVec<[Type; 2]> = parameter_types
-        .iter()
-        .map(|ty| pseudo_type_to_concrete_type(*ty, builtin_types, vec_len, image_class))
-        .collect();
-    let result_type = pseudo_type_to_concrete_type(result_type, builtin_types, vec_len, image_class);
-    if let Ok(conv) = check_signature(&sig, arguments) {
-        let exact_match = conv.iter().all(|x| *x == 0);
-        candidates.push(OverloadCandidate {
-            index: overload_index,
-            result_type,
-            parameter_types: sig,
-            conversion_ranks: conv,
-        });
-        if exact_match {
-            return true;
-        }
-    }
-    false
-}
-
-pub(crate) enum OverloadResolutionError {
+enum RankMatchesError {
     NoMatch,
-    Ambiguous(Vec<OverloadCandidate>),
+    Ambiguous(Vec<Match>),
 }
 
-fn best_overload(mut candidates: Vec<OverloadCandidate>) -> Result<OverloadCandidate, OverloadResolutionError> {
-    match &candidates[..] {
-        &[] => Err(OverloadResolutionError::NoMatch),
-        &[_] => Ok(candidates.into_iter().next().unwrap()),
+/// Returns the best overload match.
+fn best_match(mut matches: Vec<Match>) -> Result<Match, RankMatchesError> {
+    match &matches[..] {
+        &[] => Err(RankMatchesError::NoMatch),
+        &[_] => {
+            // There's only one match
+            Ok(matches.into_iter().next().unwrap())
+        }
         _ => {
             // rank candidates
-            candidates.sort_by(|a, b| compare_conversion_ranks(&a.conversion_ranks, &b.conversion_ranks));
+            matches.sort_by(|a, b| compare_conversion_ranks(&a.conversion_ranks, &b.conversion_ranks));
 
             // if there's a candidate above all others, select it
-            if compare_conversion_ranks(&candidates[0].conversion_ranks, &candidates[1].conversion_ranks)
-                == Ordering::Less
-            {
-                Ok(candidates.into_iter().next().unwrap())
+            if compare_conversion_ranks(&matches[0].conversion_ranks, &matches[1].conversion_ranks) == Ordering::Less {
+                Ok(matches.into_iter().next().unwrap())
             } else {
-                Err(OverloadResolutionError::Ambiguous(candidates))
+                // number of "equally good" matches that we couldn't choose from
+                let n = matches
+                    .iter()
+                    .position(|m| {
+                        compare_conversion_ranks(&m.conversion_ranks, &matches[0].conversion_ranks) == Ordering::Equal
+                    })
+                    .unwrap();
+                matches.truncate(n);
+                Err(RankMatchesError::Ambiguous(matches))
             }
         }
     }
+}
+
+pub(crate) struct BuiltinOperationConcreteSignature {
+    pub(crate) overload_index: usize,
+    pub(crate) result_type: Type,
+    pub(crate) param_types: Vec<Type>,
 }
 
 impl TyBodyLowerCtxt<'_> {
     ///
-    pub(crate) fn check_function_signature(&mut self, expr: ExprAstId, function: FunctionId, args: &[Type]) -> bool {
-        let signature = self.compiler.function_signature(function);
+    pub(crate) fn resolve_overload(
+        &mut self,
+        expr: ExprAstId,
+        func_name: &str,
+        functions: &[FunctionId],
+        args: &[Type],
+    ) -> Option<FunctionId> {
+        let mut matches = vec![];
+        let mut match_ranks = vec![];
 
-        if signature.parameter_types.len() != args.len() {
-            self.body.diagnostics.push(TyDiagnostic::InvalidNumberOfArguments {
-                expr,
-                expected: args.len() as u32,
-                got: signature.parameter_types.len() as u32,
-            });
-            return false;
+        for function in functions.iter() {
+            let signature = function.signature(self.compiler);
+
+            if signature.parameter_types.len() != args.len() {
+                /*self.body.diagnostics.push(TyDiagnostic::InvalidNumberOfArguments {
+                    expr,
+                    expected: args.len() as u32,
+                    got: signature.parameter_types.len() as u32,
+                });
+                return false;*/
+                // not a candidate since it doesn't have the correct number of arguments
+                continue;
+            }
+
+            match check_signature(&signature.parameter_types, args) {
+                Some(conversion_ranks) => {
+                    // signature matches (possibly with implicit conversions)
+                    // add it to the list of candidates
+                    matches.push(*function);
+                    match_ranks.push(Match {
+                        index: matches.len() - 1,
+                        conversion_ranks,
+                    });
+                }
+                None => {
+                    // no match
+                }
+            }
         }
 
-        match check_signature(&signature.parameter_types, args) {
-            Ok(_conversion_ranks) => {
-                // signature matches (possibly with implicit conversions)
-                true
+        // rank candidates
+        match best_match(match_ranks) {
+            Ok(m) => Some(matches[m.index]),
+            Err(RankMatchesError::Ambiguous(set)) => {
+                self.body.diagnostics.push(TyDiagnostic::AmbiguousOverload {
+                    expr,
+                    func_name: func_name.to_string(),
+                    arg_types: args.into(),
+                    matches: set.into_iter().map(|i| matches[i.index]).collect(),
+                });
+                None
             }
-            Err(_) => false,
+            Err(RankMatchesError::NoMatch) => {
+                self.body.diagnostics.push(TyDiagnostic::NoMatchingOverload {
+                    expr,
+                    func_name: func_name.to_string(),
+                    arg_types: args.into(),
+                    candidates: functions.into(),
+                });
+                None
+            }
         }
 
         /*for (i, overload) in overloads.iter().enumerate() {
@@ -256,16 +273,25 @@ impl TyBodyLowerCtxt<'_> {
 
     // Maybe refactor so that operators also go through `resolve_overload`.
     // Or maybe refactor so that this only handles operators.
-    pub(crate) fn typecheck_builtin_operation(
+    pub(crate) fn verify_builtin_operation(
         &mut self,
+        expr: ExprAstId,
         op: &BuiltinOperation,
         arguments: &[Type],
-    ) -> Result<OverloadCandidate, OverloadResolutionError> {
-        let mut candidates: Vec<OverloadCandidate> = Vec::new();
+    ) -> Option<BuiltinOperationConcreteSignature> {
+        let mut match_signatures: Vec<BuiltinOperationConcreteSignature> = Vec::new();
+        let mut match_ranks: Vec<Match> = Vec::new();
 
         'check_signatures: for (index, sig) in op.signatures.iter().enumerate() {
-            // Signatures may be generic over vector type, vector length, or image classes.
-            // Enumerate all of those.
+            // In order to make them more compact, signatures of builtin operations may be generic
+            // over vector type ("g"), vector length ("N"), or image classes ("gt"). We call those pseudo-signatures.
+            // E.g.
+            // * `gvec2` is generic over the vector type (vec2, ivec2, uvec2, ...)
+            // * `vecN` is generic over the vector length (vec2, vec3, vec4)
+            // * `gtexture` is generic over the image class (texture, itexture, utexture)
+            //
+            // The following code enumerates all possible combinations of "g", "N" and image classes,
+            // and substitutes them in the pseudo-signature.
             let is_vector_generic = sig.parameter_types.iter().any(PseudoType::is_vector_generic);
             let is_image_type_generic = sig.parameter_types.iter().any(PseudoType::is_image_type_generic);
             let max_vec_len = if is_vector_generic { 4 } else { 1 };
@@ -277,23 +303,58 @@ impl TyBodyLowerCtxt<'_> {
 
             for ic in image_classes {
                 for vec_len in 1..=max_vec_len {
-                    if typecheck_builtin_helper(
-                        &self.compiler.tyctxt().prim_tys,
-                        index,
-                        sig.parameter_types,
-                        sig.result_type,
-                        vec_len,
-                        *ic,
-                        arguments,
-                        &mut candidates,
-                    ) {
-                        // Break on the first exact match.
-                        break 'check_signatures;
+                    // substitute generic params in the operation signature
+                    let parameter_types: Vec<_> = sig
+                        .parameter_types
+                        .iter()
+                        .map(|ty| ty.to_concrete_type(&self.compiler.tyctxt().prim_tys, vec_len, *ic))
+                        .collect();
+                    let result_type = sig
+                        .result_type
+                        .to_concrete_type(&self.compiler.tyctxt().prim_tys, vec_len, *ic);
+                    // check the concrete signature
+                    if let Some(conv) = check_signature(&parameter_types, arguments) {
+                        let exact_match = conv.iter().all(|x| *x == 0);
+                        match_signatures.push(BuiltinOperationConcreteSignature {
+                            overload_index: index,
+                            param_types: parameter_types,
+                            result_type,
+                        });
+                        match_ranks.push(Match {
+                            index: match_signatures.len() - 1,
+                            conversion_ranks: conv,
+                        });
+                        if exact_match {
+                            // no need to continue if there's an exact match, since there can be no
+                            // ambiguity in this case
+                            break 'check_signatures;
+                        }
                     }
                 }
             }
         }
 
-        best_overload(candidates)
+        match best_match(match_ranks) {
+            Ok(m) => Some(match_signatures.into_iter().nth(m.index).unwrap()),
+            Err(RankMatchesError::Ambiguous(set)) => {
+                // TODO
+                /*self.body.diagnostics.push(TyDiagnostic::AmbiguousOverload {
+                    expr,
+                    func_name: op.name.to_string(),
+                    matches: set.into_iter().map(|i| matches[i.index]).collect(),
+                });*/
+                None
+            }
+            Err(RankMatchesError::NoMatch) => {
+                // TODO
+                /*self.body.diagnostics.push(TyDiagnostic::NoMatchingOverload {
+                    expr,
+                    func_name: func_name.to_string(),
+                    arg_types: args.into(),
+                    candidates: functions.into(),
+                });*/
+                None
+            }
+        }
     }
 }

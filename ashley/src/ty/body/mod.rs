@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::{
     builtins::Constructor,
-    def::{BodyId, FunctionId},
+    def::{BodyId, FunctionId, GlobalId},
     syntax::ast,
     ty::TyDiagnostic,
 };
@@ -144,14 +144,14 @@ pub enum ExprKind {
         false_expr: Id<Expr>,
     },
     Call {
-        function: FunctionLoc,
+        function: FunctionId,
         args: Vec<Id<Expr>>,
     },
     LocalVar {
         var: Id<LocalVar>,
     },
     GlobalVar {
-        var: GlobalLoc,
+        var: GlobalId,
     },
     //FunctionRef {},
     Index {

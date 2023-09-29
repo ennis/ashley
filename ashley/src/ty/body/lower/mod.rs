@@ -13,6 +13,7 @@ use crate::{
     },
     CompilerDb, ConstantValue, ModuleId,
 };
+use ashley::def::ValueRes;
 use ashley_data_structures::{Id, IndexVec};
 use std::{ops::Deref, sync::Arc};
 
@@ -187,8 +188,6 @@ impl<'a> TyBodyLowerCtxt<'a> {
         self.create_and_add_expr(ast_id, ty, expr_kind)
     }
 
-    fn lower_body(&mut self, body: &def::body::Body, signature: &FunctionSignature) {}
-
     fn lower_local_variable(
         &mut self,
         local_var: Id<def::body::LocalVar>,
@@ -361,23 +360,165 @@ impl<'a> TyBodyLowerCtxt<'a> {
             } => {
                 todo!()
             }
-            def::body::ExprKind::Call { ref function, ref args } => {
-                todo!()
-            }
-            def::body::ExprKind::Name { ref name } => {
-                todo!()
-            }
+            def::body::ExprKind::Call { ref function, ref args } => self.lower_call_expr(ast_id, function, args),
+            def::body::ExprKind::Name { ref name } => self.lower_name_expr(ast_id, name),
             def::body::ExprKind::Index { array_or_vector, index } => {
                 todo!()
             }
             def::body::ExprKind::Field { expr, ref name } => {
                 todo!()
             }
-            def::body::ExprKind::Constructor { ref ty, ref args } => {
-                todo!()
-            }
+            def::body::ExprKind::Constructor { ref ty, ref args } => self.lower_constructor_expr(ast_id, ty, args),
             def::body::ExprKind::Literal { ref value } => self.lower_lit_expr(ast_id, value),
             def::body::ExprKind::Undef => self.error_expr(ast_id),
+        }
+    }
+
+    fn lower_call_expr(&mut self, ast_id: ExprAstId, func_name: &str, args: &[Id<def::body::Expr>]) -> TypedExprId {
+        let args: Vec<_> = args.iter().map(|arg| self.lower_expr(*arg)).collect();
+        let arg_types: Vec<_> = args.iter().map(|arg| arg.ty.clone()).collect();
+
+        let function = self.resolver.resolve_value_name(func_name);
+        match function {
+            Some(ValueRes::Function(func)) => {}
+            Some(ValueRes::BuiltinFunction(op)) => {
+                // builtin functions are more complicated because OpenGL supports overloading
+            }
+            _ => self.body.diagnostics.push(UnresolvedFunction { expr: ast_id }),
+        }
+        todo!()
+    }
+
+    fn lower_name_expr(&mut self, ast_id: ExprAstId, name: &str) -> TypedExprId {
+        match self.resolver.resolve_value_name(name) {
+            None => {
+                self.body.diagnostics.push(UnresolvedPath { expr: ast_id });
+                self.error_expr(ast_id)
+            }
+            Some(value) => match value {
+                ValueRes::BuiltinFunction(_) | ValueRes::Function(_) => {
+                    self.body.diagnostics.push(ExpectedValue { expr: ast_id });
+                    self.error_expr(ast_id)
+                }
+                ValueRes::Global(global) => {
+                    let ty = self.compiler.global_ty(global);
+                    self.create_and_add_expr(ast_id, ty.clone(), ExprKind::GlobalVar { var: global })
+                }
+                ValueRes::Local(local) => self.create_and_add_expr(
+                    ast_id,
+                    self.body.local_var[local].ty.clone(),
+                    ExprKind::LocalVar { var: local },
+                ),
+            },
+        }
+    }
+
+    fn lower_constructor_expr(
+        &mut self,
+        ast_id: ExprAstId,
+        ty: &def::Type,
+        args: &[Id<def::body::Expr>],
+    ) -> TypedExprId {
+        let ty = lower_ty(self.compiler, &self.resolver, ty, &mut self.body.diagnostics);
+
+        let args: Vec<_> = args.iter().map(|arg| self.lower_expr(*arg)).collect();
+
+        /*let mut arg_locations = vec![];
+        let mut args = vec![];
+        for arg in ast_args.arguments() {
+            arg_locations.push(Span::new(self.source_file, arg.syntax().text_range()));
+            args.push(self.typecheck_expr(&arg));
+        }*/
+
+        use ScalarType as ST;
+        use TypeKind as TK;
+
+        let has_scalar_conversion = |from: &TypeKind, to: &TypeKind| match (from, to) {
+            (TK::Scalar(from_scalar), TK::Scalar(to_scalar)) => match (from_scalar, to_scalar) {
+                (a, b) if a == b => true,
+                (ST::UnsignedInt, ST::Int) => true,
+                (ST::Bool, ST::Int) => true,
+                (ST::Float, ST::Int) => true,
+                (ST::Double, ST::Int) => true,
+                (ST::Int, ST::UnsignedInt) => true,
+                (ST::Bool, ST::UnsignedInt) => true,
+                (ST::Float, ST::UnsignedInt) => true,
+                (ST::Double, ST::UnsignedInt) => true,
+                (ST::Int, ST::Bool) => true,
+                (ST::UnsignedInt, ST::Bool) => true,
+                (ST::Float, ST::Bool) => true,
+                (ST::Double, ST::Bool) => true,
+                (ST::Int, ST::Float) => true,
+                (ST::UnsignedInt, ST::Float) => true,
+                (ST::Bool, ST::Float) => true,
+                (ST::Double, ST::Float) => true,
+                (ST::Int, ST::Double) => true,
+                (ST::UnsignedInt, ST::Double) => true,
+                (ST::Bool, ST::Double) => true,
+                (ST::Float, ST::Double) => true,
+                _ => false,
+            },
+            _ => false,
+        };
+
+        match *ty.deref() {
+            TK::Scalar(_) | TK::Vector(_, _) | TK::Matrix { .. } => {
+                for &ctor in builtins::CONSTRUCTORS {
+                    // Find a constructor signature for the specified type (`ctor.ty == *ty`),
+                    // with the correct number of arguments (`ctor.args.len() == args.len()`)
+                    // and with matching types: either the argument type is the same as the one in the signature (`*from.ty == *to`)
+                    //  or the argument type is a scalar, and is implicitly convertible to the type in the signature (`has_scalar_conversion(&*from.ty, to)`)
+                    //
+                    // See the GLSL spec:
+                    //
+                    //       If the basic type (bool, int, float, or double) of a parameter to a constructor
+                    //       does not match the basic type of the object being constructed, the scalar construction rules (above)
+                    //       are used to convert the parameters.
+                    //
+                    // Constructor signatures shouldn't be ambiguous.
+                    if ctor.ty == *ty
+                        && ctor.args.len() == args.len()
+                        && args
+                            .iter()
+                            .zip(ctor.args.iter())
+                            .all(|(from, to)| *from.ty == *to || has_scalar_conversion(&*from.ty, to))
+                    {
+                        // Found a matching constructor signature.
+                        // Apply implicit conversions on arguments.
+                        let conv_args: Vec<_> = args
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, arg)| {
+                                let sig_ty = self.compiler.tyctxt().ty(ctor.args[i].clone());
+                                self.apply_implicit_conversion(arg, sig_ty).id
+                            })
+                            .collect();
+                        return self.create_and_add_expr(
+                            ast_id,
+                            ty,
+                            ExprKind::BuiltinConstructor { ctor, args: conv_args },
+                        );
+                    }
+                }
+
+                let arg_tys = args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>();
+                self.body.diagnostics.push(NoMatchingConstructor {
+                    expr: ast_id,
+                    ty: ty.clone(),
+                    arg_tys,
+                });
+                self.error_expr(ast_id)
+            }
+            TK::Array { .. } => {
+                todo!("array constructors")
+            }
+            _ => {
+                self.body.diagnostics.push(NoSuchTypeConstructor {
+                    expr: ast_id,
+                    ty: ty.clone(),
+                });
+                self.error_expr(ast_id)
+            }
         }
     }
 
@@ -459,16 +600,16 @@ impl<'a> TyBodyLowerCtxt<'a> {
 
         let expr = if let Some(operation) = operation {
             // binary operation, possibly with assignment (e.g `x * y` or `x *= y`)
-            match self.typecheck_builtin_operation(operation, &[ty_lhs.ty.clone(), ty_rhs.ty.clone()]) {
-                Ok(overload) => {
-                    let lhs_conv = self.apply_implicit_conversion(ty_lhs, overload.parameter_types[0].clone());
-                    let rhs_conv = self.apply_implicit_conversion(ty_rhs, overload.parameter_types[1].clone());
+            match self.verify_builtin_operation(ast_id, operation, &[ty_lhs.ty.clone(), ty_rhs.ty.clone()]) {
+                Some(signature) => {
+                    let lhs_conv = self.apply_implicit_conversion(ty_lhs, signature.param_types[0].clone());
+                    let rhs_conv = self.apply_implicit_conversion(ty_rhs, signature.param_types[1].clone());
                     if is_assignment {
                         Expr {
                             ast_id,
                             kind: ExprKind::BinaryAssign {
                                 op,
-                                signature: operation.signatures[overload.index],
+                                signature: operation.signatures[signature.overload_index],
                                 lhs: lhs_conv.id,
                                 rhs: rhs_conv.id,
                             },
@@ -479,15 +620,15 @@ impl<'a> TyBodyLowerCtxt<'a> {
                             ast_id,
                             kind: ExprKind::Binary {
                                 op,
-                                signature: operation.signatures[overload.index],
+                                signature: operation.signatures[signature.overload_index],
                                 lhs: lhs_conv.id,
                                 rhs: rhs_conv.id,
                             },
-                            ty: overload.result_type.clone(),
+                            ty: signature.result_type.clone(),
                         }
                     }
                 }
-                Err(_) => {
+                None => {
                     self.body.diagnostics.push(InvalidTypesForBinaryOp {
                         expr: ast_id,
                         left_ty: ty_lhs.ty.clone(),

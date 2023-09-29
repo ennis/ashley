@@ -16,8 +16,8 @@ use crate::{
     db::{DebugWithDb, ModuleId},
     def,
     def::{
-        AstId, BodyLoc, BodyOwnerId, DefLoc, FieldLoc, FunctionId, FunctionLoc, HasSource, Resolver, StructId,
-        StructLoc,
+        AstId, BodyLoc, BodyOwnerId, DefLoc, FieldLoc, FunctionId, FunctionLoc, GlobalId, HasSource, Resolver,
+        StructId, StructLoc,
     },
     syntax::{ast, ast::TypeRef, SyntaxNode},
     ty::{interner::Interner, lower::TypeLoweringCtxt},
@@ -183,6 +183,16 @@ pub(crate) fn function_signature_query(db: &dyn CompilerDb, function_id: Functio
         },
     );
     db.set_function_signature_diagnostics(function_id, diagnostics);
+}
+
+pub(crate) fn global_ty_query(db: &dyn CompilerDb, global_id: GlobalId) {
+    let _span = trace_span!("global_ty_query", global_id = ?global_id.debug_with(db)).entered();
+    let global_data = db.global_data(global_id);
+    let resolver = global_id.loc(db).module.resolver(db);
+    let mut diags = vec![];
+    let ty = lower_ty(db, &resolver, &global_data.ty, &mut diags);
+    db.set_global_ty(global_id, ty);
+    db.set_global_ty_diagnostics(global_id, diags);
 }
 
 pub(crate) fn def_ty_with_diagnostics_query(compiler: &dyn CompilerDb, def_id: DefLoc) -> (Type, Vec<TyDiagnostic>) {

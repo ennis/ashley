@@ -5,7 +5,7 @@ use crate::{
     syntax::{ast, SyntaxNode},
     ty::{
         body::{Body, DefExprId, ExprAstId},
-        Type,
+        FunctionSignature, Type,
     },
     utils::CommaSeparated,
     CompilerDb, SourceFileId,
@@ -67,7 +67,8 @@ pub enum TyDiagnostic {
     AmbiguousOverload {
         expr: ExprAstId,
         func_name: String,
-        candidates: Vec<FunctionId>,
+        arg_types: Vec<Type>,
+        matches: Vec<FunctionId>,
     },
     InvalidTypesForPrefixOp {
         expr: ExprAstId,
@@ -88,6 +89,12 @@ pub enum TyDiagnostic {
         expected: u32,
         got: u32,
     },
+    /*InvalidArguments {
+        expr: ExprAstId,
+        func_name: String,
+        signature: FunctionSignature,
+        arg_types: Vec<Type>,
+    },*/
     NoImplicitConversion {
         expr: ExprAstId,
         from: Type,
@@ -200,8 +207,28 @@ impl TyDiagnostic {
                 }
                 diag
             }
-            TyDiagnostic::AmbiguousOverload { .. } => {
-                todo!()
+            TyDiagnostic::AmbiguousOverload {
+                expr,
+                func_name,
+                arg_types,
+                matches,
+            } => {
+                let syn = syntax(expr);
+                let mut diag = Diagnostic::error(format!("ambiguous call to overloaded function `{func_name}`"))
+                    .span(syn.span())
+                    .note(format!("argument types are {}", CommaSeparated(&arg_types)));
+                assert!(!matches.is_empty());
+                diag = diag.note("could be:");
+                for func in matches {
+                    let data = func.data(db);
+                    let signature = func.signature(db);
+                    let name = &data.name;
+                    let return_type = &signature.return_type;
+                    let argument_types = CommaSeparated(&signature.parameter_types);
+                    diag = diag.note(format!("{return_type} {name}({argument_types})"))
+                }
+
+                diag
             }
             TyDiagnostic::InvalidTypesForPrefixOp { .. } => {
                 todo!()
@@ -262,7 +289,9 @@ impl TyDiagnostic {
                 let syn = syntax(expr);
                 Diagnostic::error(format!("expected boolean expression"))
                     .label(syn.span(), format!("the expression is of type `{ty}`"))
-            }
+            } /*TyDiagnostic::InvalidArguments { .. } => {
+                  todo!()
+              }*/
         };
         diag
     }

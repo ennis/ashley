@@ -2008,3 +2008,35 @@ We'd need some kind of "relative" AST pointers, which we could compare for equiv
 Lower bodies eagerly, on every reparse? (in `Arc<Body>`) That's what's done already anyway.
 Then, use projection queries to avoid unnecessarily rebuilding the types.
 
+## Diagnostic-producing queries
+
+- function_signature
+- struct_field_ty
+- global_ty
+
+## Refactor builtins
+
+Put all signatures of builtins into a "std" module.
+
+```
+import 'std:core' // implicitly added
+
+// ...
+
+```
+
+Contents of `std:core` (a real file somewhere on disk)
+```
+// module std:core
+
+@spirv_intrinsic("ExtInst GLSL450 Dot $0, $1") extern vec2 dot(vec2 a, vec2 b);
+@spirv_intrinsic("ExtInst GLSL450 Dot $0, $1") extern vec3 dot(vec3 a, vec3 b);
+@spirv_intrinsic("ExtInst GLSL450 Dot $0, $1") extern vec4 dot(vec4 a, vec4 b);
+
+
+
+```
+
+Generated with a script.
+
+Builtins will be treated the same way as other functions. 

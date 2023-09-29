@@ -4,7 +4,7 @@ use crate::{
         types::{Field, ImageSampling, ImageType, ScalarType},
         TypeData,
     },
-    ty::{PrimitiveTypes, Type, TypeKind},
+    ty::{FunctionSignature, PrimitiveTypes, Type, TypeCtxt, TypeKind},
 };
 use std::{
     fmt,
@@ -14,6 +14,13 @@ use std::{
 };
 
 //--------------------------------------------------------------------------------------------------
+
+#[derive(Copy, Clone)]
+pub(crate) enum ImageClass {
+    F,
+    SI,
+    UI,
+}
 
 /// Pseudo-type used in signatures of built-in functions.
 ///
@@ -219,6 +226,325 @@ impl PseudoType {
         use PseudoType::*;
         matches!(*self, vecN | bvecN | ivecN | uvecN | dvecN)
     }
+
+    pub(crate) fn to_concrete_type(&self, builtins: &PrimitiveTypes, vec_len: u8, image_class: ImageClass) -> Type {
+        use ImageClass as IC;
+        use PseudoType as PT;
+        match *self {
+            PT::void => builtins.void.clone(),
+            PT::float => builtins.float.clone(),
+            PT::double => builtins.double.clone(),
+            PT::int => builtins.int.clone(),
+            PT::uint => builtins.uint.clone(),
+            PT::bool => builtins.bool.clone(),
+            PT::vecN => match vec_len {
+                1 => builtins.float.clone(),
+                2 => builtins.vec2.clone(),
+                3 => builtins.vec3.clone(),
+                4 => builtins.vec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::dvecN => match vec_len {
+                1 => builtins.double.clone(),
+                2 => builtins.dvec2.clone(),
+                3 => builtins.dvec3.clone(),
+                4 => builtins.dvec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::ivecN => match vec_len {
+                1 => builtins.int.clone(),
+                2 => builtins.ivec2.clone(),
+                3 => builtins.ivec3.clone(),
+                4 => builtins.ivec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::uvecN => match vec_len {
+                1 => builtins.uint.clone(),
+                2 => builtins.uvec2.clone(),
+                3 => builtins.uvec3.clone(),
+                4 => builtins.uvec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::bvecN => match vec_len {
+                1 => builtins.bool.clone(),
+                2 => builtins.bvec2.clone(),
+                3 => builtins.bvec3.clone(),
+                4 => builtins.bvec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::vec2 => builtins.vec2.clone(),
+            PT::vec3 => builtins.vec3.clone(),
+            PT::vec4 => builtins.vec4.clone(),
+            PT::ivec2 => builtins.ivec2.clone(),
+            PT::ivec3 => builtins.ivec3.clone(),
+            PT::ivec4 => builtins.ivec4.clone(),
+            PT::uvec2 => builtins.uvec2.clone(),
+            PT::uvec3 => builtins.uvec3.clone(),
+            PT::uvec4 => builtins.uvec4.clone(),
+            PT::dvec2 => builtins.dvec2.clone(),
+            PT::dvec3 => builtins.dvec3.clone(),
+            PT::dvec4 => builtins.dvec4.clone(),
+            PT::bvec2 => builtins.bvec2.clone(),
+            PT::bvec3 => builtins.bvec3.clone(),
+            PT::bvec4 => builtins.bvec4.clone(),
+            PT::highp_vecN => match vec_len {
+                1 => builtins.float.clone(),
+                2 => builtins.vec2.clone(),
+                3 => builtins.vec3.clone(),
+                4 => builtins.vec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::highp_ivecN => match vec_len {
+                1 => builtins.int.clone(),
+                2 => builtins.ivec2.clone(),
+                3 => builtins.ivec3.clone(),
+                4 => builtins.ivec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::modf_result_vecN => match vec_len {
+                1 => builtins.modf_result_float.clone(),
+                2 => builtins.modf_result_vec2.clone(),
+                3 => builtins.modf_result_vec3.clone(),
+                4 => builtins.modf_result_vec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::modf_result_dvecN => match vec_len {
+                1 => builtins.modf_result_double.clone(),
+                2 => builtins.modf_result_dvec2.clone(),
+                3 => builtins.modf_result_dvec3.clone(),
+                4 => builtins.modf_result_dvec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::frexp_result_highp_vecN => match vec_len {
+                1 => builtins.frexp_result_float.clone(),
+                2 => builtins.frexp_result_vec2.clone(),
+                3 => builtins.frexp_result_vec3.clone(),
+                4 => builtins.frexp_result_vec4.clone(),
+                _ => panic!("invalid vector length"),
+            },
+            PT::mat2 => builtins.mat2.clone(),
+            PT::mat3 => builtins.mat3.clone(),
+            PT::mat4 => builtins.mat4.clone(),
+            PT::mat2x2 => builtins.mat2x2.clone(),
+            PT::mat2x3 => builtins.mat2x3.clone(),
+            PT::mat2x4 => builtins.mat2x4.clone(),
+            PT::mat3x2 => builtins.mat3x2.clone(),
+            PT::mat3x3 => builtins.mat3x3.clone(),
+            PT::mat3x4 => builtins.mat3x4.clone(),
+            PT::mat4x2 => builtins.mat4x2.clone(),
+            PT::mat4x3 => builtins.mat4x3.clone(),
+            PT::mat4x4 => builtins.mat4x4.clone(),
+            PT::dmat2 => builtins.dmat2.clone(),
+            PT::dmat3 => builtins.dmat3.clone(),
+            PT::dmat4 => builtins.dmat4.clone(),
+            PT::dmat2x2 => builtins.dmat2x2.clone(),
+            PT::dmat2x3 => builtins.dmat2x3.clone(),
+            PT::dmat2x4 => builtins.dmat2x4.clone(),
+            PT::dmat3x2 => builtins.dmat3x2.clone(),
+            PT::dmat3x3 => builtins.dmat3x3.clone(),
+            PT::dmat3x4 => builtins.dmat3x4.clone(),
+            PT::dmat4x2 => builtins.dmat4x2.clone(),
+            PT::dmat4x3 => builtins.dmat4x3.clone(),
+            PT::dmat4x4 => builtins.dmat4x4.clone(),
+
+            PT::image1D => builtins.image1D.clone(),
+            PT::image1DArray => builtins.image1DArray.clone(),
+            PT::image2D => builtins.image2D.clone(),
+            PT::image2DArray => builtins.image2DArray.clone(),
+            PT::image2DMS => builtins.image2DMS.clone(),
+            PT::image2DMSArray => builtins.image2DMSArray.clone(),
+            PT::image2DRect => builtins.image2DRect.clone(),
+            PT::image3D => builtins.image3D.clone(),
+            PT::imageCube => builtins.imageCube.clone(),
+            PT::imageCubeArray => builtins.imageCubeArray.clone(),
+            PT::imageBuffer => builtins.imageBuffer.clone(),
+            PT::uimage1D => builtins.uimage1D.clone(),
+            PT::uimage1DArray => builtins.uimage1DArray.clone(),
+            PT::uimage2D => builtins.uimage2D.clone(),
+            PT::uimage2DArray => builtins.uimage2DArray.clone(),
+            PT::uimage2DMS => builtins.uimage2DMS.clone(),
+            PT::uimage2DMSArray => builtins.uimage2DMSArray.clone(),
+            PT::uimage2DRect => builtins.uimage2DRect.clone(),
+            PT::uimage3D => builtins.uimage3D.clone(),
+            PT::uimageCube => builtins.uimageCube.clone(),
+            PT::uimageCubeArray => builtins.uimageCubeArray.clone(),
+            PT::uimageBuffer => builtins.uimageBuffer.clone(),
+            PT::iimage1D => builtins.iimage1D.clone(),
+            PT::iimage1DArray => builtins.iimage1DArray.clone(),
+            PT::iimage2D => builtins.iimage2D.clone(),
+            PT::iimage2DArray => builtins.iimage2DArray.clone(),
+            PT::iimage2DMS => builtins.iimage2DMS.clone(),
+            PT::iimage2DMSArray => builtins.iimage2DMSArray.clone(),
+            PT::iimage2DRect => builtins.iimage2DRect.clone(),
+            PT::iimage3D => builtins.iimage3D.clone(),
+            PT::iimageCube => builtins.iimageCube.clone(),
+            PT::iimageCubeArray => builtins.iimageCubeArray.clone(),
+            PT::iimageBuffer => builtins.iimageBuffer.clone(),
+
+            PT::texture1D => builtins.texture1D.clone(),
+            PT::texture1DArray => builtins.texture1DArray.clone(),
+            PT::texture2D => builtins.texture2D.clone(),
+            PT::texture2DArray => builtins.texture2DArray.clone(),
+            PT::texture2DMS => builtins.texture2DMS.clone(),
+            PT::texture2DMSArray => builtins.texture2DMSArray.clone(),
+            PT::texture2DRect => builtins.texture2DRect.clone(),
+            PT::texture3D => builtins.texture3D.clone(),
+            PT::textureCube => builtins.textureCube.clone(),
+            PT::textureCubeArray => builtins.textureCubeArray.clone(),
+            PT::textureBuffer => builtins.textureBuffer.clone(),
+
+            PT::itexture1D => builtins.itexture1D.clone(),
+            PT::itexture1DArray => builtins.itexture1DArray.clone(),
+            PT::itexture2D => builtins.itexture2D.clone(),
+            PT::itexture2DArray => builtins.itexture2DArray.clone(),
+            PT::itexture2DMS => builtins.itexture2DMS.clone(),
+            PT::itexture2DMSArray => builtins.itexture2DMSArray.clone(),
+            PT::itexture2DRect => builtins.itexture2DRect.clone(),
+            PT::itexture3D => builtins.itexture3D.clone(),
+            PT::itextureCube => builtins.itextureCube.clone(),
+            PT::itextureCubeArray => builtins.itextureCubeArray.clone(),
+            PT::itextureBuffer => builtins.itextureBuffer.clone(),
+
+            PT::utexture1D => builtins.utexture1D.clone(),
+            PT::utexture1DArray => builtins.utexture1DArray.clone(),
+            PT::utexture2D => builtins.utexture2D.clone(),
+            PT::utexture2DArray => builtins.utexture2DArray.clone(),
+            PT::utexture2DMS => builtins.utexture2DMS.clone(),
+            PT::utexture2DMSArray => builtins.utexture2DMSArray.clone(),
+            PT::utexture2DRect => builtins.utexture2DRect.clone(),
+            PT::utexture3D => builtins.utexture3D.clone(),
+            PT::utextureCube => builtins.utextureCube.clone(),
+            PT::utextureCubeArray => builtins.utextureCubeArray.clone(),
+            PT::utextureBuffer => builtins.utextureBuffer.clone(),
+
+            PT::gimage1D => match image_class {
+                IC::F => builtins.image1D.clone(),
+                IC::SI => builtins.iimage1D.clone(),
+                IC::UI => builtins.uimage1D.clone(),
+            },
+            PT::gimage1DArray => match image_class {
+                IC::F => builtins.image1DArray.clone(),
+                IC::SI => builtins.iimage1DArray.clone(),
+                IC::UI => builtins.uimage1DArray.clone(),
+            },
+            PT::gimage2D => match image_class {
+                IC::F => builtins.image2D.clone(),
+                IC::SI => builtins.iimage2D.clone(),
+                IC::UI => builtins.uimage2D.clone(),
+            },
+            PT::gimage2DArray => match image_class {
+                IC::F => builtins.image2DArray.clone(),
+                IC::SI => builtins.iimage2DArray.clone(),
+                IC::UI => builtins.uimage2DArray.clone(),
+            },
+            PT::gimage2DMS => match image_class {
+                IC::F => builtins.image2DMS.clone(),
+                IC::SI => builtins.iimage2DMS.clone(),
+                IC::UI => builtins.uimage2DMS.clone(),
+            },
+            PT::gimage2DMSArray => match image_class {
+                IC::F => builtins.image2DMSArray.clone(),
+                IC::SI => builtins.iimage2DMSArray.clone(),
+                IC::UI => builtins.uimage2DMSArray.clone(),
+            },
+            PT::gimage2DRect => match image_class {
+                IC::F => builtins.image2DRect.clone(),
+                IC::SI => builtins.iimage2DRect.clone(),
+                IC::UI => builtins.uimage2DRect.clone(),
+            },
+            PT::gimage3D => match image_class {
+                IC::F => builtins.image3D.clone(),
+                IC::SI => builtins.iimage3D.clone(),
+                IC::UI => builtins.uimage3D.clone(),
+            },
+            PT::gimageCube => match image_class {
+                IC::F => builtins.imageCube.clone(),
+                IC::SI => builtins.iimageCube.clone(),
+                IC::UI => builtins.uimageCube.clone(),
+            },
+            PT::gimageCubeArray => match image_class {
+                IC::F => builtins.imageCubeArray.clone(),
+                IC::SI => builtins.iimageCubeArray.clone(),
+                IC::UI => builtins.uimageCubeArray.clone(),
+            },
+            PT::gimageBuffer => match image_class {
+                IC::F => builtins.imageBuffer.clone(),
+                IC::SI => builtins.iimageBuffer.clone(),
+                IC::UI => builtins.uimageBuffer.clone(),
+            },
+
+            PT::gtexture1D => match image_class {
+                IC::F => builtins.texture1D.clone(),
+                IC::SI => builtins.itexture1D.clone(),
+                IC::UI => builtins.utexture1D.clone(),
+            },
+            PT::gtexture1DArray => match image_class {
+                IC::F => builtins.texture1DArray.clone(),
+                IC::SI => builtins.itexture1DArray.clone(),
+                IC::UI => builtins.utexture1DArray.clone(),
+            },
+            PT::gtexture2D => match image_class {
+                IC::F => builtins.texture2D.clone(),
+                IC::SI => builtins.itexture2D.clone(),
+                IC::UI => builtins.utexture2D.clone(),
+            },
+            PT::gtexture2DArray => match image_class {
+                IC::F => builtins.texture2DArray.clone(),
+                IC::SI => builtins.itexture2DArray.clone(),
+                IC::UI => builtins.utexture2DArray.clone(),
+            },
+            PT::gtexture2DMS => match image_class {
+                IC::F => builtins.texture2DMS.clone(),
+                IC::SI => builtins.itexture2DMS.clone(),
+                IC::UI => builtins.utexture2DMS.clone(),
+            },
+            PT::gtexture2DMSArray => match image_class {
+                IC::F => builtins.texture2DMSArray.clone(),
+                IC::SI => builtins.itexture2DMSArray.clone(),
+                IC::UI => builtins.utexture2DMSArray.clone(),
+            },
+            PT::gtexture2DRect => match image_class {
+                IC::F => builtins.texture2DRect.clone(),
+                IC::SI => builtins.itexture2DRect.clone(),
+                IC::UI => builtins.utexture2DRect.clone(),
+            },
+            PT::gtexture3D => match image_class {
+                IC::F => builtins.texture3D.clone(),
+                IC::SI => builtins.itexture3D.clone(),
+                IC::UI => builtins.utexture3D.clone(),
+            },
+            PT::gtextureCube => match image_class {
+                IC::F => builtins.textureCube.clone(),
+                IC::SI => builtins.itextureCube.clone(),
+                IC::UI => builtins.utextureCube.clone(),
+            },
+            PT::gtextureCubeArray => match image_class {
+                IC::F => builtins.textureCubeArray.clone(),
+                IC::SI => builtins.itextureCubeArray.clone(),
+                IC::UI => builtins.utextureCubeArray.clone(),
+            },
+            PT::gtextureBuffer => match image_class {
+                IC::F => builtins.textureBuffer.clone(),
+                IC::SI => builtins.itextureBuffer.clone(),
+                IC::UI => builtins.utextureBuffer.clone(),
+            },
+
+            PT::gvec4 => match image_class {
+                IC::F => builtins.vec4.clone(),
+                IC::SI => builtins.ivec4.clone(),
+                IC::UI => builtins.uvec4.clone(),
+            },
+
+            PT::subpassInput => {
+                todo!()
+            }
+            PT::subpassInputMS => {
+                todo!()
+            }
+            PT::sampler => builtins.sampler.clone(),
+            PT::samplerShadow => builtins.samplerShadow.clone(),
+        }
+    }
 }
 
 /// Signature of a built-in operation (function or operator).
@@ -231,6 +557,32 @@ pub struct BuiltinSignature {
     pub lower_fn:
         fn(&mut (), &mut ir::FunctionBuilder, args: &[ir::IdRef], types: &[ir::Type], ret: ir::Type) -> ir::Value,
 }
+
+/*
+impl BuiltinSignature {
+    pub fn to_function_signature(
+        &self,
+        tyctxt: &TypeCtxt,
+        substitute_vec_len: u8,
+        substitute_image_class: ImageClass,
+    ) -> FunctionSignature {
+        let parameter_types: Vec<_> = self
+            .parameter_types
+            .iter()
+            .map(|ty| pseudo_type_to_concrete_type(*ty, &tyctxt.prim_tys, substitute_vec_len, substitute_image_class))
+            .collect();
+        let return_type = pseudo_type_to_concrete_type(
+            self.result_type,
+            &tyctxt.prim_tys,
+            substitute_vec_len,
+            substitute_image_class,
+        );
+        FunctionSignature {
+            parameter_types,
+            return_type,
+        }
+    }
+}*/
 
 impl PartialEq for BuiltinSignature {
     fn eq(&self, other: &Self) -> bool {
@@ -257,337 +609,6 @@ impl fmt::Debug for BuiltinSignature {
         write!(f, "result_type: {:?}, ", self.result_type)?;
         write!(f, "lower: <fn>, ")?;
         write!(f, "}}")
-    }
-}
-
-#[derive(Copy, Clone)]
-pub(crate) enum ImageClass {
-    F,
-    SI,
-    UI,
-}
-
-pub(crate) fn pseudo_type_to_concrete_type(
-    pseudo_type: PseudoType,
-    builtins: &PrimitiveTypes,
-    vec_len: u8,
-    image_class: ImageClass,
-) -> Type {
-    use ImageClass as IC;
-    use PseudoType as PT;
-    match pseudo_type {
-        PT::void => builtins.void.clone(),
-        PT::float => builtins.float.clone(),
-        PT::double => builtins.double.clone(),
-        PT::int => builtins.int.clone(),
-        PT::uint => builtins.uint.clone(),
-        PT::bool => builtins.bool.clone(),
-        PT::vecN => match vec_len {
-            1 => builtins.float.clone(),
-            2 => builtins.vec2.clone(),
-            3 => builtins.vec3.clone(),
-            4 => builtins.vec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::dvecN => match vec_len {
-            1 => builtins.double.clone(),
-            2 => builtins.dvec2.clone(),
-            3 => builtins.dvec3.clone(),
-            4 => builtins.dvec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::ivecN => match vec_len {
-            1 => builtins.int.clone(),
-            2 => builtins.ivec2.clone(),
-            3 => builtins.ivec3.clone(),
-            4 => builtins.ivec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::uvecN => match vec_len {
-            1 => builtins.uint.clone(),
-            2 => builtins.uvec2.clone(),
-            3 => builtins.uvec3.clone(),
-            4 => builtins.uvec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::bvecN => match vec_len {
-            1 => builtins.bool.clone(),
-            2 => builtins.bvec2.clone(),
-            3 => builtins.bvec3.clone(),
-            4 => builtins.bvec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::vec2 => builtins.vec2.clone(),
-        PT::vec3 => builtins.vec3.clone(),
-        PT::vec4 => builtins.vec4.clone(),
-        PT::ivec2 => builtins.ivec2.clone(),
-        PT::ivec3 => builtins.ivec3.clone(),
-        PT::ivec4 => builtins.ivec4.clone(),
-        PT::uvec2 => builtins.uvec2.clone(),
-        PT::uvec3 => builtins.uvec3.clone(),
-        PT::uvec4 => builtins.uvec4.clone(),
-        PT::dvec2 => builtins.dvec2.clone(),
-        PT::dvec3 => builtins.dvec3.clone(),
-        PT::dvec4 => builtins.dvec4.clone(),
-        PT::bvec2 => builtins.bvec2.clone(),
-        PT::bvec3 => builtins.bvec3.clone(),
-        PT::bvec4 => builtins.bvec4.clone(),
-        PT::highp_vecN => match vec_len {
-            1 => builtins.float.clone(),
-            2 => builtins.vec2.clone(),
-            3 => builtins.vec3.clone(),
-            4 => builtins.vec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::highp_ivecN => match vec_len {
-            1 => builtins.int.clone(),
-            2 => builtins.ivec2.clone(),
-            3 => builtins.ivec3.clone(),
-            4 => builtins.ivec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::modf_result_vecN => match vec_len {
-            1 => builtins.modf_result_float.clone(),
-            2 => builtins.modf_result_vec2.clone(),
-            3 => builtins.modf_result_vec3.clone(),
-            4 => builtins.modf_result_vec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::modf_result_dvecN => match vec_len {
-            1 => builtins.modf_result_double.clone(),
-            2 => builtins.modf_result_dvec2.clone(),
-            3 => builtins.modf_result_dvec3.clone(),
-            4 => builtins.modf_result_dvec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::frexp_result_highp_vecN => match vec_len {
-            1 => builtins.frexp_result_float.clone(),
-            2 => builtins.frexp_result_vec2.clone(),
-            3 => builtins.frexp_result_vec3.clone(),
-            4 => builtins.frexp_result_vec4.clone(),
-            _ => panic!("invalid vector length"),
-        },
-        PT::mat2 => builtins.mat2.clone(),
-        PT::mat3 => builtins.mat3.clone(),
-        PT::mat4 => builtins.mat4.clone(),
-        PT::mat2x2 => builtins.mat2x2.clone(),
-        PT::mat2x3 => builtins.mat2x3.clone(),
-        PT::mat2x4 => builtins.mat2x4.clone(),
-        PT::mat3x2 => builtins.mat3x2.clone(),
-        PT::mat3x3 => builtins.mat3x3.clone(),
-        PT::mat3x4 => builtins.mat3x4.clone(),
-        PT::mat4x2 => builtins.mat4x2.clone(),
-        PT::mat4x3 => builtins.mat4x3.clone(),
-        PT::mat4x4 => builtins.mat4x4.clone(),
-        PT::dmat2 => builtins.dmat2.clone(),
-        PT::dmat3 => builtins.dmat3.clone(),
-        PT::dmat4 => builtins.dmat4.clone(),
-        PT::dmat2x2 => builtins.dmat2x2.clone(),
-        PT::dmat2x3 => builtins.dmat2x3.clone(),
-        PT::dmat2x4 => builtins.dmat2x4.clone(),
-        PT::dmat3x2 => builtins.dmat3x2.clone(),
-        PT::dmat3x3 => builtins.dmat3x3.clone(),
-        PT::dmat3x4 => builtins.dmat3x4.clone(),
-        PT::dmat4x2 => builtins.dmat4x2.clone(),
-        PT::dmat4x3 => builtins.dmat4x3.clone(),
-        PT::dmat4x4 => builtins.dmat4x4.clone(),
-
-        PT::image1D => builtins.image1D.clone(),
-        PT::image1DArray => builtins.image1DArray.clone(),
-        PT::image2D => builtins.image2D.clone(),
-        PT::image2DArray => builtins.image2DArray.clone(),
-        PT::image2DMS => builtins.image2DMS.clone(),
-        PT::image2DMSArray => builtins.image2DMSArray.clone(),
-        PT::image2DRect => builtins.image2DRect.clone(),
-        PT::image3D => builtins.image3D.clone(),
-        PT::imageCube => builtins.imageCube.clone(),
-        PT::imageCubeArray => builtins.imageCubeArray.clone(),
-        PT::imageBuffer => builtins.imageBuffer.clone(),
-        PT::uimage1D => builtins.uimage1D.clone(),
-        PT::uimage1DArray => builtins.uimage1DArray.clone(),
-        PT::uimage2D => builtins.uimage2D.clone(),
-        PT::uimage2DArray => builtins.uimage2DArray.clone(),
-        PT::uimage2DMS => builtins.uimage2DMS.clone(),
-        PT::uimage2DMSArray => builtins.uimage2DMSArray.clone(),
-        PT::uimage2DRect => builtins.uimage2DRect.clone(),
-        PT::uimage3D => builtins.uimage3D.clone(),
-        PT::uimageCube => builtins.uimageCube.clone(),
-        PT::uimageCubeArray => builtins.uimageCubeArray.clone(),
-        PT::uimageBuffer => builtins.uimageBuffer.clone(),
-        PT::iimage1D => builtins.iimage1D.clone(),
-        PT::iimage1DArray => builtins.iimage1DArray.clone(),
-        PT::iimage2D => builtins.iimage2D.clone(),
-        PT::iimage2DArray => builtins.iimage2DArray.clone(),
-        PT::iimage2DMS => builtins.iimage2DMS.clone(),
-        PT::iimage2DMSArray => builtins.iimage2DMSArray.clone(),
-        PT::iimage2DRect => builtins.iimage2DRect.clone(),
-        PT::iimage3D => builtins.iimage3D.clone(),
-        PT::iimageCube => builtins.iimageCube.clone(),
-        PT::iimageCubeArray => builtins.iimageCubeArray.clone(),
-        PT::iimageBuffer => builtins.iimageBuffer.clone(),
-
-        PT::texture1D => builtins.texture1D.clone(),
-        PT::texture1DArray => builtins.texture1DArray.clone(),
-        PT::texture2D => builtins.texture2D.clone(),
-        PT::texture2DArray => builtins.texture2DArray.clone(),
-        PT::texture2DMS => builtins.texture2DMS.clone(),
-        PT::texture2DMSArray => builtins.texture2DMSArray.clone(),
-        PT::texture2DRect => builtins.texture2DRect.clone(),
-        PT::texture3D => builtins.texture3D.clone(),
-        PT::textureCube => builtins.textureCube.clone(),
-        PT::textureCubeArray => builtins.textureCubeArray.clone(),
-        PT::textureBuffer => builtins.textureBuffer.clone(),
-
-        PT::itexture1D => builtins.itexture1D.clone(),
-        PT::itexture1DArray => builtins.itexture1DArray.clone(),
-        PT::itexture2D => builtins.itexture2D.clone(),
-        PT::itexture2DArray => builtins.itexture2DArray.clone(),
-        PT::itexture2DMS => builtins.itexture2DMS.clone(),
-        PT::itexture2DMSArray => builtins.itexture2DMSArray.clone(),
-        PT::itexture2DRect => builtins.itexture2DRect.clone(),
-        PT::itexture3D => builtins.itexture3D.clone(),
-        PT::itextureCube => builtins.itextureCube.clone(),
-        PT::itextureCubeArray => builtins.itextureCubeArray.clone(),
-        PT::itextureBuffer => builtins.itextureBuffer.clone(),
-
-        PT::utexture1D => builtins.utexture1D.clone(),
-        PT::utexture1DArray => builtins.utexture1DArray.clone(),
-        PT::utexture2D => builtins.utexture2D.clone(),
-        PT::utexture2DArray => builtins.utexture2DArray.clone(),
-        PT::utexture2DMS => builtins.utexture2DMS.clone(),
-        PT::utexture2DMSArray => builtins.utexture2DMSArray.clone(),
-        PT::utexture2DRect => builtins.utexture2DRect.clone(),
-        PT::utexture3D => builtins.utexture3D.clone(),
-        PT::utextureCube => builtins.utextureCube.clone(),
-        PT::utextureCubeArray => builtins.utextureCubeArray.clone(),
-        PT::utextureBuffer => builtins.utextureBuffer.clone(),
-
-        PT::gimage1D => match image_class {
-            IC::F => builtins.image1D.clone(),
-            IC::SI => builtins.iimage1D.clone(),
-            IC::UI => builtins.uimage1D.clone(),
-        },
-        PT::gimage1DArray => match image_class {
-            IC::F => builtins.image1DArray.clone(),
-            IC::SI => builtins.iimage1DArray.clone(),
-            IC::UI => builtins.uimage1DArray.clone(),
-        },
-        PT::gimage2D => match image_class {
-            IC::F => builtins.image2D.clone(),
-            IC::SI => builtins.iimage2D.clone(),
-            IC::UI => builtins.uimage2D.clone(),
-        },
-        PT::gimage2DArray => match image_class {
-            IC::F => builtins.image2DArray.clone(),
-            IC::SI => builtins.iimage2DArray.clone(),
-            IC::UI => builtins.uimage2DArray.clone(),
-        },
-        PT::gimage2DMS => match image_class {
-            IC::F => builtins.image2DMS.clone(),
-            IC::SI => builtins.iimage2DMS.clone(),
-            IC::UI => builtins.uimage2DMS.clone(),
-        },
-        PT::gimage2DMSArray => match image_class {
-            IC::F => builtins.image2DMSArray.clone(),
-            IC::SI => builtins.iimage2DMSArray.clone(),
-            IC::UI => builtins.uimage2DMSArray.clone(),
-        },
-        PT::gimage2DRect => match image_class {
-            IC::F => builtins.image2DRect.clone(),
-            IC::SI => builtins.iimage2DRect.clone(),
-            IC::UI => builtins.uimage2DRect.clone(),
-        },
-        PT::gimage3D => match image_class {
-            IC::F => builtins.image3D.clone(),
-            IC::SI => builtins.iimage3D.clone(),
-            IC::UI => builtins.uimage3D.clone(),
-        },
-        PT::gimageCube => match image_class {
-            IC::F => builtins.imageCube.clone(),
-            IC::SI => builtins.iimageCube.clone(),
-            IC::UI => builtins.uimageCube.clone(),
-        },
-        PT::gimageCubeArray => match image_class {
-            IC::F => builtins.imageCubeArray.clone(),
-            IC::SI => builtins.iimageCubeArray.clone(),
-            IC::UI => builtins.uimageCubeArray.clone(),
-        },
-        PT::gimageBuffer => match image_class {
-            IC::F => builtins.imageBuffer.clone(),
-            IC::SI => builtins.iimageBuffer.clone(),
-            IC::UI => builtins.uimageBuffer.clone(),
-        },
-
-        PT::gtexture1D => match image_class {
-            IC::F => builtins.texture1D.clone(),
-            IC::SI => builtins.itexture1D.clone(),
-            IC::UI => builtins.utexture1D.clone(),
-        },
-        PT::gtexture1DArray => match image_class {
-            IC::F => builtins.texture1DArray.clone(),
-            IC::SI => builtins.itexture1DArray.clone(),
-            IC::UI => builtins.utexture1DArray.clone(),
-        },
-        PT::gtexture2D => match image_class {
-            IC::F => builtins.texture2D.clone(),
-            IC::SI => builtins.itexture2D.clone(),
-            IC::UI => builtins.utexture2D.clone(),
-        },
-        PT::gtexture2DArray => match image_class {
-            IC::F => builtins.texture2DArray.clone(),
-            IC::SI => builtins.itexture2DArray.clone(),
-            IC::UI => builtins.utexture2DArray.clone(),
-        },
-        PT::gtexture2DMS => match image_class {
-            IC::F => builtins.texture2DMS.clone(),
-            IC::SI => builtins.itexture2DMS.clone(),
-            IC::UI => builtins.utexture2DMS.clone(),
-        },
-        PT::gtexture2DMSArray => match image_class {
-            IC::F => builtins.texture2DMSArray.clone(),
-            IC::SI => builtins.itexture2DMSArray.clone(),
-            IC::UI => builtins.utexture2DMSArray.clone(),
-        },
-        PT::gtexture2DRect => match image_class {
-            IC::F => builtins.texture2DRect.clone(),
-            IC::SI => builtins.itexture2DRect.clone(),
-            IC::UI => builtins.utexture2DRect.clone(),
-        },
-        PT::gtexture3D => match image_class {
-            IC::F => builtins.texture3D.clone(),
-            IC::SI => builtins.itexture3D.clone(),
-            IC::UI => builtins.utexture3D.clone(),
-        },
-        PT::gtextureCube => match image_class {
-            IC::F => builtins.textureCube.clone(),
-            IC::SI => builtins.itextureCube.clone(),
-            IC::UI => builtins.utextureCube.clone(),
-        },
-        PT::gtextureCubeArray => match image_class {
-            IC::F => builtins.textureCubeArray.clone(),
-            IC::SI => builtins.itextureCubeArray.clone(),
-            IC::UI => builtins.utextureCubeArray.clone(),
-        },
-        PT::gtextureBuffer => match image_class {
-            IC::F => builtins.textureBuffer.clone(),
-            IC::SI => builtins.itextureBuffer.clone(),
-            IC::UI => builtins.utextureBuffer.clone(),
-        },
-
-        PT::gvec4 => match image_class {
-            IC::F => builtins.vec4.clone(),
-            IC::SI => builtins.ivec4.clone(),
-            IC::UI => builtins.uvec4.clone(),
-        },
-
-        PT::subpassInput => {
-            todo!()
-        }
-        PT::subpassInputMS => {
-            todo!()
-        }
-        PT::sampler => builtins.sampler.clone(),
-        PT::samplerShadow => builtins.samplerShadow.clone(),
     }
 }
 

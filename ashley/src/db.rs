@@ -219,6 +219,11 @@ define_database_tables! {
             struct_field_types_diagnostics: Vec<ty::TyDiagnostic> [set_struct_field_types_diagnostics]
         } => ty::struct_field_types_query;
 
+        query (global_id: GlobalId) -> {
+            global_ty: ty::Type [set_global_ty],
+            global_ty_diagnostics: Vec<ty::TyDiagnostic> [set_global_ty_diagnostics]
+        } => ty::global_ty_query;
+
         query (function_id: FunctionId) -> {
             function_signature: ty::FunctionSignature [set_function_signature],
             function_signature_diagnostics: Vec<ty::TyDiagnostic> [set_function_signature_diagnostics]

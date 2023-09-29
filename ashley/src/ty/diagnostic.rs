@@ -1,15 +1,16 @@
 use crate::{
     def,
-    def::{body::BodyMap, DefAstId, DefLoc, FunctionLoc, HasSource, InFile},
+    def::{body::BodyMap, AstId, DefAstId, DefId, DefLoc, FunctionId, FunctionLoc, HasSource, InFile},
     diagnostic::Diagnostic,
     syntax::{ast, SyntaxNode},
-    ty::{body::Body, Type},
+    ty::{
+        body::{Body, DefExprId, ExprAstId},
+        Type,
+    },
     utils::CommaSeparated,
     CompilerDb, SourceFileId,
 };
 use ashley_data_structures::Id;
-
-type ItemExprId = Id<def::body::Expr>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum ComponentSyntaxError {
@@ -21,18 +22,18 @@ pub(crate) enum ComponentSyntaxError {
 pub enum TyDiagnostic {
     // ------ Type-checking, name resolution ------
     NoMatchingConstructor {
-        expr: ItemExprId,
+        expr: ExprAstId,
         ty: Type,
         arg_tys: Vec<Type>,
     },
     NoSuchTypeConstructor {
-        expr: ItemExprId,
+        expr: ExprAstId,
         ty: Type,
     },
 
     /*"indexing into a type that is not an array or vector"*/
     InvalidIndexing {
-        expr: ItemExprId,
+        expr: ExprAstId,
         base_ty: Type,
     },
 
@@ -40,128 +41,164 @@ pub enum TyDiagnostic {
     .diagnostics
     .push(diag_span_error!(index_expr, "index must be of type int"));*/
     InvalidIndexType {
-        index: Id<def::body::Expr>,
+        /// AST ID of the index expression (the thing in the square brackets, not the whole _indexing_ expression).
+        expr: ExprAstId,
         ty: Type,
     },
     UnresolvedFunction {
-        call: ItemExprId,
+        expr: ExprAstId,
     },
     ExpectedFunctionName {
-        call: ItemExprId,
+        expr: ExprAstId,
     },
     ExpectedValue {
-        expr: ItemExprId,
+        expr: ExprAstId,
+    },
+    ExpectedBoolean {
+        expr: ExprAstId,
+        ty: Type,
     },
     NoMatchingOverload {
-        call: ItemExprId,
+        expr: ExprAstId,
+        func_name: String,
         arg_types: Vec<Type>,
-        candidates: Vec<FunctionLoc>,
+        candidates: Vec<FunctionId>,
     },
     AmbiguousOverload {
+        expr: ExprAstId,
         func_name: String,
-        candidates: Vec<FunctionLoc>,
+        candidates: Vec<FunctionId>,
     },
     InvalidTypesForPrefixOp {
-        expr: ItemExprId,
+        expr: ExprAstId,
         operand_ty: Type,
     },
     InvalidTypesForPostfixOp {
+        expr: ExprAstId,
         op: ast::UnaryOp,
-        expr: ItemExprId,
         operand_ty: Type,
     },
     InvalidTypesForBinaryOp {
-        source: ItemExprId,
+        expr: ExprAstId,
         left_ty: Type,
         right_ty: Type,
     },
-
+    InvalidNumberOfArguments {
+        expr: ExprAstId,
+        expected: u32,
+        got: u32,
+    },
     NoImplicitConversion {
-        expr: ItemExprId,
+        expr: ExprAstId,
         from: Type,
         to: Type,
     },
     InvalidComponentSelection {
-        expr: ItemExprId,
+        expr: ExprAstId,
         error: ComponentSyntaxError,
         receiver: Type,
     },
     UnresolvedField {
-        expr: ItemExprId,
+        expr: ExprAstId,
         name: String,
         receiver: Type,
     },
     UnresolvedPath {
-        expr: ItemExprId,
+        expr: ExprAstId,
     },
     ReceiverNotAStructOrVector {
-        expr: ItemExprId,
+        expr: ExprAstId,
     },
     ParseIntError {
-        expr: ItemExprId,
+        expr: ExprAstId,
     },
     ParseFloatError {
-        expr: ItemExprId,
+        expr: ExprAstId,
     },
 
     // ------ Type resolution ------
     UnresolvedType {
-        ty_loc: DefAstId<ast::Type>,
+        ty_loc: AstId<ast::Type>,
         name: String,
     },
     InvalidArrayStride {
-        ty_loc: DefAstId<ast::Type>,
+        ty_loc: AstId<ast::Type>,
         elem_ty_size: u32,
         stride: u32,
     },
     ArrayStrideOnOpaqueType {
-        ty_loc: DefAstId<ast::Type>,
+        ty_loc: AstId<ast::Type>,
         element_type: Type,
     },
     Unimplemented {
-        ty_loc: DefAstId<ast::Type>,
+        ty_loc: AstId<ast::Type>,
     },
 }
 
 impl TyDiagnostic {
-    pub fn render(
-        &self,
-        db: &dyn CompilerDb,
-        //body: &Body,
-        body_map: &BodyMap,
-        source_file: SourceFileId,
-        syntax_root: &SyntaxNode,
-    ) -> Diagnostic {
-        let get_expr_syntax = |expr: &ItemExprId| InFile::new(source_file, body_map[*expr].to_node(syntax_root));
+    pub fn render(&self, db: &dyn CompilerDb, owner_def: DefId) -> Diagnostic {
+        let loc = owner_def.loc(db);
+        let module = loc.module();
+        let ast_map = owner_def.ast_map(db);
+        //let (source_file, green_node) = owner_def.module(db).syntax(db);
+
+        let syntax = |ast_id: &AstId<ast::Expr>| ast_map.node_in_file(db, module, *ast_id);
+        let ty_syntax = |ast_id: &AstId<ast::Type>| ast_map.node_in_file(db, module, *ast_id);
 
         let diag = match self {
             TyDiagnostic::NoMatchingConstructor { expr, arg_tys, ty } => {
-                let expr_syntax = get_expr_syntax(expr);
+                let syn = syntax(expr);
                 Diagnostic::error(format!("no matching constructor for `{ty}`"))
-                    .span(&expr_syntax.span())
+                    .span(syn.span())
                     .note(format!("argument types are {}", CommaSeparated(&arg_tys)))
             }
             TyDiagnostic::NoSuchTypeConstructor { ty, expr } => {
-                let expr_syntax = get_expr_syntax(expr);
-                Diagnostic::error(format!("no constructor for type `{ty}`")).span(&expr_syntax.span())
+                let syn = syntax(expr);
+                Diagnostic::error(format!("no constructor for type `{ty}`")).span(syn.span())
             }
-            TyDiagnostic::InvalidIndexing { .. } => {
-                todo!()
+            TyDiagnostic::InvalidIndexing { expr, base_ty } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("values of type {base_ty} cannot be indexed")).span(syn.span())
             }
-            TyDiagnostic::InvalidIndexType { .. } => {
-                todo!()
+            TyDiagnostic::InvalidIndexType { expr, ty } => {
+                let syn = syntax(expr);
+                Diagnostic::error("index expressions should be integers")
+                    .label(syn.span(), format!("this has type `{ty}`"))
             }
-            TyDiagnostic::UnresolvedFunction { .. } => {
-                todo!()
+            TyDiagnostic::UnresolvedFunction { expr } => {
+                let syn = syntax(expr);
+                Diagnostic::error("unresolved function name").span(syn.span())
             }
-            TyDiagnostic::ExpectedFunctionName { .. } => {
-                todo!()
+            TyDiagnostic::ExpectedFunctionName { expr } => {
+                let syn = syntax(expr);
+                Diagnostic::error("expected function name").span(syn.span())
             }
-            TyDiagnostic::ExpectedValue { .. } => {
-                todo!()
+            TyDiagnostic::ExpectedValue { expr } => {
+                let syn = syntax(expr);
+                Diagnostic::error("expected value").span(syn.span())
             }
-            TyDiagnostic::NoMatchingOverload { .. } => {
-                todo!()
+            TyDiagnostic::NoMatchingOverload {
+                expr,
+                func_name,
+                arg_types,
+                candidates,
+            } => {
+                let syn = syntax(expr);
+                let mut diag = Diagnostic::error(format!("no matching overload for call to function `{func_name}`"))
+                    .span(syn.span())
+                    .note(format!("argument types are {}", CommaSeparated(&arg_types)));
+                if !candidates.is_empty() {
+                    diag = diag.note("candidates are:");
+                    for candidate in candidates {
+                        let data = candidate.data(db);
+                        let signature = candidate.signature(db);
+                        let name = &data.name;
+                        let return_type = &signature.return_type;
+                        let argument_types = CommaSeparated(&signature.parameter_types);
+                        diag = diag.note(format!("{return_type} {name}({argument_types})"))
+                    }
+                }
+                diag
             }
             TyDiagnostic::AmbiguousOverload { .. } => {
                 todo!()
@@ -173,6 +210,11 @@ impl TyDiagnostic {
                 todo!()
             }
             TyDiagnostic::InvalidTypesForBinaryOp { .. } => {
+                /*self.compiler
+                .diag_error(format!("no overload for binary operation `{op_token}`"))
+                .location(&op_token)
+                .note(format!("operand types are: {lhs_ty} {op_token} {rhs_ty}"))
+                .emit();*/
                 todo!()
             }
             TyDiagnostic::NoImplicitConversion { .. } => {
@@ -197,8 +239,8 @@ impl TyDiagnostic {
                 todo!()
             }
             TyDiagnostic::UnresolvedType { ty_loc, ref name } => {
-                let source = ty_loc.source(db);
-                Diagnostic::error(format!("unresolved type name: `{name}`")).span(source.span())
+                let syn = ty_syntax(ty_loc);
+                Diagnostic::error(format!("unresolved type name: `{name}`")).span(syn.span())
             }
             TyDiagnostic::InvalidArrayStride {
                 ty_loc,
@@ -212,6 +254,14 @@ impl TyDiagnostic {
             }
             TyDiagnostic::Unimplemented { ty_loc } => {
                 todo!()
+            }
+            TyDiagnostic::InvalidNumberOfArguments { .. } => {
+                todo!()
+            }
+            TyDiagnostic::ExpectedBoolean { expr, ty } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("expected boolean expression"))
+                    .label(syn.span(), format!("the expression is of type `{ty}`"))
             }
         };
         diag

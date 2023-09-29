@@ -5,7 +5,7 @@ pub use self::diagnostic::BodyDiagnostic;
 
 use crate::{
     def::{
-        body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, BodyId, BodyKind, BodyOwnerId, DefLoc, DefMap,
+        body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, AstId, AstMap, BodyId, BodyKind, BodyOwnerId, DefLoc,
         FunctionLoc, HasSource, Type,
     },
     syntax::ast,
@@ -18,12 +18,22 @@ use std::{collections::HashMap, ops::Index, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalVar {
+    pub ast_id: AstId<ast::LocalVariable>,
     pub ty: Type,
     pub name: String,
 }
 
+// FIXME: we could put AstIds inside statements instead of having a body map.
+// The IDs will be stable on changes outside of the body, so they should be relatively stable.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Statement {
+pub struct Statement {
+    pub ast_id: AstId<ast::Stmt>,
+    pub kind: StmtKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StmtKind {
     // TODO empty statement?
     Select {
         condition: Id<Expr>,
@@ -61,20 +71,15 @@ pub enum Statement {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
+    pub ast_id: AstId<ast::Block>,
     pub statements: Vec<Id<Statement>>,
-}
-
-impl Block {
-    pub fn new() -> Block {
-        Block { statements: Vec::new() }
-    }
 }
 
 /// Expressions
 // TODO: we could resolve some names here, but only global variables
 // (fields would need the type of the expression, and functions need the argument type for overload resolution)
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Expr {
+pub enum ExprKind {
     // Including BinaryAssign and Assign
     Binary {
         op: ast::BinaryOp,
@@ -119,25 +124,26 @@ pub enum Expr {
     Undef,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Expr {
+    pub ast_id: AstId<ast::Expr>,
+    pub kind: ExprKind,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct BodyMap {
     expr_map: HashMap<AstPtr<ast::Expr>, Id<Expr>>,
-    expr_map_back: IndexVec<AstPtr<ast::Expr>, Id<Expr>>,
-
     statement_map: HashMap<AstPtr<ast::Stmt>, Id<Statement>>,
-    statement_map_back: IndexVec<AstPtr<ast::Stmt>, Id<Statement>>,
-
     block_map: HashMap<AstPtr<ast::Block>, Id<Block>>,
-    block_map_back: IndexVec<AstPtr<ast::Block>, Id<Block>>,
-
     local_var_map: HashMap<AstPtr<ast::LocalVariable>, Id<LocalVar>>,
-    local_var_map_back: IndexVec<AstPtr<ast::LocalVariable>, Id<LocalVar>>,
-
-    /// Used for AstIds in def::Type
-    def_map: DefMap,
+    def_map: AstMap,
+    //expr_map_back: IndexVec<AstPtr<ast::Expr>, Id<Expr>>,
+    //statement_map_back: IndexVec<AstPtr<ast::Stmt>, Id<Statement>>,
+    //block_map_back: IndexVec<AstPtr<ast::Block>, Id<Block>>,
+    //local_var_map_back: IndexVec<AstPtr<ast::LocalVariable>, Id<LocalVar>>,
 }
 
-impl Index<Id<Expr>> for BodyMap {
+/*impl Index<Id<Expr>> for BodyMap {
     type Output = AstPtr<ast::Expr>;
     fn index(&self, index: Id<Expr>) -> &Self::Output {
         &self.expr_map_back[index]
@@ -160,20 +166,20 @@ impl Index<Id<LocalVar>> for BodyMap {
     fn index(&self, index: Id<LocalVar>) -> &Self::Output {
         &self.local_var_map_back[index]
     }
-}
+}*/
 
 impl BodyMap {
     fn new() -> BodyMap {
         BodyMap {
             expr_map: Default::default(),
-            expr_map_back: Default::default(),
             statement_map: Default::default(),
-            statement_map_back: Default::default(),
             block_map: Default::default(),
-            block_map_back: Default::default(),
             local_var_map: Default::default(),
-            local_var_map_back: Default::default(),
-            def_map: DefMap::new(),
+            def_map: AstMap::new(),
+            //expr_map_back: Default::default(),
+            //statement_map_back: Default::default(),
+            //block_map_back: Default::default(),
+            //local_var_map_back: Default::default(),
         }
     }
 }
@@ -187,6 +193,31 @@ pub struct Body {
     pub params: Vec<Id<LocalVar>>,
     pub diagnostics: Vec<BodyDiagnostic>,
     pub entry_block: Option<Id<Block>>,
+}
+
+impl Index<Id<Expr>> for Body {
+    type Output = Expr;
+    fn index(&self, index: Id<Expr>) -> &Self::Output {
+        &self.expressions[index]
+    }
+}
+impl Index<Id<Statement>> for Body {
+    type Output = Statement;
+    fn index(&self, index: Id<Statement>) -> &Self::Output {
+        &self.statements[index]
+    }
+}
+impl Index<Id<LocalVar>> for Body {
+    type Output = LocalVar;
+    fn index(&self, index: Id<LocalVar>) -> &Self::Output {
+        &self.local_vars[index]
+    }
+}
+impl Index<Id<Block>> for Body {
+    type Output = Block;
+    fn index(&self, index: Id<Block>) -> &Self::Output {
+        &self.blocks[index]
+    }
 }
 
 impl Body {

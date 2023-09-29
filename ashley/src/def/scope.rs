@@ -1,8 +1,9 @@
+// TODO: move this (along with Resolver) out of "def" and into "ty", we don't do name resolution at this stage anyway
 use crate::{
     builtins::BuiltinOperationPtr,
     db::ModuleId,
     def,
-    def::{body::LocalVar, AstId, BodyId, DefLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
+    def::{AstId, BodyId, DefLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
     syntax::ast,
     ty,
     ty::Type,
@@ -34,7 +35,7 @@ pub enum ValueRes {
     /// Builtin function.
     BuiltinFunction(BuiltinOperationPtr),
     /// The name resolves to a local variable in the current scope.
-    Local(Id<LocalVar>),
+    Local(Id<ty::body::LocalVar>),
 }
 
 /// Resolution of names in the type namespace.
@@ -59,7 +60,7 @@ impl Scope {
         }
     }
 
-    pub(crate) fn add_local_var(&mut self, name: &str, local_var: Id<LocalVar>) {
+    pub(crate) fn add_local_var(&mut self, name: &str, local_var: Id<ty::body::LocalVar>) {
         // NOTE: shadowing is OK
         self.values.insert(name.to_string(), ValueRes::Local(local_var));
     }

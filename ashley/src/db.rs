@@ -13,7 +13,7 @@ use crate::{
     resolver::{DummyPackageResolver, PackageResolver},
     source_file::LineCharacterRange,
     syntax,
-    syntax::{ast, AstNode, Lang, SyntaxDiagnostic, SyntaxNode, SyntaxNodePtr},
+    syntax::{ast, AstNode, Lang, SyntaxDiagnostic, SyntaxNode, SyntaxNodePtr, SyntaxTree},
     ty,
     ty::TypeCtxt,
     utils::Counter,
@@ -77,6 +77,10 @@ new_key_type! {
 impl ModuleId {
     pub fn items<'a>(&self, compiler: &'a dyn CompilerDb) -> &'a ModuleItems {
         compiler.module_items(*self)
+    }
+
+    pub fn syntax<'a>(&self, db: &'a dyn CompilerDb) -> (SourceFileId, GreenNode) {
+        db.module_syntax_tree(*self)
     }
 }
 
@@ -219,6 +223,8 @@ define_database_tables! {
             function_signature: ty::FunctionSignature [set_function_signature],
             function_signature_diagnostics: Vec<ty::TyDiagnostic> [set_function_signature_diagnostics]
         } => ty::function_signature_query;
+
+        query ty_function_body(function: FunctionId) -> ty::body::Body => ty::body::ty_function_body_query;
 
         /*query (body: BodyId) -> {
             const_eval: Option<ConstantValue>  [set_const_eval],

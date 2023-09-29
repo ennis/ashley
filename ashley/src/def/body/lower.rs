@@ -1,6 +1,6 @@
 use crate::{
     def::{
-        body::{Block, Body, BodyDiagnostic, BodyMap, Expr, LocalVar, Statement},
+        body::{Block, Body, BodyDiagnostic, BodyMap, Expr, ExprKind, LocalVar, Statement, StmtKind},
         lower::{lower_type, lower_type_opt, ItemLowerCtxt},
         InFile,
     },
@@ -32,8 +32,8 @@ impl<'a> BodyLowerCtxt<'a> {
         let ptr = AstPtr::new(source);
         let id = self.body.expressions.push(expr);
         self.map.expr_map.insert(ptr.clone(), id);
-        let id2 = self.map.expr_map_back.push(ptr);
-        assert_eq!(id, id2);
+        //let id2 = self.map.expr_map_back.push(ptr);
+        //assert_eq!(id, id2);
         id
     }
 
@@ -41,8 +41,8 @@ impl<'a> BodyLowerCtxt<'a> {
         let ptr = AstPtr::new(source);
         let id = self.body.statements.push(stmt);
         self.map.statement_map.insert(ptr.clone(), id);
-        let id2 = self.map.statement_map_back.push(ptr);
-        assert_eq!(id, id2);
+        //let id2 = self.map.statement_map_back.push(ptr);
+        //assert_eq!(id, id2);
         id
     }
 
@@ -50,8 +50,8 @@ impl<'a> BodyLowerCtxt<'a> {
         let ptr = AstPtr::new(source);
         let id = self.body.blocks.push(block);
         self.map.block_map.insert(ptr.clone(), id);
-        let id2 = self.map.block_map_back.push(ptr);
-        assert_eq!(id, id2);
+        //let id2 = self.map.block_map_back.push(ptr);
+        //assert_eq!(id, id2);
         id
     }
 
@@ -59,8 +59,8 @@ impl<'a> BodyLowerCtxt<'a> {
         let ptr = AstPtr::new(source);
         let id = self.body.local_vars.push(local_var);
         self.map.local_var_map.insert(ptr.clone(), id);
-        let id2 = self.map.local_var_map_back.push(ptr);
-        assert_eq!(id, id2);
+        //let id2 = self.map.local_var_map_back.push(ptr);
+        //assert_eq!(id, id2);
         id
     }
 
@@ -94,20 +94,27 @@ impl<'a> BodyLowerCtxt<'a> {
             return None;
         };
 
-        let id = self.add_expr(&expr, expr_data);
+        let ast_id = self.map.def_map.push(&expr);
+        let id = self.add_expr(
+            &expr,
+            Expr {
+                ast_id,
+                kind: expr_data,
+            },
+        );
         Some(id)
     }
 
-    fn lower_indexing_expr(&mut self, indexing_expr: &ast::IndexExpr) -> Option<Expr> {
+    fn lower_indexing_expr(&mut self, indexing_expr: &ast::IndexExpr) -> Option<ExprKind> {
         let array = self.lower_expr(indexing_expr.array()?)?;
         let index = self.lower_expr(indexing_expr.index()?)?;
-        Some(Expr::Index {
+        Some(ExprKind::Index {
             array_or_vector: array,
             index,
         })
     }
 
-    fn lower_call_expr(&mut self, call_expr: &ast::CallExpr) -> Option<Expr> {
+    fn lower_call_expr(&mut self, call_expr: &ast::CallExpr) -> Option<ExprKind> {
         let callee = call_expr.callee()?;
         let function = match callee {
             ast::Expr::PathExpr(ref func_path) => func_path.name()?.text(),
@@ -124,63 +131,63 @@ impl<'a> BodyLowerCtxt<'a> {
             let Some(arg_expr) = self.lower_expr(arg) else { continue };
             args.push(arg_expr);
         }
-        Some(Expr::Call { function, args })
+        Some(ExprKind::Call { function, args })
     }
 
-    fn lower_ctor_expr(&mut self, ctor_expr: &ast::ConstructorExpr) -> Option<Expr> {
+    fn lower_ctor_expr(&mut self, ctor_expr: &ast::ConstructorExpr) -> Option<ExprKind> {
         let ty = lower_type_opt(self.compiler, &mut self.map.def_map, &ctor_expr.ty());
         let mut args = vec![];
         for arg in ctor_expr.arg_list()?.arguments() {
             let Some(arg_expr) = self.lower_expr(arg) else { continue };
             args.push(arg_expr);
         }
-        Some(Expr::Constructor { ty, args })
+        Some(ExprKind::Constructor { ty, args })
     }
 
-    fn lower_prefix_expr(&mut self, prefix_expr: &ast::PrefixExpr) -> Option<Expr> {
-        Some(Expr::Prefix {
+    fn lower_prefix_expr(&mut self, prefix_expr: &ast::PrefixExpr) -> Option<ExprKind> {
+        Some(ExprKind::Prefix {
             op: prefix_expr.op_details()?.1,
             expr: self.lower_expr(prefix_expr.expr()?)?,
         })
     }
 
-    fn lower_postfix_expr(&mut self, postfix_expr: &ast::PostfixExpr) -> Option<Expr> {
-        Some(Expr::Postfix {
+    fn lower_postfix_expr(&mut self, postfix_expr: &ast::PostfixExpr) -> Option<ExprKind> {
+        Some(ExprKind::Postfix {
             op: postfix_expr.op_details()?.1,
             expr: self.lower_expr(postfix_expr.expr()?)?,
         })
     }
 
-    fn lower_path_expr(&mut self, path_expr: &ast::PathExpr) -> Option<Expr> {
-        Some(Expr::Name {
+    fn lower_path_expr(&mut self, path_expr: &ast::PathExpr) -> Option<ExprKind> {
+        Some(ExprKind::Name {
             name: path_expr.name()?.text(),
         })
     }
 
-    fn lower_field_expr(&mut self, field_expr: &ast::FieldExpr) -> Option<Expr> {
-        Some(Expr::Field {
+    fn lower_field_expr(&mut self, field_expr: &ast::FieldExpr) -> Option<ExprKind> {
+        Some(ExprKind::Field {
             expr: self.lower_expr(field_expr.expr()?)?,
             name: field_expr.field()?.text(),
         })
     }
 
-    fn lower_bin_expr(&mut self, bin_expr: &ast::BinExpr) -> Option<Expr> {
-        Some(Expr::Binary {
+    fn lower_bin_expr(&mut self, bin_expr: &ast::BinExpr) -> Option<ExprKind> {
+        Some(ExprKind::Binary {
             op: bin_expr.op_details()?.1,
             lhs: self.lower_expr(bin_expr.lhs()?)?,
             rhs: self.lower_expr(bin_expr.rhs()?)?,
         })
     }
 
-    fn lower_ternary_expr(&mut self, ternary_expr: &ast::TernaryExpr) -> Option<Expr> {
-        Some(Expr::Ternary {
+    fn lower_ternary_expr(&mut self, ternary_expr: &ast::TernaryExpr) -> Option<ExprKind> {
+        Some(ExprKind::Ternary {
             condition: self.lower_expr(ternary_expr.condition()?.expr()?)?,
             true_expr: self.lower_expr(ternary_expr.true_alt()?)?,
             false_expr: self.lower_expr(ternary_expr.false_alt()?)?,
         })
     }
 
-    fn lower_lit_expr(&mut self, lit_expr: &ast::LitExpr) -> Option<Expr> {
+    fn lower_lit_expr(&mut self, lit_expr: &ast::LitExpr) -> Option<ExprKind> {
         let value = match lit_expr.kind() {
             ast::LiteralKind::String(str) => ConstantValue::String(str.text().to_string()),
             ast::LiteralKind::IntNumber(v) => match v.value_i32() {
@@ -189,7 +196,7 @@ impl<'a> BodyLowerCtxt<'a> {
                     self.body.diagnostics.push(BodyDiagnostic::ParseIntError {
                         lit_expr: InFile::new_ast_ptr(self.source_file, &lit_expr),
                     });
-                    return Some(Expr::Undef);
+                    return Some(ExprKind::Undef);
                 }
             },
             ast::LiteralKind::FloatNumber(v) => {
@@ -202,40 +209,40 @@ impl<'a> BodyLowerCtxt<'a> {
                         self.body.diagnostics.push(BodyDiagnostic::ParseFloatError {
                             lit_expr: InFile::new_ast_ptr(self.source_file, &lit_expr),
                         });
-                        return Some(Expr::Undef);
+                        return Some(ExprKind::Undef);
                     }
                 }
             }
             ast::LiteralKind::Bool(v) => ConstantValue::Bool(v),
         };
-        Some(Expr::Literal { value })
+        Some(ExprKind::Literal { value })
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    fn lower_return_stmt(&mut self, return_stmt: &ast::ReturnStmt) -> Option<Statement> {
+    fn lower_return_stmt(&mut self, return_stmt: &ast::ReturnStmt) -> Option<StmtKind> {
         let return_value = if let Some(expr) = return_stmt.expr() {
             Some(self.lower_expr(expr)?)
         } else {
             None
         };
 
-        Some(Statement::Return { value: return_value })
+        Some(StmtKind::Return { value: return_value })
     }
 
-    fn lower_expr_stmt(&mut self, expr_stmt: &ast::ExprStmt) -> Option<Statement> {
-        Some(Statement::ExprStmt {
+    fn lower_expr_stmt(&mut self, expr_stmt: &ast::ExprStmt) -> Option<StmtKind> {
+        Some(StmtKind::ExprStmt {
             expr: self.lower_expr(expr_stmt.expr()?)?,
         })
     }
 
-    fn lower_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> Option<Statement> {
+    fn lower_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> Option<StmtKind> {
         let block = self.lower_block(block_stmt.block()?);
-        Some(Statement::Block { block })
+        Some(StmtKind::Block { block })
     }
 
-    fn lower_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> Option<Statement> {
-        Some(Statement::Select {
+    fn lower_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> Option<StmtKind> {
+        Some(StmtKind::Select {
             condition: self.lower_expr(if_stmt.condition()?.expr()?)?,
             true_branch: self.lower_statement(if_stmt.stmt()?)?,
             false_branch: if let Some(else_branch) = if_stmt.else_branch() {
@@ -246,7 +253,7 @@ impl<'a> BodyLowerCtxt<'a> {
         })
     }
 
-    fn lower_for_stmt(&mut self, for_stmt: &ast::ForStmt) -> Option<Statement> {
+    fn lower_for_stmt(&mut self, for_stmt: &ast::ForStmt) -> Option<StmtKind> {
         let initializer = if let Some(stmt) = for_stmt.initializer()?.stmt() {
             Some(self.lower_statement(stmt)?)
         } else {
@@ -267,7 +274,7 @@ impl<'a> BodyLowerCtxt<'a> {
 
         let stmt = self.lower_statement(for_stmt.body()?)?;
 
-        Some(Statement::ForLoop {
+        Some(StmtKind::ForLoop {
             initializer,
             condition,
             loop_expr,
@@ -275,19 +282,19 @@ impl<'a> BodyLowerCtxt<'a> {
         })
     }
 
-    fn lower_while_stmt(&mut self, while_stmt: &ast::WhileStmt) -> Option<Statement> {
+    fn lower_while_stmt(&mut self, while_stmt: &ast::WhileStmt) -> Option<StmtKind> {
         let condition = self.lower_expr(while_stmt.condition()?.expr()?)?;
 
         let stmt = self.lower_statement(while_stmt.stmt()?)?;
 
-        Some(Statement::WhileLoop { condition, stmt })
+        Some(StmtKind::WhileLoop { condition, stmt })
     }
 
-    fn lower_break_stmt(&mut self, _break: ast::BreakStmt) -> Option<Statement> {
-        Some(Statement::Error)
+    fn lower_break_stmt(&mut self, _break: ast::BreakStmt) -> Option<StmtKind> {
+        Some(StmtKind::Error)
     }
 
-    fn lower_local_variable_stmt(&mut self, local_var_stmt: &ast::LocalVariable) -> Option<Statement> {
+    fn lower_local_variable_stmt(&mut self, local_var_stmt: &ast::LocalVariable) -> Option<StmtKind> {
         let ty = lower_type_opt(self.compiler, &mut self.map.def_map, &local_var_stmt.ty());
         let name = local_var_stmt.name()?.text();
         let initializer = if let Some(initializer) = local_var_stmt.initializer() {
@@ -295,8 +302,9 @@ impl<'a> BodyLowerCtxt<'a> {
         } else {
             None
         };
-        let var = self.add_local_var(&local_var_stmt, LocalVar { ty, name });
-        Some(Statement::Local { var, initializer })
+        let ast_id = self.map.def_map.push(local_var_stmt);
+        let var = self.add_local_var(&local_var_stmt, LocalVar { ast_id, ty, name });
+        Some(StmtKind::Local { var, initializer })
     }
 
     fn lower_statement(&mut self, stmt: ast::Stmt) -> Option<Id<Statement>> {
@@ -307,9 +315,9 @@ impl<'a> BodyLowerCtxt<'a> {
             ast::Stmt::WhileStmt(while_stmt) => {
                 todo!("while stmt")
             }
-            ast::Stmt::BreakStmt(_break_stmt) => Some(Statement::Break),
-            ast::Stmt::ContinueStmt(_continue_stmt) => Some(Statement::Continue),
-            ast::Stmt::DiscardStmt(_discard_stmt) => Some(Statement::Discard),
+            ast::Stmt::BreakStmt(_break_stmt) => Some(StmtKind::Break),
+            ast::Stmt::ContinueStmt(_continue_stmt) => Some(StmtKind::Continue),
+            ast::Stmt::DiscardStmt(_discard_stmt) => Some(StmtKind::Discard),
             ast::Stmt::LocalVariable(local_stmt) => self.lower_local_variable_stmt(local_stmt),
             ast::Stmt::IfStmt(if_stmt) => self.lower_if_stmt(if_stmt),
             ast::Stmt::ForStmt(for_stmt) => self.lower_for_stmt(for_stmt),
@@ -320,7 +328,8 @@ impl<'a> BodyLowerCtxt<'a> {
             return None;
         };
 
-        Some(self.add_statement(&stmt, s))
+        let ast_id = self.map.def_map.push(&stmt);
+        Some(self.add_statement(&stmt, Statement { ast_id, kind: s }))
     }
 
     fn lower_block(&mut self, block: ast::Block) -> Id<Block> {
@@ -330,11 +339,13 @@ impl<'a> BodyLowerCtxt<'a> {
                 statements.push(s);
             }
         }
-        self.add_block(&block, Block { statements })
+        let ast_id = self.map.def_map.push(&block);
+        self.add_block(&block, Block { ast_id, statements })
     }
 
     pub(super) fn lower_body_block(mut self, body_block: ast::Block) -> (Body, BodyMap) {
-        self.lower_block(body_block);
+        let block = self.lower_block(body_block);
+        self.body.entry_block = Some(block);
         (self.body, self.map)
     }
 

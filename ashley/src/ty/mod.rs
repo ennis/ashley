@@ -120,14 +120,14 @@ fn struct_ty(compiler: &dyn CompilerDb, strukt: StructId, diagnostics: &mut Vec<
     let struct_data = compiler.struct_data(strukt);
 }*/
 
+// TODO: this could mutate the resolver (although we could just do a clone if necessary)
 fn lower_ty(
     compiler: &dyn CompilerDb,
     resolver: &Resolver,
-    owner: DefLoc,
     ty: &def::Type,
     diagnostics: &mut Vec<TyDiagnostic>,
 ) -> Type {
-    let mut ctxt = TypeLoweringCtxt::new(compiler, resolver, owner, diagnostics);
+    let mut ctxt = TypeLoweringCtxt::new(compiler, resolver, diagnostics);
     ctxt.lower_type(ty)
 }
 
@@ -142,7 +142,7 @@ pub(crate) fn struct_field_types_query(db: &dyn CompilerDb, struct_id: StructId)
     let mut types = Vec::with_capacity(struct_item.fields.len());
     // lower field types
     for (i, field) in struct_item.fields.iter_full() {
-        let ty = lower_ty(db, &resolver, struct_loc.into(), &field.ty, &mut diagnostics);
+        let ty = lower_ty(db, &resolver, &field.ty, &mut diagnostics);
         trace!("field `{}` has type `{}`", field.name, ty);
         types.push(ty);
     }
@@ -166,11 +166,11 @@ pub(crate) fn function_signature_query(db: &dyn CompilerDb, function_id: Functio
     let mut diagnostics = Vec::new();
     let mut parameter_types = Vec::with_capacity(func_data.parameters.len());
     for (i, param) in func_data.parameters.iter_full() {
-        parameter_types.push(lower_ty(db, &resolver, func_loc.into(), &param.ty, &mut diagnostics));
+        parameter_types.push(lower_ty(db, &resolver, &param.ty, &mut diagnostics));
     }
 
     let return_type = if let Some(ref return_type) = func_data.return_type {
-        lower_ty(db, &resolver, func_loc.into(), return_type, &mut diagnostics)
+        lower_ty(db, &resolver, return_type, &mut diagnostics)
     } else {
         db.tyctxt().prim_tys.void.clone()
     };

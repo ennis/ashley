@@ -3,15 +3,23 @@ mod lower;
 
 use crate::{
     builtins::BuiltinSignature,
+    def,
     def::{BodyOwnerId, FunctionLoc, GlobalLoc},
+    ty,
     ty::{body::lower::TyBodyLowerCtxt, TyOwnerId, Type},
     CompilerDb, ConstantValue,
 };
+use ashley::def::AstId;
 use ashley_data_structures::{Id, IndexVec};
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-use crate::{builtins::Constructor, def::BodyId, syntax::ast, ty::TyDiagnostic};
+use crate::{
+    builtins::Constructor,
+    def::{BodyId, FunctionId},
+    syntax::ast,
+    ty::TyDiagnostic,
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -48,26 +56,35 @@ pub enum Stmt {
     Error,
 }
 
+///
+pub type DefExprId = Id<def::body::Expr>;
+pub type DefStmtId = Id<def::body::Statement>;
+pub type DefLocalVarId = Id<def::body::LocalVar>;
+pub type DefBlockId = Id<def::body::Block>;
+pub type ExprAstId = AstId<ast::Expr>;
+pub type StmtAstId = AstId<ast::Stmt>;
+
 /// Represents an expression with its inferred type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expr {
     /// Inferred type of the expression.
     pub ty: Type,
-    /// Original expression in the `def::Body`
-    pub original: Option<Id<def::>>
+    /// Original expression in the `def::Body`.
+    pub ast_id: AstId<ast::Expr>,
     /// Expression kind.
     pub kind: ExprKind,
 }
 
 impl Expr {
-    pub(crate) fn new(kind: ExprKind, ty: Type) -> Self {
-        Expr { kind, ty }
+    pub(crate) fn new(kind: ExprKind, ast_id: AstId<ast::Expr>, ty: Type) -> Self {
+        Expr { kind, ast_id, ty }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalVar {
     pub name: String,
+    pub ast_id: AstId<ast::LocalVariable>,
     pub ty: Type,
 }
 
@@ -165,11 +182,14 @@ pub enum ExprKind {
     Undef,
 }
 
+/// Type-checked body.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Body {
     pub stmts: IndexVec<Stmt>,
     pub exprs: IndexVec<Expr>,
     pub local_var: IndexVec<LocalVar>,
     pub blocks: IndexVec<Block>,
+    pub entry_block: Option<Id<Block>>,
     pub params: Vec<Id<LocalVar>>,
     pub diagnostics: Vec<TyDiagnostic>,
 }
@@ -200,6 +220,11 @@ pub(crate) fn ty_body_query(compiler: &dyn CompilerDb, body: BodyId) {
         BodyOwnerId::FunctionBody(function_id) => {}
         BodyOwnerId::VariableInitializer(_) => {}
     }*/
+}
+
+pub(crate) fn ty_function_body_query(compiler: &dyn CompilerDb, function: FunctionId) -> ty::body::Body {
+    let _span = trace_span!("ty_function_body_query", ?function).entered();
+    lower::lower_function_body(compiler, function)
 }
 
 pub(crate) fn const_eval_query(compiler: &dyn CompilerDb, body: BodyId) -> ConstantValue {

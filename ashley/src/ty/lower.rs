@@ -32,7 +32,7 @@ use std::sync::Arc;
 pub(crate) struct TypeLoweringCtxt<'a> {
     compiler: &'a dyn CompilerDb,
     tyctxt: Arc<TypeCtxt>,
-    owner: DefLoc,
+    //owner: DefLoc,
     resolver: &'a Resolver<'a>,
     diags: &'a mut Vec<TyDiagnostic>,
 }
@@ -43,14 +43,14 @@ impl<'a> TypeLoweringCtxt<'a> {
     pub(crate) fn new(
         compiler: &'a dyn CompilerDb,
         resolver: &'a Resolver<'a>,
-        owner: DefLoc,
+        //owner: DefLoc,
         diags: &'a mut Vec<TyDiagnostic>,
     ) -> TypeLoweringCtxt<'a> {
         let tyctxt = compiler.tyctxt();
         TypeLoweringCtxt {
             compiler,
             tyctxt,
-            owner,
+            //owner,
             resolver,
             diags,
         }
@@ -63,7 +63,7 @@ impl<'a> TypeLoweringCtxt<'a> {
             return self.tyctxt.error.clone();
         }
 
-        let ty_loc = DefAstId::new(self.owner, ty.ast_id.unwrap());
+        let ty_loc = ty.ast_id.unwrap();
 
         match ty.kind {
             def::TypeKind::Name { ref name } => match self.resolver.resolve_type_name(name) {

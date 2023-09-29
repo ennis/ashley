@@ -1990,9 +1990,21 @@ Goals:
     // * don't emit diagnostics during type lowering: after all, the calling code knows best the context in which the type appears
 
 
-# Issue: diagnostics are spread across multiple queries
 
-# Proposal: lower and type-check bodies (structs, etc.) at the same time (but still on-demand)
+## Proposal: lower and type-check bodies (structs, etc.) at the same time (but still on-demand)
 
 Concretely:
 - There's no more def::StructData, def::FunctionData, and def::Body
+- the "module items" pass only builds data for name resolution
+  - doesn't build `def::Type`s or `StructFields`
+
+This means that typechecking and name resolution will be done on every keystroke. Can we do that?
+
+Is there a way to avoid that while still going directly from AST to type-checked body?
+We'd need some kind of "relative" AST pointers, which we could compare for equivalence.
+
+## Alternate proposal for simplification:
+
+Lower bodies eagerly, on every reparse? (in `Arc<Body>`) That's what's done already anyway.
+Then, use projection queries to avoid unnecessarily rebuilding the types.
+

@@ -4,11 +4,11 @@ use crate::{
     ty::TypeCtxt,
 };
 use ashley::CompilerDb;
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct Resolver<'db> {
-    scopes: Vec<&'db Scope>,
+    scopes: Vec<Cow<'db, Scope>>,
     tyctxt: Arc<TypeCtxt>,
 }
 
@@ -46,12 +46,20 @@ impl<'db> Resolver<'db> {
         &self.tyctxt
     }
 
-    pub(crate) fn push_scope(&mut self, scope: &'db Scope) {
-        self.scopes.push(scope);
+    pub(crate) fn push_scope_ref(&mut self, scope: &'db Scope) {
+        self.scopes.push(Cow::Borrowed(scope));
+    }
+
+    pub(crate) fn push_scope(&mut self, scope: Scope) {
+        self.scopes.push(Cow::Owned(scope));
     }
 
     pub(crate) fn pop_scope(&mut self) {
         self.scopes.pop();
+    }
+
+    pub(crate) fn last_mut(&mut self) -> Option<&mut Scope> {
+        Some(self.scopes.last_mut()?.to_mut())
     }
 }
 
@@ -59,8 +67,8 @@ impl ModuleId {
     pub(crate) fn resolver<'db>(&self, compiler: &'db dyn CompilerDb) -> Resolver<'db> {
         let tyctxt = compiler.tyctxt();
         let mut resolver = Resolver::new(tyctxt);
-        resolver.push_scope(compiler.builtin_scope(()));
-        resolver.push_scope(compiler.module_scope(*self));
+        resolver.push_scope_ref(compiler.builtin_scope(()));
+        resolver.push_scope_ref(compiler.module_scope(*self));
         resolver
     }
 }

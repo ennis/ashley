@@ -110,11 +110,11 @@ fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
     // dump struct field types
     let module_scope = db.module_scope(module);
     for struct_id in module_scope.structs() {
-        let (field_types, diags) = db.struct_field_types(struct_id);
+        let field_types = db.struct_field_types(struct_id);
 
-        for diag in diags {
+        /*for diag in diags {
             emit_diagnostic(db, diag.render(db));
-        }
+        }*/
 
         let sd = db.struct_data(struct_id);
         let name = &sd.name;
@@ -127,11 +127,12 @@ fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
     }
 
     for function_id in module_scope.functions() {
-        let body = db.function_body(function_id);
-        let body_map = db.function_body_map(function_id);
+        //let body = db.function_body(function_id);
+        //let body_map = db.function_body_map(function_id);
+        let ty_body = db.ty_function_body(function_id);
         let func_data = db.function_data(function_id);
         trace!("=== Function `{}` ===", func_data.name);
-        trace!("{body:#?}")
+        trace!("{ty_body:#?}")
     }
 }
 

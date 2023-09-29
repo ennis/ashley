@@ -55,7 +55,7 @@ impl HasSource for FieldLoc {
     fn source(&self, db: &dyn CompilerDb) -> Self::Source {
         let items = db.module_items(self.strukt.module);
         let map = db.module_item_map(self.strukt.module);
-        map.struct_def_map(self.strukt.strukt).node_with_source_file(
+        map.ast_map_for_struct(self.strukt.strukt).node_in_file(
             db,
             self.strukt.module,
             items[self.strukt.strukt].fields[self.field].ast,

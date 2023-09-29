@@ -1,9 +1,15 @@
 //! Overload resolution.
 use crate::{
-    builtins::{pseudo_type_to_concrete_type, ImageClass, PseudoType},
-    ty::{PrimitiveTypes, ScalarType, Type, TypeKind},
+    builtins::{pseudo_type_to_concrete_type, BuiltinOperation, ImageClass, PseudoType},
+    def::Function,
+    ty::{
+        body::{lower::TyBodyLowerCtxt, DefExprId, ExprAstId},
+        PrimitiveTypes, ScalarType, TyDiagnostic, Type, TypeKind,
+    },
 };
+use ashley::def::FunctionId;
 use smallvec::SmallVec;
+use spirv::CLOp::sign;
 use std::{cmp::Ordering, ops::Deref};
 
 type ImplicitConversionRanks = SmallVec<[i32; 2]>;
@@ -141,9 +147,10 @@ pub(crate) struct OverloadCandidate {
 /// Helper function for `typecheck_builtin_operation`.
 ///
 /// Signatures of builtins are specified using `PseudoTypes` to make them more compact,
-/// so we use this function to convert them to `ir::Type`s before calling `check_signature`.
+/// so we use this function to convert them to `Type`s before calling `check_signature`.
 ///
-/// Returns true if `check_signature` returned an exact match was found, false otherwise.
+/// Returns true if `check_signature` returned an exact match, false otherwise.
+/// Regardless of the return value, potential candidates are appended to `candidates`.
 fn typecheck_builtin_helper(
     builtin_types: &PrimitiveTypes,
     overload_index: usize,
@@ -199,16 +206,29 @@ fn best_overload(mut candidates: Vec<OverloadCandidate>) -> Result<OverloadCandi
     }
 }
 
-/*
-impl TypeCheckBodyCtxt<'_> {
+impl TyBodyLowerCtxt<'_> {
     ///
-    pub(crate) fn resolve_overload(
-        &mut self,
-        overloads: &[DefId],
-        args: &[Type],
-    ) -> Result<OverloadCandidate, OverloadResolutionError> {
-        let mut candidates: Vec<OverloadCandidate> = Vec::new();
-        for (i, overload) in overloads.iter().enumerate() {
+    pub(crate) fn check_function_signature(&mut self, expr: ExprAstId, function: FunctionId, args: &[Type]) -> bool {
+        let signature = self.compiler.function_signature(function);
+
+        if signature.parameter_types.len() != args.len() {
+            self.body.diagnostics.push(TyDiagnostic::InvalidNumberOfArguments {
+                expr,
+                expected: args.len() as u32,
+                got: signature.parameter_types.len() as u32,
+            });
+            return false;
+        }
+
+        match check_signature(&signature.parameter_types, args) {
+            Ok(_conversion_ranks) => {
+                // signature matches (possibly with implicit conversions)
+                true
+            }
+            Err(_) => false,
+        }
+
+        /*for (i, overload) in overloads.iter().enumerate() {
             let func = self.compiler.definition(*overload).as_function().unwrap();
             let fty = func.function_type.as_function().unwrap();
             if fty.arg_types.len() != args.len() {
@@ -231,7 +251,7 @@ impl TypeCheckBodyCtxt<'_> {
                 Err(_) => continue,
             }
         }
-        best_overload(candidates)
+        best_overload(candidates)*/
     }
 
     // Maybe refactor so that operators also go through `resolve_overload`.
@@ -244,6 +264,8 @@ impl TypeCheckBodyCtxt<'_> {
         let mut candidates: Vec<OverloadCandidate> = Vec::new();
 
         'check_signatures: for (index, sig) in op.signatures.iter().enumerate() {
+            // Signatures may be generic over vector type, vector length, or image classes.
+            // Enumerate all of those.
             let is_vector_generic = sig.parameter_types.iter().any(PseudoType::is_vector_generic);
             let is_image_type_generic = sig.parameter_types.iter().any(PseudoType::is_image_type_generic);
             let max_vec_len = if is_vector_generic { 4 } else { 1 };
@@ -265,6 +287,7 @@ impl TypeCheckBodyCtxt<'_> {
                         arguments,
                         &mut candidates,
                     ) {
+                        // Break on the first exact match.
                         break 'check_signatures;
                     }
                 }
@@ -274,4 +297,3 @@ impl TypeCheckBodyCtxt<'_> {
         best_overload(candidates)
     }
 }
-*/

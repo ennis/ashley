@@ -3,7 +3,7 @@
 use crate::{
     db::DebugWithDb,
     def::{
-        diagnostic::ItemDiagnostic, ty::TypeKind, AstId, AstIdMap, DefLoc, DefMap, Function, FunctionLoc,
+        diagnostic::ItemDiagnostic, ty::TypeKind, AstId, AstIdMap, AstMap, DefLoc, Function, FunctionLoc,
         FunctionParam, Global, GlobalLoc, Import, InFile, Linkage, ModuleItemMap, ModuleItems, Qualifier, Struct,
         StructField, StructLoc, Type, Visibility,
     },
@@ -30,7 +30,7 @@ fn visibility(vis: &Option<ast::Visibility>) -> Visibility {
     vis.as_ref().and_then(|q| q.visibility()).unwrap_or(Visibility::Private)
 }
 
-pub(crate) fn lower_type_opt(db: &dyn CompilerDb, def_map: &mut DefMap, ty: &Option<ast::Type>) -> Type {
+pub(crate) fn lower_type_opt(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &Option<ast::Type>) -> Type {
     match ty {
         Some(ty) => lower_type(db, def_map, ty),
         None => Type {
@@ -40,7 +40,7 @@ pub(crate) fn lower_type_opt(db: &dyn CompilerDb, def_map: &mut DefMap, ty: &Opt
     }
 }
 
-pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut DefMap, ty: &ast::Type) -> Type {
+pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &ast::Type) -> Type {
     match ty {
         ast::Type::TypeRef(name) => {
             let Some(name) = name.name() else {
@@ -145,7 +145,7 @@ impl<'a> ItemLowerCtxt<'a> {
         Some(id)
     }
 
-    fn lower_field(&mut self, def_map: &mut DefMap, field: &ast::StructField) -> Option<StructField> {
+    fn lower_field(&mut self, def_map: &mut AstMap, field: &ast::StructField) -> Option<StructField> {
         let name = field.name()?.text();
         let ty = self.lower_type_opt(def_map, &field.ty());
         Some(StructField {
@@ -156,17 +156,17 @@ impl<'a> ItemLowerCtxt<'a> {
     }
 
     fn lower_struct(&mut self, strukt: &ast::StructDef) -> Option<Id<Struct>> {
-        let mut def_map = DefMap::new();
+        let mut ast_map = AstMap::new();
         let name = strukt.name()?.text();
         let mut fields = IndexVec::new();
         for f in strukt.fields() {
-            let Some(field) = self.lower_field(&mut def_map, &f) else {
+            let Some(field) = self.lower_field(&mut ast_map, &f) else {
                 continue;
             };
             fields.push(field);
         }
 
-        let attributes = self.lower_attributes(&mut def_map, strukt.attrs());
+        let attributes = self.lower_attributes(&mut ast_map, strukt.attrs());
         let visibility = visibility(&strukt.visibility());
 
         let id = self.module.structs.push(Struct {
@@ -175,23 +175,23 @@ impl<'a> ItemLowerCtxt<'a> {
             visibility,
             fields,
         });
-        let id2 = self.map.structs.push((AstPtr::new(strukt), def_map));
+        let id2 = self.map.structs.push((AstPtr::new(strukt), ast_map));
         assert_eq!(id, id2);
         Some(id)
     }
 
     fn lower_function(&mut self, func: &ast::FnDef) -> Option<Id<Function>> {
         //let ast_id = self.ast_id_map.push(func);
-        let mut def_map = DefMap::new();
+        let mut ast_map = AstMap::new();
         let name = func.name()?.text();
         let mut parameters = IndexVec::new();
         for p in func.param_list()?.parameters() {
-            let Some(param) = self.lower_function_param(&mut def_map, &p) else {
+            let Some(param) = self.lower_function_param(&mut ast_map, &p) else {
                 continue;
             };
             parameters.push(param);
         }
-        let body = func.block().map(|block| def_map.push(&block));
+        let body = func.block().map(|block| ast_map.push(&block));
         let visibility = visibility(&func.visibility());
         let extern_ = func.extern_().map(|linkage| linkage.is_extern()).unwrap_or(false);
         let linkage = if visibility == Visibility::Public || extern_ {
@@ -199,9 +199,9 @@ impl<'a> ItemLowerCtxt<'a> {
         } else {
             Linkage::Internal
         };
-        let attributes = self.lower_attributes(&mut def_map, func.attrs());
+        let attributes = self.lower_attributes(&mut ast_map, func.attrs());
 
-        let return_type = func.return_type().map(|ty| self.lower_type(&mut def_map, &ty));
+        let return_type = func.return_type().map(|ty| self.lower_type(&mut ast_map, &ty));
 
         let id = self.module.functions.push(Function {
             attributes,
@@ -212,20 +212,20 @@ impl<'a> ItemLowerCtxt<'a> {
             parameters,
             return_type,
         });
-        let id2 = self.map.functions.push((AstPtr::new(func), def_map));
+        let id2 = self.map.functions.push((AstPtr::new(func), ast_map));
         assert_eq!(id, id2);
         Some(id)
     }
 
     fn lower_attributes(
         &mut self,
-        def_map: &mut DefMap,
+        def_map: &mut AstMap,
         attributes: impl Iterator<Item = ast::Attribute>,
     ) -> Vec<AstId<ast::Attribute>> {
         attributes.map(|attr| def_map.push(&attr)).collect()
     }
 
-    fn lower_function_param(&mut self, def_map: &mut DefMap, func_param: &ast::FnParam) -> Option<FunctionParam> {
+    fn lower_function_param(&mut self, def_map: &mut AstMap, func_param: &ast::FnParam) -> Option<FunctionParam> {
         let ast_id = def_map.push(func_param);
         let name = func_param.name()?.text();
         // TODO lower even if type is missing or failed to parse?
@@ -233,16 +233,16 @@ impl<'a> ItemLowerCtxt<'a> {
         Some(FunctionParam { ast: ast_id, name, ty })
     }
 
-    fn lower_type_opt(&mut self, def_map: &mut DefMap, ty: &Option<ast::Type>) -> Type {
-        lower_type_opt(self.compiler, def_map, ty)
+    fn lower_type_opt(&mut self, ast_map: &mut AstMap, ty: &Option<ast::Type>) -> Type {
+        lower_type_opt(self.compiler, ast_map, ty)
     }
 
-    fn lower_type(&mut self, def_map: &mut DefMap, ty: &ast::Type) -> Type {
-        lower_type(self.compiler, def_map, ty)
+    fn lower_type(&mut self, ast_map: &mut AstMap, ty: &ast::Type) -> Type {
+        lower_type(self.compiler, ast_map, ty)
     }
 
     fn lower_global_variable(&mut self, global: &ast::Global) -> Option<Id<Global>> {
-        let mut def_map = DefMap::new();
+        let mut ast_map = AstMap::new();
         let name = global.name()?.text().to_string();
         let visibility = visibility(&global.visibility());
         let extern_ = global.extern_().map(|linkage| linkage.is_extern()).unwrap_or(false);
@@ -251,10 +251,10 @@ impl<'a> ItemLowerCtxt<'a> {
         } else {
             Linkage::Internal
         };
-        let attributes = self.lower_attributes(&mut def_map, global.attrs());
+        let attributes = self.lower_attributes(&mut ast_map, global.attrs());
         let storage_class = global.qualifier().and_then(|q| q.qualifier());
 
-        let ty = self.lower_type_opt(&mut def_map, &global.ty());
+        let ty = self.lower_type_opt(&mut ast_map, &global.ty());
 
         let id = self.module.globals.push(Global {
             ty,
@@ -264,7 +264,7 @@ impl<'a> ItemLowerCtxt<'a> {
             linkage,
             storage_class,
         });
-        let id2 = self.map.globals.push((AstPtr::new(global), def_map));
+        let id2 = self.map.globals.push((AstPtr::new(global), ast_map));
         assert_eq!(id, id2);
         Some(id)
     }

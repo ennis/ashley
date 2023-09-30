@@ -3,17 +3,23 @@
 use crate::{
     builtins, def,
     def::{AstId, BodyLoc, FunctionId, Resolver, Scope},
-    syntax::{ast, ast::BinaryOp},
+    syntax::{
+        ast,
+        ast::{BinaryOp, UnaryOp},
+    },
     ty,
     ty::{
-        body::{Block, Body, ConversionKind, DefExprId, Expr, ExprKind, LocalVar, Stmt},
+        body::{
+            lower::swizzle::get_component_indices, Block, Body, ConversionKind, DefExprId, Expr, ExprKind, LocalVar,
+            Stmt, StmtKind,
+        },
         lower_ty, FunctionSignature, ScalarType,
         TyDiagnostic::*,
         Type, TypeCtxt, TypeKind,
     },
     CompilerDb, ConstantValue, ModuleId,
 };
-use ashley::def::ValueRes;
+use ashley::{def::ValueRes, ty::body::LocalVarAstId};
 use ashley_data_structures::{Id, IndexVec};
 use std::{ops::Deref, sync::Arc};
 
@@ -28,10 +34,21 @@ pub(super) struct TyBodyLowerCtxt<'a> {
     //tyctxt: Arc<TypeCtxt>,
 }
 
+#[derive(Clone)]
 pub(crate) struct TypedExprId {
     pub(crate) ty: Type,
     pub(crate) ast_id: ExprAstId,
     pub(crate) id: Id<Expr>,
+}
+
+impl TypedExprId {
+    fn is_error(&self) -> bool {
+        self.ty.is_error()
+    }
+
+    fn is_ref(&self) -> bool {
+        self.ty.is_ref()
+    }
 }
 
 type ExprAstId = AstId<ast::Expr>;
@@ -74,6 +91,27 @@ impl<'a> TyBodyLowerCtxt<'a> {
         self.create_and_add_expr(ast_id, self.resolver.tyctxt().error.clone(), ExprKind::Undef)
     }
 
+    fn apply_autoderef(&mut self, value: TypedExprId) -> TypedExprId {
+        use ConversionKind as ICK;
+        use ExprKind as EK;
+        use TypeKind as TK;
+
+        if let TK::Ref(deref_ty) = value.ty.deref() {
+            let deref_expr = self.create_and_add_expr(
+                value.ast_id,
+                deref_ty.clone(),
+                EK::ImplicitConversion {
+                    expr: value.id,
+                    kind: ICK::Deref,
+                },
+            );
+            deref_expr
+        } else {
+            value
+        }
+    }
+
+    /// Applies implicit conversions and autoderef.
     fn apply_implicit_conversion(&mut self, value: TypedExprId, ty: Type) -> TypedExprId {
         use ConversionKind as ICK;
         use ExprKind as EK;
@@ -82,11 +120,19 @@ impl<'a> TyBodyLowerCtxt<'a> {
 
         let ast_id = self.body.exprs[value.id].ast_id;
 
+        if value.is_error() {
+            // don't bother
+            return value;
+        }
+
+        let value = self.apply_autoderef(value);
+
         if ty == value.ty {
             // same types, no conversion
             return value;
         }
 
+        // implicit conversions
         let expr_kind = match (value.ty.deref(), ty.deref()) {
             (TK::Scalar(tsrc), TK::Scalar(tdst)) => match (tsrc, tdst) {
                 (ST::Int, ST::UnsignedInt) => EK::ImplicitConversion {
@@ -192,7 +238,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         &mut self,
         local_var: Id<def::body::LocalVar>,
         initializer: Option<Id<def::body::Expr>>,
-    ) -> Stmt {
+    ) -> StmtKind {
         let local_var = &self.item_body.local_vars[local_var];
         let ty = lower_ty(self.compiler, &self.resolver, &local_var.ty, &mut self.body.diagnostics);
         let initializer = if let Some(initializer) = initializer {
@@ -202,9 +248,9 @@ impl<'a> TyBodyLowerCtxt<'a> {
             None
         };
 
-        let id = self.body.local_var.push(LocalVar {
+        let id = self.body.local_vars.push(LocalVar {
             name: local_var.name.clone(),
-            ast_id: local_var.ast_id,
+            ast_id: LocalVarAstId::LocalVariable(local_var.ast_id),
             ty,
         });
 
@@ -212,7 +258,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
             .last_mut()
             .expect("expected a scope")
             .add_local_var(&local_var.name, id);
-        Stmt::Local {
+        StmtKind::Local {
             var: id,
             initializer: initializer.map(|e| e.id),
         }
@@ -223,7 +269,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         condition: DefExprId,
         true_branch: Id<def::body::Statement>,
         false_branch: Option<Id<def::body::Statement>>,
-    ) -> Stmt {
+    ) -> StmtKind {
         let condition = self.lower_expr(condition);
         if condition.ty != self.resolver.tyctxt().prim_tys.bool {
             self.body.diagnostics.push(ExpectedBoolean {
@@ -234,16 +280,28 @@ impl<'a> TyBodyLowerCtxt<'a> {
         let true_branch = self.lower_stmt_in_new_scope(true_branch);
         let false_branch = false_branch.map(|s| self.lower_stmt_in_new_scope(s));
 
-        Stmt::Select {
+        StmtKind::Select {
             condition: condition.id,
             true_branch,
             false_branch,
         }
     }
 
-    fn lower_expr_stmt(&mut self, expr: Id<def::body::Expr>) -> Stmt {
-        Stmt::ExprStmt {
+    fn lower_expr_stmt(&mut self, expr: Id<def::body::Expr>) -> StmtKind {
+        StmtKind::ExprStmt {
             expr: self.lower_expr(expr).id,
+        }
+    }
+
+    fn lower_return_stmt(&mut self, value: Option<Id<def::body::Expr>>) -> StmtKind {
+        StmtKind::Return {
+            value: value.map(|v| self.lower_expr(v).id),
+        }
+    }
+
+    fn lower_block_stmt(&mut self, block: Id<def::body::Block>) -> StmtKind {
+        StmtKind::Block {
+            block: self.lower_block(block),
         }
     }
 
@@ -253,7 +311,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         condition: Option<Id<def::body::Expr>>,
         loop_expr: Option<Id<def::body::Expr>>,
         stmt: Id<def::body::Statement>,
-    ) -> Stmt {
+    ) -> StmtKind {
         let initializer = initializer.map(|initializer| self.lower_stmt(initializer));
         let condition = condition.map(|condition| self.lower_expr(condition));
         let loop_expr = loop_expr.map(|loop_expr| self.lower_expr(loop_expr));
@@ -268,10 +326,27 @@ impl<'a> TyBodyLowerCtxt<'a> {
             }
         }
 
-        Stmt::ForLoop {
+        StmtKind::ForLoop {
             initializer,
             condition: condition.map(|e| e.id),
             loop_expr: loop_expr.map(|e| e.id),
+            stmt,
+        }
+    }
+
+    fn lower_while_loop_stmt(&mut self, condition: Id<def::body::Expr>, stmt: Id<def::body::Statement>) -> StmtKind {
+        let condition = self.lower_expr(condition);
+        let stmt = self.lower_stmt(stmt);
+
+        if condition.ty != self.resolver.tyctxt().prim_tys.bool {
+            self.body.diagnostics.push(ExpectedBoolean {
+                expr: condition.ast_id,
+                ty: condition.ty.clone(),
+            });
+        }
+
+        StmtKind::WhileLoop {
+            condition: condition.id,
             stmt,
         }
     }
@@ -302,32 +377,18 @@ impl<'a> TyBodyLowerCtxt<'a> {
                 loop_expr,
                 stmt,
             } => self.in_new_scope(|this| this.lower_for_loop_stmt(initializer, condition, loop_expr, stmt)),
-            def::body::StmtKind::WhileLoop { .. } => {
-                todo!()
-            }
+            def::body::StmtKind::WhileLoop { condition, stmt } => self.lower_while_loop_stmt(condition, stmt),
             def::body::StmtKind::Local { var, initializer } => self.lower_local_variable(var, initializer),
-            def::body::StmtKind::Return { .. } => {
-                todo!()
-            }
+            def::body::StmtKind::Return { value } => self.lower_return_stmt(value),
             def::body::StmtKind::ExprStmt { expr } => self.lower_expr_stmt(expr),
-            def::body::StmtKind::Block { .. } => {
-                todo!()
-            }
-            def::body::StmtKind::Break => {
-                todo!()
-            }
-            def::body::StmtKind::Continue => {
-                todo!()
-            }
-            def::body::StmtKind::Discard => {
-                todo!()
-            }
-            def::body::StmtKind::Error => {
-                todo!()
-            }
+            def::body::StmtKind::Block { block } => self.lower_block_stmt(block),
+            def::body::StmtKind::Break => StmtKind::Break,
+            def::body::StmtKind::Continue => StmtKind::Continue,
+            def::body::StmtKind::Discard => StmtKind::Discard,
+            def::body::StmtKind::Error => StmtKind::Error,
         };
 
-        self.body.stmts.push(s)
+        self.body.stmts.push(Stmt { ast_id, kind: s })
     }
 
     fn lower_block_inner(&mut self, block: Id<def::body::Block>) -> Id<Block> {
@@ -347,12 +408,8 @@ impl<'a> TyBodyLowerCtxt<'a> {
         let ast_id = self.item_body[expr].ast_id;
         match self.item_body[expr].kind {
             def::body::ExprKind::Binary { op, lhs, rhs } => self.lower_bin_expr(ast_id, op, lhs, rhs),
-            def::body::ExprKind::Prefix { expr, op } => {
-                todo!()
-            }
-            def::body::ExprKind::Postfix { expr, op } => {
-                todo!()
-            }
+            def::body::ExprKind::Prefix { expr, op } => self.lower_unary_expr(ast_id, op, expr),
+            def::body::ExprKind::Postfix { expr, op } => self.lower_unary_expr(ast_id, op, expr),
             def::body::ExprKind::Ternary {
                 condition,
                 true_expr,
@@ -363,14 +420,199 @@ impl<'a> TyBodyLowerCtxt<'a> {
             def::body::ExprKind::Call { ref function, ref args } => self.lower_call_expr(ast_id, function, args),
             def::body::ExprKind::Name { ref name } => self.lower_name_expr(ast_id, name),
             def::body::ExprKind::Index { array_or_vector, index } => {
-                todo!()
+                self.lower_indexing_expr(ast_id, array_or_vector, index)
             }
-            def::body::ExprKind::Field { expr, ref name } => {
-                todo!()
-            }
+            def::body::ExprKind::Field { expr, ref name } => self.lower_field_expr(ast_id, expr, name),
             def::body::ExprKind::Constructor { ref ty, ref args } => self.lower_constructor_expr(ast_id, ty, args),
             def::body::ExprKind::Literal { ref value } => self.lower_lit_expr(ast_id, value),
             def::body::ExprKind::Undef => self.error_expr(ast_id),
+        }
+    }
+
+    fn lower_indexing_expr(&mut self, ast_id: ExprAstId, array_or_vector: DefExprId, index: DefExprId) -> TypedExprId {
+        let array_expr = self.lower_expr(array_or_vector);
+        let index_expr = self.lower_expr(index);
+
+        let mut ty = match array_expr.ty.unref() {
+            TypeKind::Vector(scalar_type, _) => self.resolver.tyctxt().ty(TypeKind::Scalar(*scalar_type)),
+            TypeKind::Array { element_type, .. } | TypeKind::RuntimeArray { element_type, .. } => element_type.clone(),
+            _ => {
+                if !array_expr.is_error() {
+                    self.body.diagnostics.push(InvalidIndexing {
+                        expr: ast_id,
+                        base_ty: array_expr.ty.clone(),
+                    });
+                }
+                return self.error_expr(ast_id);
+            }
+        };
+
+        if array_expr.ty.is_ref() {
+            ty = Type::new(self.compiler, TypeKind::Ref(ty));
+        }
+
+        match index_expr.ty.unref() {
+            TypeKind::Scalar(ScalarType::Int | ScalarType::UnsignedInt) => {}
+            _ => {
+                if !index_expr.is_error() {
+                    self.body.diagnostics.push(InvalidIndexType {
+                        expr: self.body.exprs[index_expr.id].ast_id,
+                        ty: index_expr.ty.clone(),
+                    });
+                }
+                return self.error_expr(ast_id);
+            }
+        };
+
+        let index_expr = self.apply_autoderef(index_expr);
+
+        // TODO check for out of bounds access if index is constant
+        self.create_and_add_expr(
+            ast_id,
+            ty,
+            ExprKind::Index {
+                array_or_vector: array_expr.id,
+                index: index_expr.id,
+            },
+        )
+    }
+
+    fn lower_unary_expr(&mut self, ast_id: ExprAstId, op: UnaryOp, expr: Id<def::body::Expr>) -> TypedExprId {
+        let value = self.lower_expr(expr);
+        let operation;
+        let is_assignment;
+        match op {
+            UnaryOp::Neg => {
+                is_assignment = false;
+                operation = &builtins::UnaryMinus;
+            }
+            UnaryOp::Not => {
+                is_assignment = false;
+                operation = &builtins::Not;
+            }
+            UnaryOp::PrefixInc => {
+                is_assignment = true;
+                operation = &builtins::PrefixInc;
+            }
+            UnaryOp::PrefixDec => {
+                is_assignment = true;
+                operation = &builtins::PrefixDec;
+            }
+            UnaryOp::PostfixInc => {
+                is_assignment = true;
+                operation = &builtins::PostfixInc;
+            }
+            UnaryOp::PostfixDec => {
+                is_assignment = true;
+                operation = &builtins::PostfixDec;
+            }
+        };
+
+        if is_assignment && !value.is_ref() {
+            self.body.diagnostics.push(ExpectedPlace {
+                expr: value.ast_id,
+                ty: value.ty,
+            });
+            return self.error_expr(ast_id);
+        }
+
+        match self.verify_builtin_operation(ast_id, operation, &[value.ty.clone()]) {
+            Some(overload) => {
+                let conv_expr = if is_assignment {
+                    // there are no "implicit conversions" of the value for `value++` and `value--` (and the prefix variants)
+                    value
+                } else {
+                    self.apply_implicit_conversion(value, overload.signature.parameter_types[0].clone())
+                };
+
+                self.create_and_add_expr(
+                    ast_id,
+                    overload.signature.return_type,
+                    ExprKind::Unary {
+                        op,
+                        signature: operation.signatures[overload.index],
+                        expr: conv_expr.id,
+                    },
+                )
+            }
+            None => self.error_expr(ast_id),
+        }
+    }
+
+    fn lower_field_expr(&mut self, ast_id: ExprAstId, base_expr: Id<def::body::Expr>, field_name: &str) -> TypedExprId {
+        let base_expr = self.lower_expr(base_expr);
+
+        if base_expr.is_error() {
+            return self.error_expr(ast_id);
+        }
+
+        match base_expr.ty.unref() {
+            // --- Field access ---
+            TypeKind::Struct { name: _, def } => {
+                let struct_data = def.data(self.compiler);
+                let Some(field_index) = struct_data.fields.iter().position(|f| f.name == field_name) else {
+                    self.body.diagnostics.push(UnresolvedField {
+                        expr: ast_id,
+                        name: field_name.to_string(),
+                        receiver: base_expr.ty,
+                    });
+                    return self.error_expr(ast_id);
+                };
+
+                // Propagate Ref type (i.e. if the base expression is a place, then the field expr is a place also)
+                let mut field_type = def.field_types(self.compiler)[field_index].clone();
+                if base_expr.ty.is_ref() {
+                    field_type = Type::new(self.compiler, TypeKind::Ref(field_type));
+                }
+
+                self.create_and_add_expr(
+                    ast_id,
+                    field_type,
+                    ExprKind::Field {
+                        expr: base_expr.id,
+                        index: field_index,
+                    },
+                )
+            }
+            // --- Vector component access ---
+            TypeKind::Vector(scalar_type, size) => match get_component_indices(field_name, *size as usize) {
+                Ok(components) => {
+                    let mut ty = if components.len() == 1 {
+                        Type::new(self.compiler, TypeKind::Scalar(*scalar_type))
+                    } else {
+                        Type::new(self.compiler, TypeKind::Vector(*scalar_type, components.len() as u8))
+                    };
+
+                    if base_expr.ty.is_ref() {
+                        ty = Type::new(self.compiler, TypeKind::Ref(ty));
+                    }
+
+                    self.create_and_add_expr(
+                        ast_id,
+                        ty,
+                        ExprKind::ComponentAccess {
+                            expr: base_expr.id,
+                            components,
+                        },
+                    )
+                }
+                Err(error) => {
+                    self.body.diagnostics.push(InvalidComponentSelection {
+                        expr: ast_id,
+                        selection: field_name.to_string(),
+                        error,
+                        receiver: base_expr.ty,
+                    });
+                    self.error_expr(ast_id)
+                }
+            },
+            _ => {
+                self.body.diagnostics.push(ReceiverNotAStructOrVector {
+                    expr: ast_id,
+                    receiver: base_expr.ty,
+                });
+                self.error_expr(ast_id)
+            }
         }
     }
 
@@ -380,13 +622,54 @@ impl<'a> TyBodyLowerCtxt<'a> {
 
         let function = self.resolver.resolve_value_name(func_name);
         match function {
-            Some(ValueRes::Function(func)) => {}
-            Some(ValueRes::BuiltinFunction(op)) => {
-                // builtin functions are more complicated because OpenGL supports overloading
+            Some(ValueRes::Function(func)) => {
+                // TODO: we don't support overloads right now for user-defined functions, but
+                // since we do for builtins we should allow them at some point.
+
+                // `resolve_overload` already emits diagnostics
+                if let Some(signature) = self.resolve_overload(ast_id, func_name, &[func], &arg_types) {
+                    let args = args
+                        .into_iter()
+                        .zip(signature.signature.parameter_types.iter())
+                        .map(|(arg, param_ty)| self.apply_implicit_conversion(arg, param_ty.clone()).id)
+                        .collect();
+                    self.create_and_add_expr(
+                        ast_id,
+                        signature.signature.return_type,
+                        ExprKind::Call { function: func, args },
+                    )
+                } else {
+                    self.error_expr(ast_id)
+                }
             }
-            _ => self.body.diagnostics.push(UnresolvedFunction { expr: ast_id }),
+            Some(ValueRes::BuiltinFunction(op)) => {
+                // `verify_builtin_operation` already emits diagnostics
+                if let Some(signature) = self.verify_builtin_operation(ast_id, &*op, &arg_types) {
+                    let args = args
+                        .into_iter()
+                        .zip(signature.signature.parameter_types.iter())
+                        .map(|(arg, param_ty)| self.apply_implicit_conversion(arg, param_ty.clone()).id)
+                        .collect();
+                    self.create_and_add_expr(
+                        ast_id,
+                        signature.signature.return_type,
+                        ExprKind::BuiltinCall {
+                            signature: op.signatures[signature.index],
+                            args,
+                        },
+                    )
+                } else {
+                    self.error_expr(ast_id)
+                }
+            }
+            _ => {
+                self.body.diagnostics.push(UnresolvedFunction {
+                    expr: ast_id,
+                    name: func_name.to_string(),
+                });
+                self.error_expr(ast_id)
+            }
         }
-        todo!()
     }
 
     fn lower_name_expr(&mut self, ast_id: ExprAstId, name: &str) -> TypedExprId {
@@ -400,13 +683,14 @@ impl<'a> TyBodyLowerCtxt<'a> {
                     self.body.diagnostics.push(ExpectedValue { expr: ast_id });
                     self.error_expr(ast_id)
                 }
-                ValueRes::Global(global) => {
-                    let ty = self.compiler.global_ty(global);
-                    self.create_and_add_expr(ast_id, ty.clone(), ExprKind::GlobalVar { var: global })
-                }
+                ValueRes::Global(global) => self.create_and_add_expr(
+                    ast_id,
+                    Type::new(self.compiler, TypeKind::Ref(global.ty(self.compiler))),
+                    ExprKind::GlobalVar { var: global },
+                ),
                 ValueRes::Local(local) => self.create_and_add_expr(
                     ast_id,
-                    self.body.local_var[local].ty.clone(),
+                    Type::new(self.compiler, TypeKind::Ref(self.body.local_vars[local].ty.clone())),
                     ExprKind::LocalVar { var: local },
                 ),
             },
@@ -481,7 +765,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
                         && args
                             .iter()
                             .zip(ctor.args.iter())
-                            .all(|(from, to)| *from.ty == *to || has_scalar_conversion(&*from.ty, to))
+                            .all(|(from, to)| *from.ty == *to || has_scalar_conversion(from.ty.unref(), to))
                     {
                         // Found a matching constructor signature.
                         // Apply implicit conversions on arguments.
@@ -528,7 +812,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
             ConstantValue::Int64(_) => {
                 todo!("int64 literal typeck")
             }
-            ConstantValue::Float(_) => self.resolver.tyctxt().prim_tys.double.clone(),
+            ConstantValue::Float(_) => self.resolver.tyctxt().prim_tys.float.clone(),
             ConstantValue::Double(_) => {
                 todo!("double literal typeck")
             }
@@ -591,138 +875,114 @@ impl<'a> TyBodyLowerCtxt<'a> {
             }
         };
 
-        // TODO: check that LHS is a place if this is an assignment
-        let ty_lhs = self.lower_expr(lhs);
-        let ty_rhs = self.lower_expr(rhs);
+        let left = self.lower_expr(lhs);
+        let right = self.lower_expr(rhs);
+
+        if is_assignment && !left.is_ref() {
+            self.body.diagnostics.push(ExpectedPlace {
+                expr: left.ast_id,
+                ty: left.ty.clone(),
+            });
+            //return self.error_expr(ast_id);
+        }
 
         //let lhs_ast_id = self.body.exprs[ty_lhs.id].ast_id;
         //let rhs_ast_id = self.body.exprs[ty_rhs.id].ast_id;
 
-        let expr = if let Some(operation) = operation {
+        if let Some(operation) = operation {
             // binary operation, possibly with assignment (e.g `x * y` or `x *= y`)
-            match self.verify_builtin_operation(ast_id, operation, &[ty_lhs.ty.clone(), ty_rhs.ty.clone()]) {
-                Some(signature) => {
-                    let lhs_conv = self.apply_implicit_conversion(ty_lhs, signature.param_types[0].clone());
-                    let rhs_conv = self.apply_implicit_conversion(ty_rhs, signature.param_types[1].clone());
+            match self.verify_builtin_operation(ast_id, operation, &[left.ty.clone(), right.ty.clone()]) {
+                Some(selected_overload) => {
+                    let coerced_left_ty = selected_overload.signature.parameter_types[0].clone();
+                    let coerced_right_ty = selected_overload.signature.parameter_types[1].clone();
+                    let result_ty = selected_overload.signature.return_type;
+                    let lhs_conv = self.apply_implicit_conversion(left.clone(), coerced_left_ty);
+                    let rhs_conv = self.apply_implicit_conversion(right, coerced_right_ty);
+
+                    // First emit tmp = x * y, then the assignment x = tmp, with all the necessary implicit conversions
+                    // The temporary 'x * y' expression is synthesized and shares the same ast id as the assign expr
+                    let op_result = self.create_and_add_expr(
+                        ast_id,
+                        result_ty,
+                        ExprKind::Binary {
+                            op,
+                            signature: operation.signatures[selected_overload.index],
+                            lhs: lhs_conv.id,
+                            rhs: rhs_conv.id,
+                        },
+                    );
+
                     if is_assignment {
-                        Expr {
+                        let op_result_conv = self.apply_implicit_conversion(op_result, left.ty.peel_ref());
+                        self.create_and_add_expr(
                             ast_id,
-                            kind: ExprKind::BinaryAssign {
-                                op,
-                                signature: operation.signatures[signature.overload_index],
-                                lhs: lhs_conv.id,
-                                rhs: rhs_conv.id,
+                            self.compiler.tyctxt().prim_tys.void.clone(),
+                            ExprKind::Assign {
+                                lhs: left.id,
+                                rhs: op_result_conv.id,
                             },
-                            ty: self.compiler.tyctxt().prim_tys.void.clone(),
-                        }
+                        )
                     } else {
-                        Expr {
-                            ast_id,
-                            kind: ExprKind::Binary {
-                                op,
-                                signature: operation.signatures[signature.overload_index],
-                                lhs: lhs_conv.id,
-                                rhs: rhs_conv.id,
-                            },
-                            ty: signature.result_type.clone(),
-                        }
+                        op_result
                     }
                 }
                 None => {
-                    self.body.diagnostics.push(InvalidTypesForBinaryOp {
-                        expr: ast_id,
-                        left_ty: ty_lhs.ty.clone(),
-                        right_ty: ty_rhs.ty.clone(),
-                    });
+                    // don't emit diagnostics if one of the types is already the error type.
+                    if !left.is_error() && !right.is_error() {
+                        self.body.diagnostics.push(InvalidTypesForBinaryOp {
+                            expr: ast_id,
+                            left_ty: left.ty.clone(),
+                            right_ty: right.ty.clone(),
+                        });
+                    }
                     return self.error_expr(ast_id);
                 }
             }
         } else {
             // assignment only (`x = y`)
-            let rhs_conv = self.apply_implicit_conversion(ty_rhs, ty_lhs.ty.clone());
-            Expr {
+            let rhs_conv = self.apply_implicit_conversion(right, left.ty.peel_ref());
+            self.create_and_add_expr(
                 ast_id,
-                kind: ExprKind::Assign {
-                    lhs: ty_lhs.id,
+                self.compiler.tyctxt().prim_tys.void.clone(),
+                ExprKind::Assign {
+                    lhs: left.id,
                     rhs: rhs_conv.id,
                 },
-                ty: self.compiler.tyctxt().prim_tys.void.clone(),
-            }
-        };
-
-        self.add_expr(expr)
-    }
-
-    fn lower_index_expr(&mut self, ast_id: ExprAstId, array_or_vector: DefExprId, index: DefExprId) -> TypedExprId {
-        let array_expr = self.lower_expr(array_or_vector);
-        let index_expr = self.lower_expr(index);
-
-        let ty = match array_expr.ty.deref() {
-            TypeKind::Vector(scalar_type, _) => self.resolver.tyctxt().ty(TypeKind::Scalar(*scalar_type)),
-            TypeKind::Array { element_type, .. } | TypeKind::RuntimeArray { element_type, .. } => element_type.clone(),
-            _ => {
-                self.body.diagnostics.push(InvalidIndexing {
-                    expr: ast_id,
-                    base_ty: array_expr.ty.clone(),
-                });
-                return self.error_expr(ast_id);
-            }
-        };
-
-        match index_expr.ty.deref() {
-            TypeKind::Scalar(ScalarType::Int | ScalarType::UnsignedInt) => {}
-            _ => {
-                self.body.diagnostics.push(InvalidIndexType {
-                    expr: self.body.exprs[index_expr.id].ast_id,
-                    ty: index_expr.ty.clone(),
-                });
-                return self.error_expr(ast_id);
-            }
-        };
-
-        // TODO check for out of bounds access if index is constant
-        self.create_and_add_expr(
-            ast_id,
-            ty,
-            ExprKind::Index {
-                array_or_vector: array_expr.id,
-                index: index_expr.id,
-            },
-        )
+            )
+        }
     }
 }
 
-pub(crate) fn lower_function_body(compiler: &dyn CompilerDb, function_id: FunctionId) -> ty::body::Body {
-    let body = compiler.function_body(function_id);
-    let func_loc = function_id.loc(compiler);
-    let module_scope = compiler.module_scope(func_loc.module);
+pub(crate) fn lower_function_body(db: &dyn CompilerDb, function_id: FunctionId) -> ty::body::Body {
+    let body = db.function_body(function_id);
+    let func_data = function_id.data(db);
+    let signature = function_id.signature(db);
+
     // Resolver for the function body
-    let mut resolver = func_loc.module.resolver(compiler);
-    let signature = compiler.function_signature(function_id);
+    let func_loc = function_id.loc(db);
+    let mut resolver = func_loc.module.resolver(db);
 
     let mut ty_body = Body {
         stmts: IndexVec::with_capacity(body.statements.len()),
         exprs: IndexVec::with_capacity(body.expressions.len()),
-        local_var: IndexVec::with_capacity(body.local_vars.len()),
+        local_vars: IndexVec::with_capacity(body.local_vars.len()),
         blocks: IndexVec::with_capacity(body.blocks.len()),
         entry_block: None,
         params: vec![],
         diagnostics: vec![],
     };
 
-    if !body.params.is_empty() {
+    if !func_data.parameters.is_empty() {
         // add body parameters as local variables
         let mut param_scope = Scope::new();
-        assert_eq!(body.params.len(), signature.parameter_types.len());
-        for (&param, param_ty) in body.params.iter().zip(signature.parameter_types.iter()) {
-            let v = &body.local_vars[param];
-
-            let param_local_id = ty_body.local_var.push(LocalVar {
-                name: v.name.clone(),
-                ast_id: v.ast_id,
+        assert_eq!(func_data.parameters.len(), signature.parameter_types.len());
+        for (param, param_ty) in func_data.parameters.iter().zip(signature.parameter_types.iter()) {
+            let param_local_id = ty_body.local_vars.push(LocalVar {
+                name: param.name.clone(),
+                ast_id: LocalVarAstId::FnParam(param.ast),
                 ty: param_ty.clone(),
             });
-            param_scope.add_local_var(&v.name, param_local_id);
+            param_scope.add_local_var(&param.name, param_local_id);
             ty_body.params.push(param_local_id);
         }
 
@@ -731,7 +991,7 @@ pub(crate) fn lower_function_body(compiler: &dyn CompilerDb, function_id: Functi
 
     if let Some(entry_block) = body.entry_block {
         let mut ctxt = TyBodyLowerCtxt {
-            compiler,
+            compiler: db,
             body: ty_body,
             item_body: body,
             resolver,

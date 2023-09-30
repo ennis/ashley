@@ -1,19 +1,16 @@
 use crate::{
     def,
-    def::{body::BodyMap, AstId, DefAstId, DefId, DefLoc, FunctionId, FunctionLoc, HasSource, InFile},
+    def::{AstId, AstMapOwnerId, FunctionId},
     diagnostic::Diagnostic,
     syntax::{ast, SyntaxNode},
-    ty::{
-        body::{Body, DefExprId, ExprAstId},
-        FunctionSignature, Type,
-    },
+    ty::{body::ExprAstId, FunctionSignature, Type},
     utils::CommaSeparated,
     CompilerDb, SourceFileId,
 };
 use ashley_data_structures::Id;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) enum ComponentSyntaxError {
+pub enum ComponentSyntaxError {
     InvalidSyntax,
     TooManyComponents,
 }
@@ -47,6 +44,7 @@ pub enum TyDiagnostic {
     },
     UnresolvedFunction {
         expr: ExprAstId,
+        name: String,
     },
     ExpectedFunctionName {
         expr: ExprAstId,
@@ -70,15 +68,11 @@ pub enum TyDiagnostic {
         arg_types: Vec<Type>,
         matches: Vec<FunctionId>,
     },
-    InvalidTypesForPrefixOp {
-        expr: ExprAstId,
-        operand_ty: Type,
-    },
-    InvalidTypesForPostfixOp {
+    /*InvalidTypesForUnaryOp {
         expr: ExprAstId,
         op: ast::UnaryOp,
         operand_ty: Type,
-    },
+    },*/
     InvalidTypesForBinaryOp {
         expr: ExprAstId,
         left_ty: Type,
@@ -102,8 +96,13 @@ pub enum TyDiagnostic {
     },
     InvalidComponentSelection {
         expr: ExprAstId,
+        selection: String,
         error: ComponentSyntaxError,
         receiver: Type,
+    },
+    ExpectedPlace {
+        expr: ExprAstId,
+        ty: Type,
     },
     UnresolvedField {
         expr: ExprAstId,
@@ -115,6 +114,7 @@ pub enum TyDiagnostic {
     },
     ReceiverNotAStructOrVector {
         expr: ExprAstId,
+        receiver: Type,
     },
     ParseIntError {
         expr: ExprAstId,
@@ -143,11 +143,9 @@ pub enum TyDiagnostic {
 }
 
 impl TyDiagnostic {
-    pub fn render(&self, db: &dyn CompilerDb, owner_def: DefId) -> Diagnostic {
-        let loc = owner_def.loc(db);
-        let module = loc.module();
-        let ast_map = owner_def.ast_map(db);
-        //let (source_file, green_node) = owner_def.module(db).syntax(db);
+    pub fn render(&self, db: &dyn CompilerDb, ast_map_owner: AstMapOwnerId) -> Diagnostic {
+        let module = ast_map_owner.module(db);
+        let ast_map = ast_map_owner.ast_map(db);
 
         let syntax = |ast_id: &AstId<ast::Expr>| ast_map.node_in_file(db, module, *ast_id);
         let ty_syntax = |ast_id: &AstId<ast::Type>| ast_map.node_in_file(db, module, *ast_id);
@@ -165,16 +163,16 @@ impl TyDiagnostic {
             }
             TyDiagnostic::InvalidIndexing { expr, base_ty } => {
                 let syn = syntax(expr);
-                Diagnostic::error(format!("values of type {base_ty} cannot be indexed")).span(syn.span())
+                Diagnostic::error(format!("values of type `{base_ty}` cannot be indexed")).span(syn.span())
             }
             TyDiagnostic::InvalidIndexType { expr, ty } => {
                 let syn = syntax(expr);
                 Diagnostic::error("index expressions should be integers")
                     .label(syn.span(), format!("this has type `{ty}`"))
             }
-            TyDiagnostic::UnresolvedFunction { expr } => {
+            TyDiagnostic::UnresolvedFunction { expr, name } => {
                 let syn = syntax(expr);
-                Diagnostic::error("unresolved function name").span(syn.span())
+                Diagnostic::error(format!("unresolved function name `{name}`")).span(syn.span())
             }
             TyDiagnostic::ExpectedFunctionName { expr } => {
                 let syn = syntax(expr);
@@ -183,6 +181,12 @@ impl TyDiagnostic {
             TyDiagnostic::ExpectedValue { expr } => {
                 let syn = syntax(expr);
                 Diagnostic::error("expected value").span(syn.span())
+            }
+            TyDiagnostic::ExpectedPlace { expr, ty } => {
+                let syn = syntax(expr);
+                Diagnostic::error("expected a place")
+                    .span(syn.span())
+                    .note(format!("expression is an rvalue of type `{ty}`"))
             }
             TyDiagnostic::NoMatchingOverload {
                 expr,
@@ -227,37 +231,55 @@ impl TyDiagnostic {
                     let argument_types = CommaSeparated(&signature.parameter_types);
                     diag = diag.note(format!("{return_type} {name}({argument_types})"))
                 }
-
                 diag
             }
-            TyDiagnostic::InvalidTypesForPrefixOp { .. } => {
+            /*TyDiagnostic::InvalidTypesForPrefixOp { .. } => {
                 todo!()
             }
             TyDiagnostic::InvalidTypesForPostfixOp { .. } => {
                 todo!()
+            }*/
+            TyDiagnostic::InvalidTypesForBinaryOp {
+                expr,
+                left_ty,
+                right_ty,
+            } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("invalid types to binary operation"))
+                    .span(syn.span())
+                    .note(format!("operand types are {left_ty}, {right_ty}"))
             }
-            TyDiagnostic::InvalidTypesForBinaryOp { .. } => {
-                /*self.compiler
-                .diag_error(format!("no overload for binary operation `{op_token}`"))
-                .location(&op_token)
-                .note(format!("operand types are: {lhs_ty} {op_token} {rhs_ty}"))
-                .emit();*/
-                todo!()
+            TyDiagnostic::NoImplicitConversion { expr, to, from } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("cannot implicitly convert `{from}` to `{to}`"))
+                    .label(syn.span(), format!("this is of type `{from}`"))
             }
-            TyDiagnostic::NoImplicitConversion { .. } => {
-                todo!()
+            TyDiagnostic::InvalidComponentSelection {
+                expr,
+                error,
+                selection,
+                receiver,
+            } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("invalid component selection: `{selection}`"))
+                    .span(syn.span())
+                    .note(format!("base expression is of type `{receiver}`"))
             }
-            TyDiagnostic::InvalidComponentSelection { .. } => {
-                todo!()
+            TyDiagnostic::UnresolvedField { expr, name, receiver } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("unresolved field: `{name}`"))
+                    .span(syn.span())
+                    .note(format!("base expression is of type `{receiver}`"))
             }
-            TyDiagnostic::UnresolvedField { .. } => {
-                todo!()
+            TyDiagnostic::UnresolvedPath { expr } => {
+                let syn = syntax(expr);
+                Diagnostic::error(format!("unresolved path")).span(syn.span())
             }
-            TyDiagnostic::UnresolvedPath { .. } => {
-                todo!()
-            }
-            TyDiagnostic::ReceiverNotAStructOrVector { .. } => {
-                todo!()
+            TyDiagnostic::ReceiverNotAStructOrVector { expr, receiver } => {
+                let syn = syntax(expr);
+                Diagnostic::error("invalid field or component selection")
+                    .span(syn.span())
+                    .note(format!("base expression is of type `{receiver}`"))
             }
             TyDiagnostic::ParseIntError { .. } => {
                 todo!()
@@ -289,9 +311,7 @@ impl TyDiagnostic {
                 let syn = syntax(expr);
                 Diagnostic::error(format!("expected boolean expression"))
                     .label(syn.span(), format!("the expression is of type `{ty}`"))
-            } /*TyDiagnostic::InvalidArguments { .. } => {
-                  todo!()
-              }*/
+            }
         };
         diag
     }

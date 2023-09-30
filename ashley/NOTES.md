@@ -2039,4 +2039,31 @@ Contents of `std:core` (a real file somewhere on disk)
 
 Generated with a script.
 
-Builtins will be treated the same way as other functions. 
+Builtins will be treated the same way as other functions. No generics for now.
+
+### SPIR-V intrinsic mini-language
+
+```
+@spirv_intrinsic("ImageSampleImplicitLod(SampledImage($0,$1),$2)")
+extern vec4 textureSample(texture2D, sampler, vec2);
+@spirv_intrinsic("ImageSampleImplicitLod(SampledImage($0,$1),$2)")
+extern ivec4 textureSample(itexture2D, sampler, vec2);
+@spirv_intrinsic("ImageSampleImplicitLod(SampledImage($0,$1),$2)")
+extern uvec4 textureSample(utexture2D, sampler, vec2);
+
+@spirv_intrinsic("FMod($0, ComponentConstruct($1,$1))")
+extern vec2 modf(vec2, float);
+@spirv_intrinsic("FMod($0, ComponentConstruct($1,$1,$1))")
+extern vec3 modf(vec3, float);
+@spirv_intrinsic("FMod($0, ComponentConstruct($1,$1,$1,$1))")
+extern vec4 modf(vec4, float);
+```
+
+## Streamlined module items
+
+* Goal: one AstMap for the module index, then one AstMap per definition
+* Module index: list of visible definitions in a module. Sufficient for name resolution.
+* Don't need to parse struct bodies or global initializers for the module index
+* Issue: functions:
+  * Modifying the function arguments shouldn't affect other definitions => function arguments are stored in a different AstMap than the body.
+  * However, we may not want to parse the function body at the same time as the arguments => function body has a separate AstMap

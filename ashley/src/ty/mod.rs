@@ -16,8 +16,7 @@ use crate::{
     db::{DebugWithDb, ModuleId},
     def,
     def::{
-        AstId, BodyLoc, BodyOwnerId, DefLoc, FieldLoc, FunctionId, FunctionLoc, GlobalId, HasSource, Resolver,
-        StructId, StructLoc,
+        AstId, BodyLoc, BodyOwnerId, DefLoc, FieldLoc, FunctionId, FunctionLoc, GlobalId, Resolver, StructId, StructLoc,
     },
     syntax::{ast, ast::TypeRef, SyntaxNode},
     ty::{interner::Interner, lower::TypeLoweringCtxt},

@@ -4,7 +4,7 @@ use crate::{
     def::Function,
     ty::{
         body::{lower::TyBodyLowerCtxt, DefExprId, ExprAstId},
-        PrimitiveTypes, ScalarType, TyDiagnostic, Type, TypeKind,
+        FunctionSignature, PrimitiveTypes, ScalarType, TyDiagnostic, Type, TypeKind,
     },
 };
 use ashley::def::FunctionId;
@@ -69,7 +69,9 @@ pub(crate) fn check_signature(signature: &[Type], arguments: &[Type]) -> Option<
 
     let mut conversion_ranks = SmallVec::new();
     for (sigty, argty) in signature.iter().zip(arguments.iter()) {
-        if sigty == argty {
+        // autoderef applies when calling a function or operator
+        let argty = argty.unref();
+        if sigty.deref() == argty {
             // direct match, no conversion necessary
             conversion_ranks.push(0);
             continue;
@@ -77,7 +79,7 @@ pub(crate) fn check_signature(signature: &[Type], arguments: &[Type]) -> Option<
 
         // check type of argument, if it doesn't work, retry with an implicit conversion
         //eprintln!("chk param sig:{:?} arg:{:?}", &m.types[*sigty], &m.types[*argty]);
-        let conversion_rank = match (sigty.deref(), argty.deref()) {
+        let conversion_rank = match (sigty.deref(), argty) {
             // Source type => implicitly converts to
             (TK::Scalar(targ), TK::Scalar(tsig)) => match (targ, tsig) {
                 (ScalarType::Int, ScalarType::UnsignedInt) => 1,
@@ -174,10 +176,9 @@ fn best_match(mut matches: Vec<Match>) -> Result<Match, RankMatchesError> {
     }
 }
 
-pub(crate) struct BuiltinOperationConcreteSignature {
-    pub(crate) overload_index: usize,
-    pub(crate) result_type: Type,
-    pub(crate) param_types: Vec<Type>,
+pub(crate) struct OverloadSelection {
+    pub(crate) index: usize,
+    pub(crate) signature: FunctionSignature,
 }
 
 impl TyBodyLowerCtxt<'_> {
@@ -188,11 +189,11 @@ impl TyBodyLowerCtxt<'_> {
         func_name: &str,
         functions: &[FunctionId],
         args: &[Type],
-    ) -> Option<FunctionId> {
+    ) -> Option<OverloadSelection> {
         let mut matches = vec![];
         let mut match_ranks = vec![];
 
-        for function in functions.iter() {
+        for (i, function) in functions.iter().enumerate() {
             let signature = function.signature(self.compiler);
 
             if signature.parameter_types.len() != args.len() {
@@ -210,7 +211,10 @@ impl TyBodyLowerCtxt<'_> {
                 Some(conversion_ranks) => {
                     // signature matches (possibly with implicit conversions)
                     // add it to the list of candidates
-                    matches.push(*function);
+                    matches.push(OverloadSelection {
+                        index: i,
+                        signature: signature.clone(),
+                    });
                     match_ranks.push(Match {
                         index: matches.len() - 1,
                         conversion_ranks,
@@ -224,13 +228,13 @@ impl TyBodyLowerCtxt<'_> {
 
         // rank candidates
         match best_match(match_ranks) {
-            Ok(m) => Some(matches[m.index]),
+            Ok(m) => Some(matches.into_iter().nth(m.index).unwrap()),
             Err(RankMatchesError::Ambiguous(set)) => {
                 self.body.diagnostics.push(TyDiagnostic::AmbiguousOverload {
                     expr,
                     func_name: func_name.to_string(),
                     arg_types: args.into(),
-                    matches: set.into_iter().map(|i| matches[i.index]).collect(),
+                    matches: set.into_iter().map(|i| functions[matches[i.index].index]).collect(),
                 });
                 None
             }
@@ -278,8 +282,8 @@ impl TyBodyLowerCtxt<'_> {
         expr: ExprAstId,
         op: &BuiltinOperation,
         arguments: &[Type],
-    ) -> Option<BuiltinOperationConcreteSignature> {
-        let mut match_signatures: Vec<BuiltinOperationConcreteSignature> = Vec::new();
+    ) -> Option<OverloadSelection> {
+        let mut match_signatures: Vec<OverloadSelection> = Vec::new();
         let mut match_ranks: Vec<Match> = Vec::new();
 
         'check_signatures: for (index, sig) in op.signatures.iter().enumerate() {
@@ -315,10 +319,12 @@ impl TyBodyLowerCtxt<'_> {
                     // check the concrete signature
                     if let Some(conv) = check_signature(&parameter_types, arguments) {
                         let exact_match = conv.iter().all(|x| *x == 0);
-                        match_signatures.push(BuiltinOperationConcreteSignature {
-                            overload_index: index,
-                            param_types: parameter_types,
-                            result_type,
+                        match_signatures.push(OverloadSelection {
+                            index,
+                            signature: FunctionSignature {
+                                parameter_types,
+                                return_type: result_type,
+                            },
                         });
                         match_ranks.push(Match {
                             index: match_signatures.len() - 1,

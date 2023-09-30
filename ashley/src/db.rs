@@ -4,8 +4,8 @@ use crate::{
     def::{
         body,
         body::{Body, BodyMap},
-        module_scope_query, scope_for_body_query, AstIdMap, BodyId, BodyLoc, BodyOwnerId, BodyOwnerLoc, DefLoc,
-        FunctionId, FunctionLoc, GlobalId, GlobalLoc, InFile, ModuleItemMap, ModuleItems, Scope, StructId, StructLoc,
+        module_scope_query, scope_for_body_query, AstMap, BodyId, BodyLoc, BodyOwnerId, BodyOwnerLoc, DefLoc,
+        FunctionId, FunctionLoc, GlobalId, GlobalLoc, InFile, ModuleIndex, ModuleIndexMap, Scope, StructId, StructLoc,
     },
     diagnostic::Span,
     ir, layout,
@@ -75,12 +75,12 @@ new_key_type! {
 }
 
 impl ModuleId {
-    pub fn items<'a>(&self, compiler: &'a dyn CompilerDb) -> &'a ModuleItems {
-        compiler.module_items(*self)
+    pub fn index<'db>(self, db: &'db dyn CompilerDb) -> &'db ModuleIndex {
+        db.module_index(self)
     }
 
-    pub fn syntax<'a>(&self, db: &'a dyn CompilerDb) -> (SourceFileId, GreenNode) {
-        db.module_syntax_tree(*self)
+    pub fn syntax(self, db: &dyn CompilerDb) -> (SourceFileId, GreenNode) {
+        db.module_syntax_tree(self)
     }
 }
 
@@ -184,9 +184,9 @@ define_database_tables! {
 
         // ----------
         query (module: ModuleId) -> {
-            module_items: ModuleItems   [set_module_items],
-            module_item_map: ModuleItemMap        [set_module_item_map]
-        } => def::module_items_and_item_map_query;
+            module_index: ModuleIndex   [set_module_index],
+            module_index_map: AstMap        [set_module_index_map]
+        } => def::module_index_query;
 
         query module_scope(module: ModuleId) -> Scope => module_scope_query;
 
@@ -195,9 +195,20 @@ define_database_tables! {
         //query scope_for_definition(definition: DefId) -> Scope  => item::scope_for_definition_query;
         //query def_ty(definition: DefWithTypeId) -> ty::Type => ty::def_ty_query;
 
-        query struct_data(strukt: StructId) -> def::Struct => def::struct_data_query;
-        query global_data(global: GlobalId) -> def::Global => def::global_data_query;
-        query function_data(function: FunctionId) -> def::Function => def::function_data_query;
+        query (strukt: StructId) -> {
+            struct_data: def::Struct [set_struct_data],
+            struct_data_ast_map: def::AstMap [set_struct_data_ast_map]
+        } => def::struct_data_query;
+
+        query (global: GlobalId) -> {
+            global_data: def::Global [set_global_data],
+            global_data_ast_map: def::AstMap [set_global_data_ast_map]
+        }  => def::global_data_query;
+
+        query (function: FunctionId) -> {
+            function_data: def::Function [set_function_data],
+            function_data_ast_map: def::AstMap [set_function_data_ast_map]
+        } => def::function_data_query;
 
         /*query (body: BodyId) -> {
             body: Body  [set_body],

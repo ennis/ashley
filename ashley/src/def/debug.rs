@@ -9,11 +9,13 @@ use std::fmt::Formatter;
 impl DebugWithDb for ModuleId {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
         let uri = &compiler.module_data(*self).url;
-        write!(formatter, "ModuleId(`{uri}`)")?;
+        let raw_id = self.0;
+        write!(formatter, "ModuleId(`{uri}` {raw_id:04x})")?;
         Ok(())
     }
 }
 
+/*
 impl DebugWithDb for StructLoc {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {
         let mod_uri = &compiler.module_data(self.module).url;
@@ -62,7 +64,7 @@ impl DebugWithDb for FieldLoc {
         )?;
         Ok(())
     }
-}
+}*/
 
 impl DebugWithDb for StructId {
     fn fmt<'a>(&'a self, formatter: &mut Formatter<'_>, compiler: &'a dyn CompilerDb) -> std::fmt::Result {

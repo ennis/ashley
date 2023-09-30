@@ -2,12 +2,11 @@
 
 use crate::{
     def,
-    def::{AstId, AstIdMap, BodyOwnerId, DefLoc, Resolver, Scope, TypeRes, ValueRes},
+    def::{AstId, BodyOwnerId, DefLoc, Resolver, Scope, TypeRes, ValueRes},
     syntax::ast,
     ty::{ScalarType, TyDiagnostic, TyOwnerId, Type, TypeCtxt, TypeKind},
     CompilerDb, SourceFileId,
 };
-use ashley::def::DefAstId;
 use std::sync::Arc;
 
 /*fn check_int_or_uint(

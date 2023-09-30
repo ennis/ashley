@@ -3,9 +3,9 @@
 use crate::{
     db::DebugWithDb,
     def::{
-        diagnostic::ItemDiagnostic, ty::TypeKind, AstId, AstIdMap, AstMap, DefLoc, Function, FunctionLoc,
-        FunctionParam, Global, GlobalLoc, Import, InFile, Linkage, ModuleItemMap, ModuleItems, Qualifier, Struct,
-        StructField, StructLoc, Type, Visibility,
+        diagnostic::ItemDiagnostic, ty::TypeKind, AstId, AstMap, DefLoc, Function, FunctionLoc, FunctionParam, Global,
+        GlobalLoc, Import, InFile, Linkage, ModuleIndex, ModuleIndexMap, Qualifier, Struct, StructField, StructLoc,
+        Type, Visibility,
     },
     syntax::{ast, ast::AstToken, Lang, SyntaxNode, SyntaxNodePtr},
     CompilerDb, ModuleId,
@@ -20,10 +20,6 @@ use std::{collections::HashMap, marker::PhantomData, ops::Index};
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 pub struct ItemLowerCtxt<'a> {
     compiler: &'a dyn CompilerDb,
-    module: ModuleItems,
-    map: ModuleItemMap,
-    module_id: ModuleId,
-    syntax: GreenNode,
 }
 
 fn visibility(vis: &Option<ast::Visibility>) -> Visibility {
@@ -99,17 +95,11 @@ pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &ast::Ty
 }
 
 impl<'a> ItemLowerCtxt<'a> {
-    pub(crate) fn new(compiler: &'a dyn CompilerDb, syntax: GreenNode, module_id: ModuleId) -> ItemLowerCtxt<'a> {
-        ItemLowerCtxt {
-            syntax,
-            compiler,
-            module: ModuleItems::new(),
-            map: ModuleItemMap::new(),
-            module_id,
-        }
+    pub(crate) fn new(compiler: &'a dyn CompilerDb) -> ItemLowerCtxt<'a> {
+        ItemLowerCtxt { compiler }
     }
 
-    pub(crate) fn lower_module(mut self) -> (ModuleItems, ModuleItemMap) {
+    /*pub(crate) fn lower_module(mut self) -> (ModuleIndex, ModuleItemMap) {
         let module = ast::Module::cast(SyntaxNode::new_root(self.syntax.clone())).expect("invalid module syntax");
         for item in module.items() {
             self.lower_item(&item)
@@ -133,9 +123,9 @@ impl<'a> ItemLowerCtxt<'a> {
                 self.lower_import(import);
             }
         }
-    }
+    }*/
 
-    fn lower_import(&mut self, import: &ast::ImportDecl) -> Option<Id<Import>> {
+    /*fn lower_import(&mut self, import: &ast::ImportDecl) -> Option<Id<Import>> {
         //let ast_id = self.ast_id_map.push(import);
         // TODO parse URI string (unescape, etc.)
         // TODO parse aliases, module parameters
@@ -143,7 +133,7 @@ impl<'a> ItemLowerCtxt<'a> {
         let id = self.module.imports.push(Import { uri });
         let id2 = self.map.imports.push(AstPtr::new(import));
         Some(id)
-    }
+    }*/
 
     fn lower_field(&mut self, def_map: &mut AstMap, field: &ast::StructField) -> Option<StructField> {
         let name = field.name()?.text();
@@ -155,9 +145,11 @@ impl<'a> ItemLowerCtxt<'a> {
         })
     }
 
-    fn lower_struct(&mut self, strukt: &ast::StructDef) -> Option<Id<Struct>> {
+    pub(super) fn lower_struct(mut self, strukt: &ast::StructDef) -> (Struct, AstMap) {
         let mut ast_map = AstMap::new();
-        let name = strukt.name()?.text();
+        // If there's a syntax error and no name could be parsed, we shouldn't even attempt to
+        // lower the fields. Same with functions & globals.
+        let name = strukt.name().expect("expected a name").text();
         let mut fields = IndexVec::new();
         for f in strukt.fields() {
             let Some(field) = self.lower_field(&mut ast_map, &f) else {
@@ -169,27 +161,29 @@ impl<'a> ItemLowerCtxt<'a> {
         let attributes = self.lower_attributes(&mut ast_map, strukt.attrs());
         let visibility = visibility(&strukt.visibility());
 
-        let id = self.module.structs.push(Struct {
-            attrs: attributes,
-            name,
-            visibility,
-            fields,
-        });
-        let id2 = self.map.structs.push((AstPtr::new(strukt), ast_map));
-        assert_eq!(id, id2);
-        Some(id)
+        (
+            Struct {
+                attrs: attributes,
+                name,
+                visibility,
+                fields,
+            },
+            ast_map,
+        )
     }
 
-    fn lower_function(&mut self, func: &ast::FnDef) -> Option<Id<Function>> {
+    pub(super) fn lower_function(mut self, func: &ast::FnDef) -> (Function, AstMap) {
         //let ast_id = self.ast_id_map.push(func);
         let mut ast_map = AstMap::new();
-        let name = func.name()?.text();
+        let name = func.name().expect("expected a name").text();
         let mut parameters = IndexVec::new();
-        for p in func.param_list()?.parameters() {
-            let Some(param) = self.lower_function_param(&mut ast_map, &p) else {
-                continue;
-            };
-            parameters.push(param);
+        if let Some(param_list) = func.param_list() {
+            for p in param_list.parameters() {
+                let Some(param) = self.lower_function_param(&mut ast_map, &p) else {
+                    continue;
+                };
+                parameters.push(param);
+            }
         }
         let body = func.block().map(|block| ast_map.push(&block));
         let visibility = visibility(&func.visibility());
@@ -203,18 +197,18 @@ impl<'a> ItemLowerCtxt<'a> {
 
         let return_type = func.return_type().map(|ty| self.lower_type(&mut ast_map, &ty));
 
-        let id = self.module.functions.push(Function {
-            attributes,
-            name,
-            visibility,
-            body,
-            linkage,
-            parameters,
-            return_type,
-        });
-        let id2 = self.map.functions.push((AstPtr::new(func), ast_map));
-        assert_eq!(id, id2);
-        Some(id)
+        (
+            Function {
+                attributes,
+                name,
+                visibility,
+                body,
+                linkage,
+                parameters,
+                return_type,
+            },
+            ast_map,
+        )
     }
 
     fn lower_attributes(
@@ -227,8 +221,7 @@ impl<'a> ItemLowerCtxt<'a> {
 
     fn lower_function_param(&mut self, def_map: &mut AstMap, func_param: &ast::FnParam) -> Option<FunctionParam> {
         let ast_id = def_map.push(func_param);
-        let name = func_param.name()?.text();
-        // TODO lower even if type is missing or failed to parse?
+        let name = func_param.name().map(|name| name.text()).unwrap_or(String::new());
         let ty = self.lower_type_opt(def_map, &func_param.ty());
         Some(FunctionParam { ast: ast_id, name, ty })
     }
@@ -241,9 +234,9 @@ impl<'a> ItemLowerCtxt<'a> {
         lower_type(self.compiler, ast_map, ty)
     }
 
-    fn lower_global_variable(&mut self, global: &ast::Global) -> Option<Id<Global>> {
+    pub(super) fn lower_global_variable(mut self, global: &ast::Global) -> (Global, AstMap) {
         let mut ast_map = AstMap::new();
-        let name = global.name()?.text().to_string();
+        let name = global.name().expect("expected a name").text().to_string();
         let visibility = visibility(&global.visibility());
         let extern_ = global.extern_().map(|linkage| linkage.is_extern()).unwrap_or(false);
         let linkage = if visibility == Visibility::Public || extern_ {
@@ -256,21 +249,22 @@ impl<'a> ItemLowerCtxt<'a> {
 
         let ty = self.lower_type_opt(&mut ast_map, &global.ty());
 
-        let id = self.module.globals.push(Global {
-            ty,
-            attrs: attributes,
-            name,
-            visibility,
-            linkage,
-            storage_class,
-        });
-        let id2 = self.map.globals.push((AstPtr::new(global), ast_map));
-        assert_eq!(id, id2);
-        Some(id)
+        (
+            Global {
+                ty,
+                attrs: attributes,
+                name,
+                visibility,
+                linkage,
+                storage_class,
+            },
+            ast_map,
+        )
     }
 }
 
-fn dump_module_items(compiler: &dyn CompilerDb, module: ModuleId, items: &ModuleItems) {
+/*
+fn dump_module_items(compiler: &dyn CompilerDb, module: ModuleId, items: &ModuleIndex) {
     use std::fmt::Write;
     let mut o = String::new();
 
@@ -297,3 +291,4 @@ fn dump_module_items(compiler: &dyn CompilerDb, module: ModuleId, items: &Module
 
     trace!("{}", o);
 }
+*/

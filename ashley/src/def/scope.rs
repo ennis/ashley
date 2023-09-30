@@ -1,6 +1,6 @@
 // TODO: move this (along with Resolver) out of "def" and into "ty", we don't do name resolution at this stage anyway
 use crate::{
-    builtins::BuiltinOperationPtr,
+    builtins::{r#mod, BuiltinOperationPtr},
     db::ModuleId,
     def,
     def::{AstId, BodyId, DefLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
@@ -9,6 +9,7 @@ use crate::{
     ty::Type,
     CompilerDb,
 };
+use ashley::def::IndexEntry;
 use ashley_data_structures::Id;
 use std::{collections::HashMap, sync::Arc};
 
@@ -167,7 +168,11 @@ pub(crate) fn resolve_name(tyctxt: &TypeCtxt, name: &str, scopes: &[Scope]) -> O
 impl Scope {
     pub(crate) fn add_builtins(&mut self) {
         for b in crate::builtins::OPERATION_SIGNATURES {
-            self.values.insert(b.name.to_string(), ValueRes::BuiltinFunction(*b));
+            // there is a operation called "r#mod" because it conflicts with the rust keyword (mod)
+            self.values.insert(
+                b.name.trim_start_matches("r#").to_string(),
+                ValueRes::BuiltinFunction(*b),
+            );
         }
     }
 }
@@ -182,36 +187,55 @@ pub(crate) fn scope_for_definition_query(compiler: &dyn CompilerDb, def: DefLoc)
 
 pub(crate) fn module_scope_query(compiler: &dyn CompilerDb, module: ModuleId) -> Scope {
     // this query will re-run when the module items have changed
-    let items = compiler.module_items(module);
+    let index = module.index(compiler);
 
     let mut scope = Scope::new();
     //scope.add_builtin_functions();
 
-    for (_import_id, _import) in items.imports.iter_full() {
-        // TODO resolve imports
-        todo!("import resolution")
+    for def in index.definitions.iter() {
+        match *def {
+            IndexEntry::Struct { ref name, ast_id } => {
+                let id = compiler.struct_id(StructLoc { module, strukt: ast_id });
+                scope.types.insert(name.clone(), TypeRes::Struct(id));
+            }
+            IndexEntry::Function { ref name, ast_id } => {
+                let id = compiler.function_id(FunctionLoc {
+                    module,
+                    function: ast_id,
+                });
+                scope.values.insert(name.clone(), ValueRes::Function(id));
+            }
+            IndexEntry::Global { ref name, ast_id } => {
+                let id = compiler.global_id(GlobalLoc { module, global: ast_id });
+                scope.values.insert(name.clone(), ValueRes::Global(id));
+            }
+            IndexEntry::Import { .. } => {
+                // TODO resolve imports
+            }
+        }
     }
-    for (struct_id, struct_data) in items.structs.iter_full() {
+
+    /*for (struct_id, struct_data) in index.structs.iter_full() {
         let id = compiler.struct_id(StructLoc {
             module,
             strukt: struct_id,
         });
         scope.types.insert(struct_data.name.clone(), TypeRes::Struct(id));
     }
-    for (function_id, function_data) in items.functions.iter_full() {
+    for (function_id, function_data) in index.functions.iter_full() {
         let id = compiler.function_id(FunctionLoc {
             module,
             function: function_id,
         });
         scope.values.insert(function_data.name.clone(), ValueRes::Function(id));
     }
-    for (global_id, global_data) in items.globals.iter_full() {
+    for (global_id, global_data) in index.globals.iter_full() {
         let id = compiler.global_id(GlobalLoc {
             module,
             global: global_id,
         });
         scope.values.insert(global_data.name.clone(), ValueRes::Global(id));
-    }
+    }*/
 
     scope
 }

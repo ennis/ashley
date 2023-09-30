@@ -1,5 +1,6 @@
 use anyhow::Result;
 use ashley::{
+    def::AstMapOwnerId,
     diagnostic::{Diagnostic, Severity},
     syntax::SyntaxDiagnostic,
     termcolor, Compiler, CompilerDb, ModuleId, SourceFileId,
@@ -89,6 +90,8 @@ fn emit_diagnostic(db: &dyn CompilerDb, diag: Diagnostic) {
             .push(Label::new(style, label.span.file, range).with_message(label.message));
     }
 
+    cs_diag.notes = diag.notes;
+
     let mut color_stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
     term::emit(
         &mut color_stderr,
@@ -100,7 +103,7 @@ fn emit_diagnostic(db: &dyn CompilerDb, diag: Diagnostic) {
 }
 
 fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
-    db.module_items(module);
+    db.module_index(module);
 
     // display syntax errors
     for diag in db.syntax_diagnostics(source_file) {
@@ -132,7 +135,9 @@ fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
         let ty_body = db.ty_function_body(function_id);
         let func_data = db.function_data(function_id);
         trace!("=== Function `{}` ===", func_data.name);
-        trace!("{ty_body:#?}")
+        for d in ty_body.diagnostics.iter() {
+            emit_diagnostic(db, d.render(db, AstMapOwnerId::FunctionBody(function_id)));
+        }
     }
 }
 
@@ -142,7 +147,7 @@ impl Session {
         let db: &mut dyn CompilerDb = &mut compiler;
         let contents = fs::read_to_string(TESTBENCH_PATH).expect("failed to read file");
         let (module, source_file) = db.create_module_from_source_file(TESTBENCH_PATH, &contents);
-        db.module_items(module);
+        db.module_index(module);
 
         Session {
             compiler: Mutex::new(compiler),

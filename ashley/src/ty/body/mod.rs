@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 
 use crate::{
-    builtins::Constructor,
+    builtins::{BuiltinOperationPtr, Constructor},
     def::{BodyId, FunctionId, GlobalId},
     syntax::ast,
     ty::TyDiagnostic,
@@ -24,7 +24,13 @@ use crate::{
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Stmt {
+pub struct Stmt {
+    pub ast_id: AstId<ast::Stmt>,
+    pub kind: StmtKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StmtKind {
     // TODO empty statement?
     Select {
         condition: Id<Expr>,
@@ -35,6 +41,10 @@ pub enum Stmt {
         initializer: Option<Id<Stmt>>,
         condition: Option<Id<Expr>>,
         loop_expr: Option<Id<Expr>>,
+        stmt: Id<Stmt>,
+    },
+    WhileLoop {
+        condition: Id<Expr>,
         stmt: Id<Stmt>,
     },
     Local {
@@ -81,10 +91,20 @@ impl Expr {
     }
 }
 
+/// This is because both local variables and functions parameters (in the AST) are represented as local variables in
+/// typed bodies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalVarAstId {
+    /// **NOTE**: this is relative to AST map of the `Function` definition, not the corresponding `Body`.
+    FnParam(AstId<ast::FnParam>),
+    /// **NOTE**: contrary to the above, this is relative to AST map of the `Body` of the function.
+    LocalVariable(AstId<ast::LocalVariable>),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalVar {
     pub name: String,
-    pub ast_id: AstId<ast::LocalVariable>,
+    pub ast_id: LocalVarAstId,
     pub ty: Type,
 }
 
@@ -107,6 +127,8 @@ pub enum ConversionKind {
     FloatToUnsignedInt,
     /// Different layouts (e.g. different array stride or matrix stride or order)
     Layout,
+    /// Automatic dereference of places (lvalues)
+    Deref,
 }
 
 pub(crate) type ComponentIndices = SmallVec<[i32; 4]>;
@@ -125,6 +147,7 @@ pub enum ExprKind {
         op: ast::BinaryOp,
         /// Signature of the operation that is used to compute the value to assign.
         signature: BuiltinSignature,
+        place: Id<Expr>,
         lhs: Id<Expr>,
         rhs: Id<Expr>,
     },
@@ -145,6 +168,10 @@ pub enum ExprKind {
     },
     Call {
         function: FunctionId,
+        args: Vec<Id<Expr>>,
+    },
+    BuiltinCall {
+        signature: BuiltinSignature,
         args: Vec<Id<Expr>>,
     },
     LocalVar {
@@ -187,7 +214,7 @@ pub enum ExprKind {
 pub struct Body {
     pub stmts: IndexVec<Stmt>,
     pub exprs: IndexVec<Expr>,
-    pub local_var: IndexVec<LocalVar>,
+    pub local_vars: IndexVec<LocalVar>,
     pub blocks: IndexVec<Block>,
     pub entry_block: Option<Id<Block>>,
     pub params: Vec<Id<LocalVar>>,

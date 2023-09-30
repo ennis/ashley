@@ -1216,6 +1216,7 @@ impl<'a> Parser<'a> {
     // https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
     fn parse_expr_bp(&mut self, min_bp: u8) {
         //eprintln!("parse_expr_bp");
+        self.eat_ws();
         let cp = self.checkpoint();
         match self.next() {
             Some(op @ T![+] | op @ T![-] | op @ T![!] | op @ T![++] | op @ T![--]) => {

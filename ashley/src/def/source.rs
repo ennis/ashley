@@ -6,6 +6,7 @@ use crate::{
 };
 use rowan::ast::AstNode;
 
+/*
 pub trait HasSource {
     type Source;
 
@@ -62,3 +63,4 @@ impl HasSource for FieldLoc {
         )
     }
 }
+*/

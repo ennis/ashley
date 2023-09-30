@@ -91,6 +91,20 @@ impl<'a> fmt::Display for ImageTypeDisplay<'a> {
 #[derive(Clone, Debug)]
 pub struct Type(pub(crate) Arc<TypeKind>);
 
+impl Type {
+    pub fn new(db: &dyn CompilerDb, tk: impl Into<TypeKind>) -> Type {
+        db.tyctxt().ty(tk)
+    }
+
+    pub fn peel_ref(self) -> Type {
+        if let TypeKind::Ref(ty) = &*self {
+            ty.clone()
+        } else {
+            self
+        }
+    }
+}
+
 // impl display for Type forwards to TypeKind
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -205,6 +219,10 @@ pub enum TypeKind {
         pointee_type: Type,
         storage_class: spirv::StorageClass,
     },
+    /// Reference type. Used as the type of lvalues.
+    ///
+    /// TODO is this Similar to a StorageClass::Function pointer?
+    Ref(Type),
     /// Built-in structure type. The name is optional, if the type can't be named (e.g. tuple results of modf and frexp).
     BuiltinStruct {
         name: String,
@@ -274,6 +292,9 @@ impl fmt::Display for TypeKind {
             } => {
                 // TODO: display storage class
                 write!(f, "pointer({storage_class:?}) to {pointee_type}")
+            }
+            TypeKind::Ref(ty) => {
+                write!(f, "ref to {ty}")
             }
             TypeKind::Function(fty) => {
                 // TODO use C syntax
@@ -358,6 +379,10 @@ impl TypeKind {
         }
     }
 
+    pub fn is_error(&self) -> bool {
+        matches!(self, TypeKind::Error)
+    }
+
     pub fn is_unit(&self) -> bool {
         matches!(self, TypeKind::Unit)
     }
@@ -376,6 +401,21 @@ impl TypeKind {
         } else {
             None
         }
+    }
+
+    /// If this type is a `Ref`, returns the dereferenced `TypeKind`.
+    ///
+    /// Otherwise, returns `self`.
+    pub fn unref(&self) -> &TypeKind {
+        if let TypeKind::Ref(ty) = self {
+            &*ty
+        } else {
+            self
+        }
+    }
+
+    pub fn is_ref(&self) -> bool {
+        matches!(self, TypeKind::Ref(_))
     }
 
     pub fn is_opaque(&self, db: &dyn CompilerDb) -> bool {
@@ -441,6 +481,7 @@ impl TypeKind {
             | TypeKind::SamplerShadow
             | TypeKind::String
             | TypeKind::Unknown
+            | TypeKind::Ref(_)
             | TypeKind::BuiltinStruct { .. }
             | TypeKind::Error => {
                 return None;

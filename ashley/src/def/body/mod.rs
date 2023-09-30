@@ -6,7 +6,7 @@ pub use self::diagnostic::BodyDiagnostic;
 use crate::{
     def::{
         body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, AstId, AstMap, BodyId, BodyKind, BodyOwnerId, DefLoc,
-        FunctionLoc, HasSource, Type,
+        FunctionLoc, Type,
     },
     syntax::ast,
     CompilerDb, ConstantValue,
@@ -136,7 +136,7 @@ pub struct BodyMap {
     statement_map: HashMap<AstPtr<ast::Stmt>, Id<Statement>>,
     block_map: HashMap<AstPtr<ast::Block>, Id<Block>>,
     local_var_map: HashMap<AstPtr<ast::LocalVariable>, Id<LocalVar>>,
-    def_map: AstMap,
+    pub(crate) ast_map: AstMap,
     //expr_map_back: IndexVec<AstPtr<ast::Expr>, Id<Expr>>,
     //statement_map_back: IndexVec<AstPtr<ast::Stmt>, Id<Statement>>,
     //block_map_back: IndexVec<AstPtr<ast::Block>, Id<Block>>,
@@ -175,7 +175,7 @@ impl BodyMap {
             statement_map: Default::default(),
             block_map: Default::default(),
             local_var_map: Default::default(),
-            def_map: AstMap::new(),
+            ast_map: AstMap::new(),
             //expr_map_back: Default::default(),
             //statement_map_back: Default::default(),
             //block_map_back: Default::default(),
@@ -190,7 +190,7 @@ pub struct Body {
     pub expressions: IndexVec<Expr>,
     pub local_vars: IndexVec<LocalVar>,
     pub blocks: IndexVec<Block>,
-    pub params: Vec<Id<LocalVar>>,
+    //pub params: Vec<Id<LocalVar>>,
     pub diagnostics: Vec<BodyDiagnostic>,
     pub entry_block: Option<Id<Block>>,
 }
@@ -227,7 +227,7 @@ impl Body {
             expressions: Default::default(),
             local_vars: Default::default(),
             blocks: Default::default(),
-            params: vec![],
+            //params: vec![],
             diagnostics: vec![],
             entry_block: None,
         }
@@ -250,10 +250,10 @@ pub(crate) fn function_body_query(db: &dyn CompilerDb, function_id: FunctionId) 
     let _span = trace_span!("function_body_query", ?function_id).entered();
     let func_data = db.function_data(function_id);
     let Some(body) = func_data.body else {
-        return;
+        panic!("function_body_query called on function {function_id:?} with no body");
     };
-    let body_src = function_id.loc(db).node_from_id(db, body);
 
+    let body_src = function_id.child_ast_node(db, body);
     let ctxt = BodyLowerCtxt::new(db, body_src.file);
     let (body, body_map) = ctxt.lower_body_block(body_src.data);
 

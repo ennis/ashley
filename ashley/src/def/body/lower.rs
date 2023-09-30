@@ -94,7 +94,8 @@ impl<'a> BodyLowerCtxt<'a> {
             return None;
         };
 
-        let ast_id = self.map.def_map.push(&expr);
+        let ast_id = self.map.ast_map.push(&expr);
+        trace!("`{}` -> {:?}", expr.syntax().text().to_string(), ast_id);
         let id = self.add_expr(
             &expr,
             Expr {
@@ -135,7 +136,7 @@ impl<'a> BodyLowerCtxt<'a> {
     }
 
     fn lower_ctor_expr(&mut self, ctor_expr: &ast::ConstructorExpr) -> Option<ExprKind> {
-        let ty = lower_type_opt(self.compiler, &mut self.map.def_map, &ctor_expr.ty());
+        let ty = lower_type_opt(self.compiler, &mut self.map.ast_map, &ctor_expr.ty());
         let mut args = vec![];
         for arg in ctor_expr.arg_list()?.arguments() {
             let Some(arg_expr) = self.lower_expr(arg) else { continue };
@@ -192,7 +193,7 @@ impl<'a> BodyLowerCtxt<'a> {
             ast::LiteralKind::String(str) => ConstantValue::String(str.text().to_string()),
             ast::LiteralKind::IntNumber(v) => match v.value_i32() {
                 Ok(v) => ConstantValue::Int(v as u32),
-                Err(err) => {
+                Err(_err) => {
                     self.body.diagnostics.push(BodyDiagnostic::ParseIntError {
                         lit_expr: InFile::new_ast_ptr(self.source_file, &lit_expr),
                     });
@@ -205,7 +206,7 @@ impl<'a> BodyLowerCtxt<'a> {
                         // TODO warn about non-representable floats
                         ConstantValue::Float(OrderedFloat::from(v))
                     }
-                    Err(err) => {
+                    Err(_err) => {
                         self.body.diagnostics.push(BodyDiagnostic::ParseFloatError {
                             lit_expr: InFile::new_ast_ptr(self.source_file, &lit_expr),
                         });
@@ -295,14 +296,14 @@ impl<'a> BodyLowerCtxt<'a> {
     }
 
     fn lower_local_variable_stmt(&mut self, local_var_stmt: &ast::LocalVariable) -> Option<StmtKind> {
-        let ty = lower_type_opt(self.compiler, &mut self.map.def_map, &local_var_stmt.ty());
+        let ty = lower_type_opt(self.compiler, &mut self.map.ast_map, &local_var_stmt.ty());
         let name = local_var_stmt.name()?.text();
         let initializer = if let Some(initializer) = local_var_stmt.initializer() {
             Some(self.lower_expr(initializer.expr()?)?)
         } else {
             None
         };
-        let ast_id = self.map.def_map.push(local_var_stmt);
+        let ast_id = self.map.ast_map.push(local_var_stmt);
         let var = self.add_local_var(&local_var_stmt, LocalVar { ast_id, ty, name });
         Some(StmtKind::Local { var, initializer })
     }
@@ -328,7 +329,7 @@ impl<'a> BodyLowerCtxt<'a> {
             return None;
         };
 
-        let ast_id = self.map.def_map.push(&stmt);
+        let ast_id = self.map.ast_map.push(&stmt);
         Some(self.add_statement(&stmt, Statement { ast_id, kind: s }))
     }
 
@@ -339,7 +340,7 @@ impl<'a> BodyLowerCtxt<'a> {
                 statements.push(s);
             }
         }
-        let ast_id = self.map.def_map.push(&block);
+        let ast_id = self.map.ast_map.push(&block);
         self.add_block(&block, Block { ast_id, statements })
     }
 

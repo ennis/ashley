@@ -1,11 +1,5 @@
 //! Component access & swizzle checks
-use crate::ty::body::ComponentIndices;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) enum ComponentSyntaxError {
-    InvalidSyntax,
-    TooManyComponents,
-}
+use crate::ty::{body::ComponentIndices, diagnostic::ComponentSyntaxError};
 
 /// Converts a component selection syntax into corresponding component indices.
 ///

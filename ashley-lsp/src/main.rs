@@ -1,6 +1,9 @@
 use anyhow::{anyhow, bail};
-use ashley::{diagnostic::Span, Compiler, CompilerDb, LineCharacterRange};
-use std::{env, io, io::Stderr};
+use ashley::{
+    diagnostic::{Severity, Span},
+    Compiler, CompilerDb, LineCharacterRange,
+};
+use std::{env, fmt::Write, io, io::Stderr};
 use tokio::{
     fs::{canonicalize, File},
     sync::{MappedMutexGuard, Mutex, MutexGuard},
@@ -8,6 +11,8 @@ use tokio::{
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer, LspService, Server};
 use tracing::{error, info, trace};
 use tracing_subscriber::{fmt::MakeWriter, layer::SubscriberExt, Layer};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 const LANGUAGE_ID: &str = "glsl2";
 
@@ -87,6 +92,55 @@ fn span_to_lsp_range(compiler: &dyn CompilerDb, span: Span) -> Range {
     Range {
         start: Position::new(start_line, start_offset),
         end: Position::new(end_line, end_offset),
+    }
+}
+
+fn diagnostic_to_lsp(db: &dyn CompilerDb, diag: ashley::diagnostic::Diagnostic) -> Diagnostic {
+    let range = if let Some(span) = diag.get_span() {
+        span_to_lsp_range(db, span)
+    } else {
+        Default::default()
+    };
+
+    let severity = match diag.severity {
+        Severity::Bug => DiagnosticSeverity::ERROR,
+        Severity::Error => DiagnosticSeverity::ERROR,
+        Severity::Warning => DiagnosticSeverity::WARNING,
+    };
+
+    let related_information = if !diag.labels.is_empty() {
+        let mut infos = vec![];
+        for label in diag.labels {
+            let uri = &db.source_file(label.span.file).url.clone();
+            let range = span_to_lsp_range(db, label.span);
+            infos.push(DiagnosticRelatedInformation {
+                location: Location {
+                    uri: Url::parse(uri).unwrap(),
+                    range,
+                },
+                message: label.message.to_string(),
+            })
+        }
+        Some(infos)
+    } else {
+        None
+    };
+
+    let mut message = diag.message;
+    for note in diag.notes {
+        write!(message, "\nnote: {note}").unwrap();
+    }
+
+    Diagnostic {
+        range,
+        severity: Some(severity),
+        code: None,
+        code_description: None,
+        source: Some("ashley-lsp".to_string()),
+        message,
+        related_information,
+        tags: None,
+        data: None,
     }
 }
 
@@ -216,13 +270,22 @@ impl LanguageServer for Backend {
         };
 
         let compiler: &mut dyn CompilerDb = &mut *compiler;
+
         compiler.update_source_file_contents(source_file, &params.content_changes[0].text);
-        /*self.client
-        .log_message(
-            INFO,
-            format!("text document changed! uri={uri}, version={version}, `{text}`"),
-        )
-        .await;*/
+
+        let all_diagnostics: Vec<_> = compiler
+            .module_diagnostics(module)
+            .into_iter()
+            .map(|d| diagnostic_to_lsp(compiler, d))
+            .collect();
+
+        self.client
+            .publish_diagnostics(
+                params.text_document.uri,
+                all_diagnostics,
+                Some(params.text_document.version),
+            )
+            .await;
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -230,16 +293,17 @@ impl LanguageServer for Backend {
     async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         trace!("document_symbol");
         let mut compiler = self.compiler.lock().await;
-        let compiler: &dyn CompilerDb = &*compiler;
-        let module = compiler.module_id(params.text_document.uri.to_string());
-        let items = compiler.module_items(module);
+        let db: &dyn CompilerDb = &*compiler;
+        let module = db.module_id(params.text_document.uri.to_string());
+
+        let scope = db.module_scope(module);
         let mut document_symbols = vec![];
 
-        for strukt in items.structs.iter() {
-            let range = span_to_lsp_range(compiler, strukt.ast.to_node_with_source_file(compiler, module).span());
-            let name = strukt.name.clone();
+        for (name, strukt) in scope.structs() {
+            let ast = strukt.ast_node(db);
+            let range = span_to_lsp_range(db, ast.span());
             document_symbols.push(DocumentSymbol {
-                name,
+                name: name.to_string(),
                 detail: None,
                 kind: SymbolKind::STRUCT,
                 tags: None,
@@ -250,12 +314,12 @@ impl LanguageServer for Backend {
             });
         }
 
-        for function in items.functions.iter() {
-            let range = span_to_lsp_range(compiler, function.ast.to_node_with_source_file(compiler, module).span());
-            let name = function.name.clone();
-            trace!("document_symbol: function {name} range {range:?}");
+        for (name, function) in scope.functions() {
+            let ast = function.ast_node(db);
+            let range = span_to_lsp_range(db, ast.span());
+            //trace!("document_symbol: function {name} range {range:?}");
             document_symbols.push(DocumentSymbol {
-                name,
+                name: name.to_string(),
                 detail: None,
                 kind: SymbolKind::FUNCTION,
                 tags: None,
@@ -266,12 +330,12 @@ impl LanguageServer for Backend {
             });
         }
 
-        for global in items.globals.iter() {
-            let range = span_to_lsp_range(compiler, global.ast.to_node_with_source_file(compiler, module).span());
-            let name = global.name.clone();
-            trace!("document_symbol: global {name} range {range:?}");
+        for (name, global) in scope.globals() {
+            let ast = global.ast_node(db);
+            let range = span_to_lsp_range(db, ast.span());
+            //trace!("document_symbol: global {name} range {range:?}");
             document_symbols.push(DocumentSymbol {
-                name,
+                name: name.to_string(),
                 detail: None,
                 kind: SymbolKind::VARIABLE,
                 tags: None,

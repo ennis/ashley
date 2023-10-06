@@ -2,7 +2,8 @@
 
 use crate::{
     builtins, def,
-    def::{AstId, BodyLoc, FunctionId, Resolver, Scope},
+    def::{AstId, ConstExprId, ConstExprLoc, FunctionId, Resolver, Scope},
+    diagnostic::Diagnostic,
     syntax::{
         ast,
         ast::{BinaryOp, UnaryOp},
@@ -10,8 +11,8 @@ use crate::{
     ty,
     ty::{
         body::{
-            lower::swizzle::get_component_indices, Block, Body, ConversionKind, DefExprId, Expr, ExprKind, LocalVar,
-            Stmt, StmtKind,
+            lower::swizzle::get_component_indices, Block, Body, ConversionKind, Expr, ExprKind, LocalVar, Stmt,
+            StmtKind,
         },
         lower_ty, FunctionSignature, ScalarType,
         TyDiagnostic::*,
@@ -27,12 +28,17 @@ mod overload;
 mod swizzle;
 
 pub(super) struct TyBodyLowerCtxt<'a> {
-    compiler: &'a dyn CompilerDb,
+    db: &'a dyn CompilerDb,
     body: Body,
-    item_body: &'a def::body::Body,
+    def_body: &'a def::body::Body,
     resolver: Resolver<'a>,
     //tyctxt: Arc<TypeCtxt>,
 }
+
+type DefExprId = Id<def::body::Expr>;
+type DefStmtId = Id<def::body::Statement>;
+type DefLocalVarId = Id<def::body::LocalVar>;
+type DefBlockId = Id<def::body::Block>;
 
 #[derive(Clone)]
 pub(crate) struct TypedExprId {
@@ -234,13 +240,9 @@ impl<'a> TyBodyLowerCtxt<'a> {
         self.create_and_add_expr(ast_id, ty, expr_kind)
     }
 
-    fn lower_local_variable(
-        &mut self,
-        local_var: Id<def::body::LocalVar>,
-        initializer: Option<Id<def::body::Expr>>,
-    ) -> StmtKind {
-        let local_var = &self.item_body.local_vars[local_var];
-        let ty = lower_ty(self.compiler, &self.resolver, &local_var.ty, &mut self.body.diagnostics);
+    fn lower_local_variable(&mut self, local_var: Id<def::body::LocalVar>, initializer: Option<DefExprId>) -> StmtKind {
+        let local_var = &self.def_body.local_vars[local_var];
+        let ty = lower_ty(self.db, &self.resolver, &local_var.ty, &mut self.body.diagnostics);
         let initializer = if let Some(initializer) = initializer {
             let expr = self.lower_expr(initializer);
             Some(self.apply_implicit_conversion(expr, ty.clone()))
@@ -267,8 +269,8 @@ impl<'a> TyBodyLowerCtxt<'a> {
     fn lower_if_stmt(
         &mut self,
         condition: DefExprId,
-        true_branch: Id<def::body::Statement>,
-        false_branch: Option<Id<def::body::Statement>>,
+        true_branch: DefStmtId,
+        false_branch: Option<DefStmtId>,
     ) -> StmtKind {
         let condition = self.lower_expr(condition);
         if condition.ty != self.resolver.tyctxt().prim_tys.bool {
@@ -287,13 +289,13 @@ impl<'a> TyBodyLowerCtxt<'a> {
         }
     }
 
-    fn lower_expr_stmt(&mut self, expr: Id<def::body::Expr>) -> StmtKind {
+    fn lower_expr_stmt(&mut self, expr: DefExprId) -> StmtKind {
         StmtKind::ExprStmt {
             expr: self.lower_expr(expr).id,
         }
     }
 
-    fn lower_return_stmt(&mut self, value: Option<Id<def::body::Expr>>) -> StmtKind {
+    fn lower_return_stmt(&mut self, value: Option<DefExprId>) -> StmtKind {
         StmtKind::Return {
             value: value.map(|v| self.lower_expr(v).id),
         }
@@ -307,10 +309,10 @@ impl<'a> TyBodyLowerCtxt<'a> {
 
     fn lower_for_loop_stmt(
         &mut self,
-        initializer: Option<Id<def::body::Statement>>,
-        condition: Option<Id<def::body::Expr>>,
-        loop_expr: Option<Id<def::body::Expr>>,
-        stmt: Id<def::body::Statement>,
+        initializer: Option<DefStmtId>,
+        condition: Option<DefExprId>,
+        loop_expr: Option<DefExprId>,
+        stmt: DefStmtId,
     ) -> StmtKind {
         let initializer = initializer.map(|initializer| self.lower_stmt(initializer));
         let condition = condition.map(|condition| self.lower_expr(condition));
@@ -334,7 +336,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         }
     }
 
-    fn lower_while_loop_stmt(&mut self, condition: Id<def::body::Expr>, stmt: Id<def::body::Statement>) -> StmtKind {
+    fn lower_while_loop_stmt(&mut self, condition: DefExprId, stmt: DefStmtId) -> StmtKind {
         let condition = self.lower_expr(condition);
         let stmt = self.lower_stmt(stmt);
 
@@ -359,13 +361,13 @@ impl<'a> TyBodyLowerCtxt<'a> {
         r
     }
 
-    fn lower_stmt_in_new_scope(&mut self, stmt: Id<def::body::Statement>) -> Id<Stmt> {
+    fn lower_stmt_in_new_scope(&mut self, stmt: DefStmtId) -> Id<Stmt> {
         self.in_new_scope(|this| this.lower_stmt(stmt))
     }
 
-    fn lower_stmt(&mut self, stmt: Id<def::body::Statement>) -> Id<Stmt> {
-        let ast_id = self.item_body[stmt].ast_id;
-        let s = match self.item_body[stmt].kind {
+    fn lower_stmt(&mut self, stmt: DefStmtId) -> Id<Stmt> {
+        let ast_id = self.def_body[stmt].ast_id;
+        let s = match self.def_body[stmt].kind {
             def::body::StmtKind::Select {
                 condition,
                 true_branch,
@@ -393,7 +395,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
 
     fn lower_block_inner(&mut self, block: Id<def::body::Block>) -> Id<Block> {
         let mut stmts = Vec::new();
-        let block = &self.item_body.blocks[block];
+        let block = &self.def_body.blocks[block];
         for stmt in block.statements.iter() {
             stmts.push(self.lower_stmt(*stmt));
         }
@@ -404,9 +406,9 @@ impl<'a> TyBodyLowerCtxt<'a> {
         self.in_new_scope(|this| this.lower_block_inner(block))
     }
 
-    fn lower_expr(&mut self, expr: Id<def::body::Expr>) -> TypedExprId {
-        let ast_id = self.item_body[expr].ast_id;
-        match self.item_body[expr].kind {
+    fn lower_expr(&mut self, expr: DefExprId) -> TypedExprId {
+        let ast_id = self.def_body[expr].ast_id;
+        match self.def_body[expr].kind {
             def::body::ExprKind::Binary { op, lhs, rhs } => self.lower_bin_expr(ast_id, op, lhs, rhs),
             def::body::ExprKind::Prefix { expr, op } => self.lower_unary_expr(ast_id, op, expr),
             def::body::ExprKind::Postfix { expr, op } => self.lower_unary_expr(ast_id, op, expr),
@@ -448,7 +450,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         };
 
         if array_expr.ty.is_ref() {
-            ty = Type::new(self.compiler, TypeKind::Ref(ty));
+            ty = Type::new(self.db, TypeKind::Ref(ty));
         }
 
         match index_expr.ty.unref() {
@@ -477,7 +479,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         )
     }
 
-    fn lower_unary_expr(&mut self, ast_id: ExprAstId, op: UnaryOp, expr: Id<def::body::Expr>) -> TypedExprId {
+    fn lower_unary_expr(&mut self, ast_id: ExprAstId, op: UnaryOp, expr: DefExprId) -> TypedExprId {
         let value = self.lower_expr(expr);
         let operation;
         let is_assignment;
@@ -539,7 +541,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         }
     }
 
-    fn lower_field_expr(&mut self, ast_id: ExprAstId, base_expr: Id<def::body::Expr>, field_name: &str) -> TypedExprId {
+    fn lower_field_expr(&mut self, ast_id: ExprAstId, base_expr: DefExprId, field_name: &str) -> TypedExprId {
         let base_expr = self.lower_expr(base_expr);
 
         if base_expr.is_error() {
@@ -549,7 +551,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         match base_expr.ty.unref() {
             // --- Field access ---
             TypeKind::Struct { name: _, def } => {
-                let struct_data = def.data(self.compiler);
+                let struct_data = def.data(self.db);
                 let Some(field_index) = struct_data.fields.iter().position(|f| f.name == field_name) else {
                     self.body.diagnostics.push(UnresolvedField {
                         expr: ast_id,
@@ -560,9 +562,9 @@ impl<'a> TyBodyLowerCtxt<'a> {
                 };
 
                 // Propagate Ref type (i.e. if the base expression is a place, then the field expr is a place also)
-                let mut field_type = def.field_types(self.compiler)[field_index].clone();
+                let mut field_type = def.field_types(self.db)[field_index].clone();
                 if base_expr.ty.is_ref() {
-                    field_type = Type::new(self.compiler, TypeKind::Ref(field_type));
+                    field_type = Type::new(self.db, TypeKind::Ref(field_type));
                 }
 
                 self.create_and_add_expr(
@@ -578,13 +580,13 @@ impl<'a> TyBodyLowerCtxt<'a> {
             TypeKind::Vector(scalar_type, size) => match get_component_indices(field_name, *size as usize) {
                 Ok(components) => {
                     let mut ty = if components.len() == 1 {
-                        Type::new(self.compiler, TypeKind::Scalar(*scalar_type))
+                        Type::new(self.db, TypeKind::Scalar(*scalar_type))
                     } else {
-                        Type::new(self.compiler, TypeKind::Vector(*scalar_type, components.len() as u8))
+                        Type::new(self.db, TypeKind::Vector(*scalar_type, components.len() as u8))
                     };
 
                     if base_expr.ty.is_ref() {
-                        ty = Type::new(self.compiler, TypeKind::Ref(ty));
+                        ty = Type::new(self.db, TypeKind::Ref(ty));
                     }
 
                     self.create_and_add_expr(
@@ -616,7 +618,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
         }
     }
 
-    fn lower_call_expr(&mut self, ast_id: ExprAstId, func_name: &str, args: &[Id<def::body::Expr>]) -> TypedExprId {
+    fn lower_call_expr(&mut self, ast_id: ExprAstId, func_name: &str, args: &[DefExprId]) -> TypedExprId {
         let args: Vec<_> = args.iter().map(|arg| self.lower_expr(*arg)).collect();
         let arg_types: Vec<_> = args.iter().map(|arg| arg.ty.clone()).collect();
 
@@ -685,25 +687,20 @@ impl<'a> TyBodyLowerCtxt<'a> {
                 }
                 ValueRes::Global(global) => self.create_and_add_expr(
                     ast_id,
-                    Type::new(self.compiler, TypeKind::Ref(global.ty(self.compiler))),
+                    Type::new(self.db, TypeKind::Ref(global.ty(self.db))),
                     ExprKind::GlobalVar { var: global },
                 ),
                 ValueRes::Local(local) => self.create_and_add_expr(
                     ast_id,
-                    Type::new(self.compiler, TypeKind::Ref(self.body.local_vars[local].ty.clone())),
+                    Type::new(self.db, TypeKind::Ref(self.body.local_vars[local].ty.clone())),
                     ExprKind::LocalVar { var: local },
                 ),
             },
         }
     }
 
-    fn lower_constructor_expr(
-        &mut self,
-        ast_id: ExprAstId,
-        ty: &def::Type,
-        args: &[Id<def::body::Expr>],
-    ) -> TypedExprId {
-        let ty = lower_ty(self.compiler, &self.resolver, ty, &mut self.body.diagnostics);
+    fn lower_constructor_expr(&mut self, ast_id: ExprAstId, ty: &def::Type, args: &[DefExprId]) -> TypedExprId {
+        let ty = lower_ty(self.db, &self.resolver, ty, &mut self.body.diagnostics);
 
         let args: Vec<_> = args.iter().map(|arg| self.lower_expr(*arg)).collect();
 
@@ -773,7 +770,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
                             .into_iter()
                             .enumerate()
                             .map(|(i, arg)| {
-                                let sig_ty = self.compiler.tyctxt().ty(ctor.args[i].clone());
+                                let sig_ty = self.db.tyctxt().ty(ctor.args[i].clone());
                                 self.apply_implicit_conversion(arg, sig_ty).id
                             })
                             .collect();
@@ -916,7 +913,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
                         let op_result_conv = self.apply_implicit_conversion(op_result, left.ty.peel_ref());
                         self.create_and_add_expr(
                             ast_id,
-                            self.compiler.tyctxt().prim_tys.void.clone(),
+                            self.db.tyctxt().prim_tys.void.clone(),
                             ExprKind::Assign {
                                 lhs: left.id,
                                 rhs: op_result_conv.id,
@@ -943,7 +940,7 @@ impl<'a> TyBodyLowerCtxt<'a> {
             let rhs_conv = self.apply_implicit_conversion(right, left.ty.peel_ref());
             self.create_and_add_expr(
                 ast_id,
-                self.compiler.tyctxt().prim_tys.void.clone(),
+                self.db.tyctxt().prim_tys.void.clone(),
                 ExprKind::Assign {
                     lhs: left.id,
                     rhs: rhs_conv.id,
@@ -954,46 +951,37 @@ impl<'a> TyBodyLowerCtxt<'a> {
 }
 
 pub(crate) fn lower_function_body(db: &dyn CompilerDb, function_id: FunctionId) -> ty::body::Body {
-    let body = db.function_body(function_id);
+    let def_body = db.function_body(function_id);
     let func_data = function_id.data(db);
     let signature = function_id.signature(db);
-
     // Resolver for the function body
     let func_loc = function_id.loc(db);
     let mut resolver = func_loc.module.resolver(db);
 
-    let mut ty_body = Body {
-        stmts: IndexVec::with_capacity(body.statements.len()),
-        exprs: IndexVec::with_capacity(body.expressions.len()),
-        local_vars: IndexVec::with_capacity(body.local_vars.len()),
-        blocks: IndexVec::with_capacity(body.blocks.len()),
-        entry_block: None,
-        params: vec![],
-        diagnostics: vec![],
-    };
+    let mut body = Body::with_capacity(&def_body);
 
     if !func_data.parameters.is_empty() {
         // add body parameters as local variables
         let mut param_scope = Scope::new();
         assert_eq!(func_data.parameters.len(), signature.parameter_types.len());
         for (param, param_ty) in func_data.parameters.iter().zip(signature.parameter_types.iter()) {
-            let param_local_id = ty_body.local_vars.push(LocalVar {
+            let param_local_id = body.local_vars.push(LocalVar {
                 name: param.name.clone(),
                 ast_id: LocalVarAstId::FnParam(param.ast),
                 ty: param_ty.clone(),
             });
             param_scope.add_local_var(&param.name, param_local_id);
-            ty_body.params.push(param_local_id);
+            body.params.push(param_local_id);
         }
 
         resolver.push_scope(param_scope);
     }
 
-    if let Some(entry_block) = body.entry_block {
+    if let Some(entry_block) = def_body.entry_block {
         let mut ctxt = TyBodyLowerCtxt {
-            compiler: db,
-            body: ty_body,
-            item_body: body,
+            db,
+            body,
+            def_body,
             resolver,
         };
 
@@ -1003,4 +991,19 @@ pub(crate) fn lower_function_body(db: &dyn CompilerDb, function_id: FunctionId) 
     } else {
         panic!("lower_function_body called on function with no entry block");
     }
+}
+
+pub(crate) fn lower_const_expr_body(db: &dyn CompilerDb, const_expr: ConstExprId) -> ty::body::Body {
+    let resolver = const_expr.parent(db).module(db).resolver(db);
+    let def_body = db.const_expr_body(const_expr);
+    let mut body = Body::with_capacity(&def_body);
+
+    let mut ctxt = TyBodyLowerCtxt {
+        db,
+        body,
+        def_body,
+        resolver,
+    };
+    ctxt.lower_expr(def_body.root_expr().expect("no root expression on constexpr body"));
+    ctxt.body
 }

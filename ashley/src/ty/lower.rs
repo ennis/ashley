@@ -2,11 +2,12 @@
 
 use crate::{
     def,
-    def::{AstId, BodyOwnerId, DefLoc, Resolver, Scope, TypeRes, ValueRes},
+    def::{AstId, DefLoc, Resolver, Scope, TypeRes, ValueRes},
     syntax::ast,
     ty::{ScalarType, TyDiagnostic, TyOwnerId, Type, TypeCtxt, TypeKind},
     CompilerDb, SourceFileId,
 };
+use ashley::ConstantValue;
 use std::sync::Arc;
 
 /*fn check_int_or_uint(
@@ -58,11 +59,11 @@ impl<'a> TypeLoweringCtxt<'a> {
     pub(crate) fn lower_type(&mut self, ty: &def::Type) -> Type {
         // Don't bother if there's no ast_id: the only case where it happens is if
         // there was no type at all.
-        if ty.kind == def::TypeKind::Error || ty.ast_id.is_none() {
+        if ty.kind == def::TypeKind::Error {
             return self.tyctxt.error.clone();
         }
 
-        let ty_loc = ty.ast_id.unwrap();
+        let ty_loc = ty.ast_id;
 
         match ty.kind {
             def::TypeKind::Name { ref name } => match self.resolver.resolve_type_name(name) {
@@ -74,10 +75,13 @@ impl<'a> TypeLoweringCtxt<'a> {
                     self.tyctxt.error.clone()
                 }
                 Some(res) => match res {
-                    TypeRes::Struct(struct_id) => {
-                        todo!("lower struct ref ty")
-                        //return self.compiler.def_ty(struct_id.into()).clone()
-                    }
+                    TypeRes::Struct(struct_id) => Type::new(
+                        self.compiler,
+                        TypeKind::Struct {
+                            name: name.clone(),
+                            def: struct_id,
+                        },
+                    ),
                     TypeRes::Primitive(ty) => return ty,
                 },
             },
@@ -88,9 +92,21 @@ impl<'a> TypeLoweringCtxt<'a> {
             } => {
                 let element_type = self.lower_type(element);
 
-                //let mut stride_val = None;
+                let mut stride_val = None;
                 if let Some(stride) = stride {
-                    //self.compiler.const_eval(BodyOwnerId::ConstArrayStrideSpecifier())
+                    match self.compiler.const_eval(stride) {
+                        Ok(val) => match val.to_u32() {
+                            Some(val) => {
+                                stride_val = Some(val);
+                            }
+                            None => self.diags.push(TyDiagnostic::ExpectedIntegerConstant {
+                                expr: stride.loc(self.compiler).ast_id,
+                            }),
+                        },
+                        Err(err) => {
+                            self.diags.push(err.clone());
+                        }
+                    }
                 }
 
                 todo!("type lowering")

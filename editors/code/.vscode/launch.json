@@ -8,13 +8,13 @@
 			"name": "Launch Client",
 			"runtimeExecutable": "${execPath}",
 			"args": ["--extensionDevelopmentPath=${workspaceRoot}"],
-			"outFiles": ["${workspaceRoot}/client/out/**/*.js"],
+			"outFiles": ["${workspaceRoot}/out/**/*.js"],
 			"preLaunchTask": {
 				"type": "npm",
 				"script": "watch"
 			},
 			"env": {
-				"SERVER_PATH": "${workspaceRoot}/../target/debug/ashley-lsp",
+				"SERVER_PATH": "${workspaceRoot}/../../target/debug/ashley-lsp",
 				"RUST_BACKTRACE": "1",
 				"RUST_LOG": "trace",
 				"SHIT": "FUCK"
@@ -27,10 +27,10 @@
 			"runtimeExecutable": "${execPath}",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceRoot}",
-				"--extensionTestsPath=${workspaceRoot}/client/out/test/index",
-				"${workspaceRoot}/client/testFixture"
+				"--extensionTestsPath=${workspaceRoot}/out/test/index",
+				"${workspaceRoot}/testFixture"
 			],
-			"outFiles": ["${workspaceRoot}/client/out/test/**/*.js"]
+			"outFiles": ["${workspaceRoot}/out/test/**/*.js"]
 		}
 	]
 }

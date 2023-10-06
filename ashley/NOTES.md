@@ -2067,3 +2067,44 @@ extern vec4 modf(vec4, float);
 * Issue: functions:
   * Modifying the function arguments shouldn't affect other definitions => function arguments are stored in a different AstMap than the body.
   * However, we may not want to parse the function body at the same time as the arguments => function body has a separate AstMap
+
+DONE
+
+## Parsing custom attributes
+
+Syntax: do we allow arbitrary (balanced) ASTs inside? Probably not.
+Example forms:
+
+        @attribute                            // no arguments
+        @attribute(ident)                     // one ident arg
+        @attribute(key=value, key2=value2)    // two k/v args
+        @attribute(42)                        // literal int arg 
+        @attribute("Display Color")           // literal string arg 
+        @attribute({N+1})                     // literal constexpr arg
+        @attribute(sub_attribute(...))        // sub-attribute
+
+Issue: the "constexpr" arguments must be disambiguated with something. Otherwise `@argument(N)` is parsed as 
+an ident arg (with ident = "N"). The alternative is to let the attribute verifier parse the individual arguments.
+
+We could also reuse the expression parser in attribute arguments, since all forms are valid expression syntax: 
+k/v arg => assignment, ident => PathExpr, literals => LitExpr, subattribute => Function calls.
+The issue with that is that the validator will need to explicitly request semantic analysis / const eval in case it expects a const expr, and parse the expression manually for other types. 
+
+In contrast, if we already know the kind of arguments, we can explicitly pass idents, k/v pairs, and evaluated const values to the attribute.
+
+That said, some attributes may wish to retrieve non-type-checked expr ASTs, or maybe other kinds of AST nodes (types?).
+
+Q: could custom attributes extend the parser? 
+A: seems complicated: how would the attribute specify its syntax? how do we ensure that it's not ambiguous? We can't just expose the parsing functions.
+
+Q: can attributes be defined in code?
+A: Not sure that would be useful. How would we read them in GLSL code? What can they be used for that couldn't be achieved via functions or something else? It seems that most attributes are there to be read by the "host" (application) code anyway.
+
+Idea: attributes define their syntax like a rust macro. Custom attributes modify the parser.
+
+
+```rust
+#[derive(CustomAttribute)]
+pub struct 
+
+```

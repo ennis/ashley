@@ -272,7 +272,7 @@ impl<'a> Parser<'a> {
         // if the lexer hasn't advanced, consider the parser stuck
         if self.consumed_tokens == progress.0 {
             let tk = self.lookahead(0);
-            eprintln!("parser may be stuck: current token = {tk:?}");
+            warn!("parser may be stuck: current token = {tk:?}; this should not happen!");
             self.eat();
         }
 
@@ -594,7 +594,9 @@ impl<'a> Parser<'a> {
         // @attribute(ident)
         // @attribute(key=value, key2=value2)
         // @attribute(<literal>)
+        // @attribute({<expression>})
         // @attribute(sub_attribute(...))
+
         self.start_node(ATTRIBUTE);
         self.expect(T![@]);
         self.parse_name("attribute name");
@@ -847,7 +849,7 @@ impl<'a> Parser<'a> {
                 self.syntax_error("unexpected EOF");
             }
             _ => {
-                self.syntax_error("unexpected EOF");
+                self.syntax_error("syntax error (parse_type unexpected syntax)");
                 // forward progress bump
                 self.eat();
             }
@@ -894,7 +896,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     // TODO better error message
-                    self.syntax_error("syntax error (TODO)");
+                    self.syntax_error("syntax error (in parse_separated_list: expected end of list or separator)");
                     trailing_sep = false;
                 }
             }
@@ -1202,7 +1204,7 @@ impl<'a> Parser<'a> {
                     // continue arg list
                     self.eat();
                 }
-                _ => self.syntax_error("syntax error (TODO)"),
+                _ => self.syntax_error("syntax error (in parse_call_args: expected closing parens or comma)"),
             }
         }
 

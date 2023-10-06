@@ -1,6 +1,6 @@
 use crate::{
     def,
-    def::{AstId, AstMapOwnerId, FunctionId},
+    def::{AstId, FunctionId, ParentScopeId},
     diagnostic::Diagnostic,
     syntax::{ast, SyntaxNode},
     ty::{body::ExprAstId, FunctionSignature, Type},
@@ -140,12 +140,18 @@ pub enum TyDiagnostic {
     Unimplemented {
         ty_loc: AstId<ast::Type>,
     },
+    CouldNotEvaluateAsConstant {
+        expr: ExprAstId,
+    },
+    ExpectedIntegerConstant {
+        expr: ExprAstId,
+    },
 }
 
 impl TyDiagnostic {
-    pub fn render(&self, db: &dyn CompilerDb, ast_map_owner: AstMapOwnerId) -> Diagnostic {
-        let module = ast_map_owner.module(db);
-        let ast_map = ast_map_owner.ast_map(db);
+    pub fn render(&self, db: &dyn CompilerDb, parent: ParentScopeId) -> Diagnostic {
+        let module = parent.module(db);
+        let ast_map = parent.ast_map(db);
 
         let syntax = |ast_id: &AstId<ast::Expr>| ast_map.node_in_file(db, module, *ast_id);
         let ty_syntax = |ast_id: &AstId<ast::Type>| ast_map.node_in_file(db, module, *ast_id);
@@ -311,6 +317,14 @@ impl TyDiagnostic {
                 let syn = syntax(expr);
                 Diagnostic::error(format!("expected boolean expression"))
                     .label(syn.span(), format!("the expression is of type `{ty}`"))
+            }
+            TyDiagnostic::CouldNotEvaluateAsConstant { expr } => {
+                let syn = syntax(expr);
+                Diagnostic::error("could not evaluate expression as a constant").span(syn.span())
+            }
+            TyDiagnostic::ExpectedIntegerConstant { expr } => {
+                let syn = syntax(expr);
+                Diagnostic::error("expected integer constant").span(syn.span())
             }
         };
         diag

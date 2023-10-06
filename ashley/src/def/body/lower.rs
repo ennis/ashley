@@ -1,8 +1,8 @@
 use crate::{
     def::{
         body::{Block, Body, BodyDiagnostic, BodyMap, Expr, ExprKind, LocalVar, Statement, StmtKind},
-        lower::{lower_type, lower_type_opt, ItemLowerCtxt},
-        InFile,
+        lower::lower_type,
+        ConstExprLoc, InFile, ParentScopeId,
     },
     syntax::{ast, ast::AstToken},
     CompilerDb, ConstantValue, SourceFileId,
@@ -16,15 +16,21 @@ pub(crate) struct BodyLowerCtxt<'a> {
     map: BodyMap,
     body: Body,
     source_file: SourceFileId,
+    body_owner: ParentScopeId,
 }
 
 impl<'a> BodyLowerCtxt<'a> {
-    pub(crate) fn new(compiler: &'a dyn CompilerDb, source_file: SourceFileId) -> BodyLowerCtxt<'a> {
+    pub(crate) fn new(
+        compiler: &'a dyn CompilerDb,
+        source_file: SourceFileId,
+        body_owner: ParentScopeId,
+    ) -> BodyLowerCtxt<'a> {
         BodyLowerCtxt {
             compiler,
             map: BodyMap::new(),
             body: Body::new(),
             source_file,
+            body_owner,
         }
     }
 
@@ -95,7 +101,7 @@ impl<'a> BodyLowerCtxt<'a> {
         };
 
         let ast_id = self.map.ast_map.push(&expr);
-        trace!("`{}` -> {:?}", expr.syntax().text().to_string(), ast_id);
+        //trace!("`{}` -> {:?}", expr.syntax().text().to_string(), ast_id);
         let id = self.add_expr(
             &expr,
             Expr {
@@ -136,7 +142,7 @@ impl<'a> BodyLowerCtxt<'a> {
     }
 
     fn lower_ctor_expr(&mut self, ctor_expr: &ast::ConstructorExpr) -> Option<ExprKind> {
-        let ty = lower_type_opt(self.compiler, &mut self.map.ast_map, &ctor_expr.ty());
+        let ty = lower_type(self.compiler, self.body_owner, &mut self.map.ast_map, &ctor_expr.ty()?);
         let mut args = vec![];
         for arg in ctor_expr.arg_list()?.arguments() {
             let Some(arg_expr) = self.lower_expr(arg) else { continue };
@@ -285,9 +291,7 @@ impl<'a> BodyLowerCtxt<'a> {
 
     fn lower_while_stmt(&mut self, while_stmt: &ast::WhileStmt) -> Option<StmtKind> {
         let condition = self.lower_expr(while_stmt.condition()?.expr()?)?;
-
         let stmt = self.lower_statement(while_stmt.stmt()?)?;
-
         Some(StmtKind::WhileLoop { condition, stmt })
     }
 
@@ -296,7 +300,12 @@ impl<'a> BodyLowerCtxt<'a> {
     }
 
     fn lower_local_variable_stmt(&mut self, local_var_stmt: &ast::LocalVariable) -> Option<StmtKind> {
-        let ty = lower_type_opt(self.compiler, &mut self.map.ast_map, &local_var_stmt.ty());
+        let ty = lower_type(
+            self.compiler,
+            self.body_owner,
+            &mut self.map.ast_map,
+            &local_var_stmt.ty()?,
+        );
         let name = local_var_stmt.name()?.text();
         let initializer = if let Some(initializer) = local_var_stmt.initializer() {
             Some(self.lower_expr(initializer.expr()?)?)

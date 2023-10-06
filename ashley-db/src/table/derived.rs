@@ -37,6 +37,7 @@ enum QueryFunction<K, V, DB: ?Sized> {
 
 pub struct DerivedQueryTable<K, V, DB: ?Sized> {
     table_index: TableIndex,
+    // TODO: this shouldn't be a hashmap (for performance reasons)
     memos: MemoMap<K, Memo<K, V>>,
     /// MemoMap for values that changed in the current evaluation cycle,
     /// because we can't update them in place.

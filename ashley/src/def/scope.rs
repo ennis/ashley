@@ -3,7 +3,7 @@ use crate::{
     builtins::{r#mod, BuiltinOperationPtr},
     db::ModuleId,
     def,
-    def::{AstId, BodyId, DefLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
+    def::{AstId, ConstExprId, DefLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
     syntax::ast,
     ty,
     ty::Type,
@@ -75,25 +75,25 @@ impl Scope {
     }
 
     /// Returns an iterator over all structs defined in the module.
-    pub fn structs(&self) -> impl Iterator<Item = StructId> + '_ {
-        self.types.values().filter_map(|ty_res| match ty_res {
-            TypeRes::Struct(s) => Some(*s),
+    pub fn structs<'a>(&'a self) -> impl Iterator<Item = (&'a str, StructId)> + 'a {
+        self.types.iter().filter_map(|(name, ty_res)| match ty_res {
+            TypeRes::Struct(s) => Some((name.as_str(), *s)),
             TypeRes::Primitive(_) => None,
         })
     }
 
     /// Returns an iterator over all global variables defined in the module.
-    pub fn globals(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.values.values().filter_map(|value_res| match value_res {
-            ValueRes::Global(g) => Some(*g),
+    pub fn globals<'a>(&'a self) -> impl Iterator<Item = (&'a str, GlobalId)> + 'a {
+        self.values.iter().filter_map(|(name, value_res)| match value_res {
+            ValueRes::Global(g) => Some((name.as_str(), *g)),
             _ => None,
         })
     }
 
     /// Returns an iterator over all functions defined in the module.
-    pub fn functions(&self) -> impl Iterator<Item = FunctionId> + '_ {
-        self.values.values().filter_map(|value_res| match value_res {
-            ValueRes::Function(f) => Some(*f),
+    pub fn functions<'a>(&'a self) -> impl Iterator<Item = (&'a str, FunctionId)> + 'a {
+        self.values.iter().filter_map(|(name, value_res)| match value_res {
+            ValueRes::Function(f) => Some((name.as_str(), *f)),
             _ => None,
         })
     }
@@ -177,7 +177,7 @@ impl Scope {
     }
 }
 
-pub(crate) fn scope_for_body_query(compiler: &dyn CompilerDb, body: BodyId) -> Scope {
+pub(crate) fn scope_for_body_query(compiler: &dyn CompilerDb, body: ConstExprId) -> Scope {
     todo!()
 }
 

@@ -3,7 +3,7 @@ use crate::{
     builtins::{BuiltinOperation, ImageClass, PseudoType},
     def::Function,
     ty::{
-        body::{lower::TyBodyLowerCtxt, DefExprId, ExprAstId},
+        body::{lower::TyBodyLowerCtxt, ExprAstId},
         FunctionSignature, PrimitiveTypes, ScalarType, TyDiagnostic, Type, TypeKind,
     },
 };
@@ -194,7 +194,7 @@ impl TyBodyLowerCtxt<'_> {
         let mut match_ranks = vec![];
 
         for (i, function) in functions.iter().enumerate() {
-            let signature = function.signature(self.compiler);
+            let signature = function.signature(self.db);
 
             if signature.parameter_types.len() != args.len() {
                 /*self.body.diagnostics.push(TyDiagnostic::InvalidNumberOfArguments {
@@ -311,11 +311,11 @@ impl TyBodyLowerCtxt<'_> {
                     let parameter_types: Vec<_> = sig
                         .parameter_types
                         .iter()
-                        .map(|ty| ty.to_concrete_type(&self.compiler.tyctxt().prim_tys, vec_len, *ic))
+                        .map(|ty| ty.to_concrete_type(&self.db.tyctxt().prim_tys, vec_len, *ic))
                         .collect();
                     let result_type = sig
                         .result_type
-                        .to_concrete_type(&self.compiler.tyctxt().prim_tys, vec_len, *ic);
+                        .to_concrete_type(&self.db.tyctxt().prim_tys, vec_len, *ic);
                     // check the concrete signature
                     if let Some(conv) = check_signature(&parameter_types, arguments) {
                         let exact_match = conv.iter().all(|x| *x == 0);

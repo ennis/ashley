@@ -5,13 +5,12 @@ pub use self::diagnostic::BodyDiagnostic;
 
 use crate::{
     def::{
-        body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, AstId, AstMap, BodyId, BodyKind, BodyOwnerId, DefLoc,
-        FunctionLoc, Type,
+        body::lower::BodyLowerCtxt, diagnostic::ItemDiagnostic, AstId, AstMap, ConstExprId, DefLoc, FunctionLoc, Type,
     },
     syntax::ast,
     CompilerDb, ConstantValue,
 };
-use ashley::def::{BodyOwnerLoc, FunctionId};
+use ashley::def::{FunctionId, ParentScopeId};
 use ashley_data_structures::{Id, IndexVec};
 use rowan::ast::AstPtr;
 use std::{collections::HashMap, ops::Index, sync::Arc};
@@ -250,16 +249,28 @@ pub(crate) fn function_body_query(db: &dyn CompilerDb, function_id: FunctionId) 
     let _span = trace_span!("function_body_query", ?function_id).entered();
     let func_data = db.function_data(function_id);
     let Some(body) = func_data.body else {
+        // FIXME: this can happen if there's a syntax error near the body
         panic!("function_body_query called on function {function_id:?} with no body");
     };
 
     let body_src = function_id.child_ast_node(db, body);
-    let ctxt = BodyLowerCtxt::new(db, body_src.file);
+    let ctxt = BodyLowerCtxt::new(db, body_src.file, ParentScopeId::FunctionBody(function_id));
     let (body, body_map) = ctxt.lower_body_block(body_src.data);
 
     db.set_function_body(function_id, body);
     db.set_function_body_map(function_id, body_map);
 }
+
+pub(crate) fn const_expr_body_query(db: &dyn CompilerDb, const_expr_id: ConstExprId) {
+    let _span = trace_span!("const_expr_body_query", ?const_expr_id).entered();
+    let ast_node = const_expr_id.ast_node(db);
+    let ctxt = BodyLowerCtxt::new(db, ast_node.file, const_expr_id.parent(db));
+    let (body, body_map) = ctxt.lower_const_expr(ast_node.data);
+    db.set_const_expr_body(const_expr_id, body);
+    db.set_const_expr_body_map(const_expr_id, body_map);
+}
+
+//pub(crate) fn lower_const_expr_body(db: &dyn CompilerDb, body_map)
 
 /*pub(crate) fn body_and_map_query(db: &dyn CompilerDb, body_id: BodyId) {
     let _span = trace_span!("body_and_map_query", ?body_id).entered();

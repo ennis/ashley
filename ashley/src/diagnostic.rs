@@ -328,6 +328,13 @@ impl Diagnostic {
         self.label(span, "")
     }
 
+    /// Returns the primary span of the diagnostic.
+    pub fn get_span(&self) -> Option<Span> {
+        self.labels
+            .iter()
+            .find_map(|label| (!label.secondary).then_some(label.span))
+    }
+
     pub fn note(mut self, message: impl Into<String>) -> Diagnostic {
         self.notes.push(message.into());
         self

@@ -1,19 +1,23 @@
 use crate::{
+    def::ConstExprId,
+    syntax::ast::{BinaryOp, LogicOp},
     ty::{
-        body::{Body, Expr},
-        TyDiagnostic,
+        body::{Body, ConversionKind, Expr, ExprKind},
+        ScalarType, TyDiagnostic, TypeKind,
     },
-    CompilerDb,
+    CompilerDb, ConstantValue,
 };
+use ashley_data_structures::Id;
+use ordered_float::OrderedFloat;
 
-struct ConstEvalCtxt<'a> {
+pub(super) struct ConstEvalCtxt<'a> {
     compiler: &'a dyn CompilerDb,
     body: &'a Body,
     diagnostics: Vec<TyDiagnostic>,
 }
 
 impl<'a> ConstEvalCtxt<'a> {
-    fn new(compiler: &'a dyn CompilerDb, body: &'a Body) -> ConstEvalCtxt<'a> {
+    pub(super) fn new(compiler: &'a dyn CompilerDb, body: &'a Body) -> ConstEvalCtxt<'a> {
         ConstEvalCtxt {
             compiler,
             body,
@@ -21,117 +25,139 @@ impl<'a> ConstEvalCtxt<'a> {
         }
     }
 
-    /*fn eval_expr(&self, expr: Id<Expr>) -> Result<ConstantValue, ConstEvalDiagnostic> {
+    fn eval_expr(&self, expr: Id<Expr>) -> Result<ConstantValue, TyDiagnostic> {
+        use ConstantValue as CV;
+        use ConversionKind as CK;
+        use ExprKind as EK;
+        use ScalarType as ST;
+        use TypeKind as TK;
+
         const EVAL_TY_MISMATCH: &str = "constant evaluation result is inconsistent with the inferred type";
 
-        let expr_d = &self.body.exprs[expr];
-        let expr_ptr = self.body.expr_map_back.get(expr).unwrap().clone();
-        match &expr_d.kind {
-            ExprKind::Literal { value } => Ok(value.clone()),
-            ExprKind::Binary { lhs, op, rhs, .. } => {
-                let left_value = self.eval_expr(*lhs)?;
-                let right_value = self.eval_expr(*rhs)?;
+        let expr = &self.body.exprs[expr];
+        let ast_id = expr.ast_id;
+        //let expr_ptr = self.body.expr_map_back.get(expr).unwrap().clone();
+
+        match expr.kind {
+            EK::Literal { ref value } => Ok(value.clone()),
+            EK::Binary { lhs, op, rhs, .. } => {
+                let left_value = self.eval_expr(lhs)?;
+                let right_value = self.eval_expr(rhs)?;
                 match op {
                     BinaryOp::LogicOp(LogicOp::And) => {
                         let left_bool = left_value.to_bool().expect(EVAL_TY_MISMATCH);
                         let right_bool = right_value.to_bool().expect(EVAL_TY_MISMATCH);
-                        Ok(ConstantValue::Bool(left_bool && right_bool))
+                        Ok(CV::Bool(left_bool && right_bool))
                     }
                     BinaryOp::LogicOp(LogicOp::Or) => {
                         let left_bool = left_value.to_bool().expect(EVAL_TY_MISMATCH);
                         let right_bool = right_value.to_bool().expect(EVAL_TY_MISMATCH);
-                        Ok(ConstantValue::Bool(left_bool || right_bool))
+                        Ok(CV::Bool(left_bool || right_bool))
                     }
-                    BinaryOp::ArithOp(arith_op) => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
-                    BinaryOp::CmpOp(_) => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
-                    BinaryOp::Assignment(_) => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
+                    BinaryOp::ArithOp(arith_op) => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
+                    BinaryOp::CmpOp(_) => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
+                    BinaryOp::Assignment(_) => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
                 }
             }
-            ExprKind::ImplicitConversion { expr, kind } => {
-                let value = self.eval_expr(*expr)?;
+            EK::ImplicitConversion { expr, kind } => {
+                let value = self.eval_expr(expr)?;
                 match kind {
-                    ConversionKind::IntBitcast => {
+                    CK::IntBitcast => {
                         // no-op
                         Ok(value)
                     }
-                    ConversionKind::SignedIntToFloat => {
+                    CK::SignedIntToFloat => {
                         // TODO 64-bit consteval
-                        Ok(ConstantValue::Float(OrderedFloat::from(
-                            value.to_i32().expect(EVAL_TY_MISMATCH) as f32,
+                        Ok(CV::Float(OrderedFloat::from(
+                            value.to_i32().expect(EVAL_TY_MISMATCH) as f32
                         )))
                     }
-                    ConversionKind::UnsignedIntToFloat => {
+                    CK::UnsignedIntToFloat => {
                         // TODO 64-bit consteval
-                        Ok(ConstantValue::Float(OrderedFloat::from(
-                            value.to_u32().expect(EVAL_TY_MISMATCH) as f32,
+                        Ok(CV::Float(OrderedFloat::from(
+                            value.to_u32().expect(EVAL_TY_MISMATCH) as f32
                         )))
                     }
-                    ConversionKind::FloatConvert => match value {
-                        ConstantValue::Float(v) => Ok(ConstantValue::Double(OrderedFloat::from(v.0 as f64))),
+                    CK::FloatConvert => match value {
+                        CV::Float(v) => Ok(CV::Double(OrderedFloat::from(v.0 as f64))),
                         _ => panic!("{}", EVAL_TY_MISMATCH),
                     },
-                    ConversionKind::FloatToSignedInt => match value {
-                        ConstantValue::Float(v) => Ok(ConstantValue::Int((v.0 as i32) as u32)),
-                        ConstantValue::Double(v) => Ok(ConstantValue::Int((v.0 as i32) as u32)),
+                    CK::FloatToSignedInt => match value {
+                        CV::Float(v) => Ok(CV::Int((v.0 as i32) as u32)),
+                        CV::Double(v) => Ok(CV::Int((v.0 as i32) as u32)),
                         // TODO 64-bit consteval
                         _ => panic!("{}", EVAL_TY_MISMATCH),
                     },
-                    ConversionKind::FloatToUnsignedInt => match value {
-                        ConstantValue::Float(v) => Ok(ConstantValue::Int(v.0 as u32)),
-                        ConstantValue::Double(v) => Ok(ConstantValue::Int(v.0 as u32)),
+                    CK::FloatToUnsignedInt => match value {
+                        CV::Float(v) => Ok(CV::Int(v.0 as u32)),
+                        CV::Double(v) => Ok(CV::Int(v.0 as u32)),
                         // TODO 64-bit consteval
                         _ => panic!("{}", EVAL_TY_MISMATCH),
                     },
-                    ConversionKind::Layout => {
+                    CK::Layout => {
                         todo!("consteval layout conversion")
+                    }
+                    CK::Deref => {
+                        todo!("consteval autoderef")
                     }
                 }
             }
-            ExprKind::BuiltinConstructor { args, ctor } => {
+            ExprKind::BuiltinConstructor { ref args, ctor } => {
                 let args = args
                     .iter()
-                    .map(|arg| self.eval_expr(expr))
+                    .map(|arg| self.eval_expr(*arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 match ctor.ty {
-                    TypeKind::Scalar(st) => {
+                    TK::Scalar(st) => {
                         assert_eq!(args.len(), 1, "consteval: unexpected number of constructor arguments");
                         match st {
-                            ScalarType::Int => match args[0] {
-                                ConstantValue::Int(v) => Ok(ConstantValue::Int(v)),
-                                ConstantValue::Int64(v) => Ok(ConstantValue::Int((v as i32) as u32)),
-                                ConstantValue::Float(v) => Ok(ConstantValue::Int((v.0 as i32) as u32)),
-                                ConstantValue::Double(v) => Ok(ConstantValue::Int((v.0 as i32) as u32)),
+                            ST::Int => match args[0] {
+                                CV::Int(v) => Ok(CV::Int(v)),
+                                CV::Int64(v) => Ok(CV::Int((v as i32) as u32)),
+                                CV::Float(v) => Ok(CV::Int((v.0 as i32) as u32)),
+                                CV::Double(v) => Ok(CV::Int((v.0 as i32) as u32)),
                                 _ => panic!("{}", EVAL_TY_MISMATCH),
                             },
-                            ScalarType::UnsignedInt => match args[0] {
-                                ConstantValue::Int(v) => Ok(ConstantValue::Int(v)),
-                                ConstantValue::Int64(v) => Ok(ConstantValue::Int(v as u32)),
-                                ConstantValue::Float(v) => Ok(ConstantValue::Int(v.0 as u32)),
-                                ConstantValue::Double(v) => Ok(ConstantValue::Int(v.0 as u32)),
+                            ST::UnsignedInt => match args[0] {
+                                CV::Int(v) => Ok(CV::Int(v)),
+                                CV::Int64(v) => Ok(CV::Int(v as u32)),
+                                CV::Float(v) => Ok(CV::Int(v.0 as u32)),
+                                CV::Double(v) => Ok(CV::Int(v.0 as u32)),
                                 _ => panic!("{}", EVAL_TY_MISMATCH),
                             },
-                            ScalarType::Float => match args[0] {
-                                ConstantValue::Int(v) => {
-                                    Ok(ConstantValue::Float(OrderedFloat::from((v as i32) as f32)))
-                                }
-                                ConstantValue::Int64(v) => {
-                                    Ok(ConstantValue::Float(OrderedFloat::from((v as i64) as f32)))
-                                }
-                                ConstantValue::Float(v) => Ok(ConstantValue::Float(v)),
-                                ConstantValue::Double(v) => Ok(ConstantValue::Float(OrderedFloat::from(v.0 as f32))),
+                            ST::Float => match args[0] {
+                                CV::Int(v) => Ok(CV::Float(OrderedFloat::from((v as i32) as f32))),
+                                CV::Int64(v) => Ok(CV::Float(OrderedFloat::from((v as i64) as f32))),
+                                CV::Float(v) => Ok(CV::Float(v)),
+                                CV::Double(v) => Ok(CV::Float(OrderedFloat::from(v.0 as f32))),
                                 _ => panic!("{}", EVAL_TY_MISMATCH),
                             },
                             // TODO
-                            ScalarType::Double => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
-                            ScalarType::Bool => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
+                            ST::Double => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
+                            ST::Bool => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
                         }
                     }
                     // TODO
-                    _ => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
+                    _ => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
                 }
             }
             // TODO
-            _ => Err(ConstEvalError::CouldNotEvaluateAsConstant { expr: expr_ptr }),
+            _ => Err(TyDiagnostic::CouldNotEvaluateAsConstant { expr: ast_id }),
         }
-    }*/
+    }
+}
+
+pub(super) fn eval_const_expr_body(
+    db: &dyn CompilerDb,
+    const_expr_id: ConstExprId,
+    body: &Body,
+) -> Result<ConstantValue, TyDiagnostic> {
+    let root_expr = body.root_expr();
+    let mut ctxt = ConstEvalCtxt {
+        compiler: db,
+        body,
+        diagnostics: vec![],
+    };
+
+    ctxt.eval_expr(root_expr)
 }

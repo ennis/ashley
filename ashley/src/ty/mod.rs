@@ -15,9 +15,7 @@ pub use ty::{FunctionType, ImageSampling, ImageType, ScalarType, StructField, Ty
 use crate::{
     db::{DebugWithDb, ModuleId},
     def,
-    def::{
-        AstId, BodyLoc, BodyOwnerId, DefLoc, FieldLoc, FunctionId, FunctionLoc, GlobalId, Resolver, StructId, StructLoc,
-    },
+    def::{AstId, ConstExprLoc, DefLoc, FieldLoc, FunctionId, FunctionLoc, GlobalId, Resolver, StructId, StructLoc},
     syntax::{ast, ast::TypeRef, SyntaxNode},
     ty::{interner::Interner, lower::TypeLoweringCtxt},
     CompilerDb,
@@ -189,7 +187,12 @@ pub(crate) fn global_ty_query(db: &dyn CompilerDb, global_id: GlobalId) {
     let global_data = db.global_data(global_id);
     let resolver = global_id.loc(db).module.resolver(db);
     let mut diags = vec![];
-    let ty = lower_ty(db, &resolver, &global_data.ty, &mut diags);
+
+    let ty = if let Some(ref ty) = global_data.ty {
+        lower_ty(db, &resolver, ty, &mut diags)
+    } else {
+        Type::new(db, TypeKind::Error)
+    };
     db.set_global_ty(global_id, ty);
     db.set_global_ty_diagnostics(global_id, diags);
 }

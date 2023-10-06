@@ -1,9 +1,11 @@
 mod counter;
+mod dyn_eq;
 mod interner;
 mod memory_layout;
 
 pub use ashley_derive::MemoryLayout;
 pub use counter::Counter;
+pub use dyn_eq::DynEq;
 pub use memory_layout::{MemoryLayout, Std140Float, Std140IVec4, Std140Int, Std140Vec4};
 use std::fmt;
 

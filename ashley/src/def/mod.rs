@@ -22,7 +22,7 @@ pub(crate) use self::{
 
 use crate::{
     db::DebugWithDb,
-    def::lower::ItemLowerCtxt,
+    def::lower::DefLowerCtxt,
     diagnostic::{Span, Spanned},
     syntax::{ast, ast::AstToken, Lang, SyntaxNode, SyntaxNodePtr, SyntaxToken},
     ty::FunctionSignature,
@@ -215,6 +215,8 @@ impl AstIdMap {
     }
 }*/
 
+pub type RawAstId = Id<SyntaxNodePtr>;
+
 /// Assigns and maps syntax nodes to indices.
 ///
 /// This is useful to refer to syntax nodes in query results without
@@ -223,7 +225,7 @@ impl AstIdMap {
 #[derive(Clone, Eq, PartialEq)]
 pub struct AstMap {
     // TODO: maybe consider putting the module ID here, or the source file ID?
-    ast_ids: IndexVec<SyntaxNodePtr, Id<SyntaxNodePtr>>,
+    ast_ids: IndexVec<SyntaxNodePtr, RawAstId>,
 }
 
 impl AstMap {
@@ -231,6 +233,10 @@ impl AstMap {
         AstMap {
             ast_ids: Default::default(),
         }
+    }
+
+    pub fn raw_node_ptr(&self, id: RawAstId) -> SyntaxNodePtr {
+        self.ast_ids.get(id).expect("AST node ID not found").clone()
     }
 
     pub fn node_ptr<M: AstNode<Language = Lang>>(&self, id: AstId<M>) -> AstPtr<M> {
@@ -310,19 +316,21 @@ impl fmt::Display for Qualifier {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Global {
-    //pub ast: AstId<ast::Global>,
     pub attrs: Vec<AstId<ast::Attribute>>,
     pub name: String,
     pub visibility: Visibility,
     pub linkage: Linkage,
     pub storage_class: Option<Qualifier>,
-    pub ty: Type,
+    // The parser may fail to produce a type due to a syntax error, but still produce a global.
+    // (although that's currently impossible in the current grammar)
+    pub ty: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructField {
     pub ast: AstId<ast::StructField>,
     pub name: String,
+    // TODO: Option<Type> in case of syntax errors
     pub ty: Type,
 }
 
@@ -338,6 +346,7 @@ pub struct Struct {
 pub struct FunctionParam {
     pub ast: AstId<ast::FnParam>,
     pub name: String,
+    // TODO: Option<Type> in case of syntax errors
     pub ty: Type,
 }
 
@@ -445,6 +454,7 @@ impl ModuleIndex {
     }
 }
 
+/*
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModuleIndexMap {
     pub(crate) ast_map: AstMap,
@@ -466,7 +476,7 @@ impl ModuleIndexMap {
     pub fn ast_map_for_function(&self, function: Id<Function>) -> &AstMap {
         &self.functions[function].1
     }*/
-}
+}*/
 
 /*
 impl Index<Id<Struct>> for ModuleMap {
@@ -598,33 +608,77 @@ impl From<FunctionLoc> for DefLoc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum BodyOwnerLoc {
-    Def(DefLoc),
+/// Identifies a parent scope.
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ParentScopeId {
+    /// Inside a definition.
+    Def(DefId),
+    /// Inside a function body.
     FunctionBody(FunctionId),
 }
 
-new_key_type!(
-    pub struct BodyOwnerId;
-);
+impl ParentScopeId {
+    pub fn module(&self, db: &dyn CompilerDb) -> ModuleId {
+        match self {
+            ParentScopeId::Def(d) => d.module(db),
+            ParentScopeId::FunctionBody(function) => function.loc(db).module,
+        }
+    }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum BodyKind {
-    Expr(AstId<ast::Expr>),
-    Block(AstId<ast::Block>),
+    pub fn ast_map<'db>(&self, db: &'db dyn CompilerDb) -> &'db AstMap {
+        match self {
+            ParentScopeId::Def(d) => d.ast_map(db),
+            ParentScopeId::FunctionBody(function) => &db.function_body_map(*function).ast_map,
+        }
+    }
+
+    /// Returns the span of an AstId relative to this scope.
+    pub fn span(&self, db: &dyn CompilerDb, id: impl Into<RawAstId>) -> Span {
+        let file = self.module(db).source_file(db);
+        let range = self.ast_map(db).raw_node_ptr(id.into()).text_range();
+        Span { file, range }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BodyLoc {
-    pub owner: BodyOwnerLoc,
-    pub kind: BodyKind,
+impl From<StructId> for ParentScopeId {
+    fn from(value: StructId) -> Self {
+        ParentScopeId::Def(value.into())
+    }
+}
+impl From<GlobalId> for ParentScopeId {
+    fn from(value: GlobalId) -> Self {
+        ParentScopeId::Def(value.into())
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConstExprLoc {
+    pub parent: ParentScopeId,
+    pub ast_id: AstId<ast::Expr>,
+}
+
 new_key_type!(
-    pub struct BodyId;
+    pub struct ConstExprId;
 );
+
+impl ConstExprId {
+    pub fn parent(&self, db: &dyn CompilerDb) -> ParentScopeId {
+        self.loc(db).parent
+    }
+
+    pub fn loc(&self, db: &dyn CompilerDb) -> ConstExprLoc {
+        db.lookup_const_expr_id(*self)
+    }
+
+    pub fn ast_node(&self, db: &dyn CompilerDb) -> InFile<ast::Expr> {
+        let loc = db.lookup_const_expr_id(*self);
+        loc.parent
+            .ast_map(db)
+            .node_in_file(db, loc.parent.module(db), loc.ast_id)
+    }
+}
 
 new_key_type!(
     pub struct StructId;
@@ -804,29 +858,13 @@ impl From<FunctionId> for DefId {
         DefId::Function(value)
     }
 }
-
+/*
 /// Represents something with its own AstMap (either a Def or a Body).
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AstMapOwnerId {
     Def(DefId),
     FunctionBody(FunctionId),
-}
-
-impl AstMapOwnerId {
-    pub fn module(&self, db: &dyn CompilerDb) -> ModuleId {
-        match self {
-            AstMapOwnerId::Def(d) => d.module(db),
-            AstMapOwnerId::FunctionBody(function) => function.loc(db).module,
-        }
-    }
-
-    pub fn ast_map<'db>(&self, db: &'db dyn CompilerDb) -> &'db AstMap {
-        match self {
-            AstMapOwnerId::Def(d) => d.ast_map(db),
-            AstMapOwnerId::FunctionBody(function) => &db.function_body_map(*function).ast_map,
-        }
-    }
-}
+}*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -880,21 +918,21 @@ pub(crate) fn module_index_query(db: &dyn CompilerDb, module: ModuleId) {
 }
 
 pub(crate) fn struct_data_query(db: &dyn CompilerDb, strukt: StructId) {
-    let mut ctxt = ItemLowerCtxt::new(db);
+    let mut ctxt = DefLowerCtxt::new(db, strukt.into());
     let (struct_data, map) = ctxt.lower_struct(&strukt.ast_node(db).data);
     db.set_struct_data(strukt, struct_data);
     db.set_struct_data_ast_map(strukt, map);
 }
 
 pub(crate) fn function_data_query(db: &dyn CompilerDb, function: FunctionId) {
-    let mut ctxt = ItemLowerCtxt::new(db);
+    let mut ctxt = DefLowerCtxt::new(db, function.into());
     let (function_data, map) = ctxt.lower_function(&function.ast_node(db).data);
     db.set_function_data(function, function_data);
     db.set_function_data_ast_map(function, map);
 }
 
 pub(crate) fn global_data_query(db: &dyn CompilerDb, global: GlobalId) {
-    let mut ctxt = ItemLowerCtxt::new(db);
+    let mut ctxt = DefLowerCtxt::new(db, global.into());
     let (global_data, map) = ctxt.lower_global_variable(&global.ast_node(db).data);
     db.set_global_data(global, global_data);
     db.set_global_data_ast_map(global, map);

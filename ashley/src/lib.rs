@@ -14,6 +14,7 @@ pub mod resolver;
 mod source_file;
 pub mod syntax;
 //pub mod tast;
+pub mod attribute;
 pub mod ty;
 pub mod utils;
 

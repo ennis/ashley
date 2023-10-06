@@ -16,6 +16,9 @@ use std::{collections::HashSet, fmt::Write, marker::PhantomData};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Custom attribute parsing:
+// - validator gets compilerdb + ast::AttrItem
+
 /// Error parsing an attribute.
 ///
 /// TODO replace by a unit struct? callers don't care about why parsing failed, since the failure is

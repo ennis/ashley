@@ -20,6 +20,7 @@ new_index! {
 #[repr(transparent)]
 pub struct Index(u32);
 
+// TODO: not sure we need those. Maybe just make the inner field public.
 impl Index {
     pub const fn from_u32(x: u32) -> Self {
         Index(x)

@@ -4,10 +4,10 @@ use crate::{
     def::{
         body,
         body::{Body, BodyMap},
-        module_scope_query, scope_for_body_query, AstMap, BodyId, BodyLoc, BodyOwnerId, BodyOwnerLoc, DefLoc,
-        FunctionId, FunctionLoc, GlobalId, GlobalLoc, InFile, ModuleIndex, ModuleIndexMap, Scope, StructId, StructLoc,
+        module_scope_query, scope_for_body_query, AstMap, ConstExprId, ConstExprLoc, DefLoc, FunctionId, FunctionLoc,
+        GlobalId, GlobalLoc, InFile, ModuleIndex, ParentScopeId, Scope, StructId, StructLoc,
     },
-    diagnostic::Span,
+    diagnostic::{Diagnostic, Span},
     ir, layout,
     layout::LayoutInfo,
     resolver::{DummyPackageResolver, PackageResolver},
@@ -77,6 +77,14 @@ new_key_type! {
 impl ModuleId {
     pub fn index<'db>(self, db: &'db dyn CompilerDb) -> &'db ModuleIndex {
         db.module_index(self)
+    }
+
+    pub fn source_file(self, db: &dyn CompilerDb) -> SourceFileId {
+        db.module_source(self)
+    }
+
+    pub fn scope<'db>(self, db: &'db dyn CompilerDb) -> &'db Scope {
+        db.module_scope(self)
     }
 
     pub fn syntax(self, db: &dyn CompilerDb) -> (SourceFileId, GreenNode) {
@@ -152,9 +160,7 @@ define_database_tables! {
 
         // --- Interned IDs ---
         intern module_id[lookup_module_id](module_name: String)-> ModuleId;
-        intern body_id[lookup_body_id](body_loc: BodyLoc) -> BodyId;
-        intern body_owner_id[lookup_body_owner_id](body_owner: BodyOwnerLoc) -> BodyOwnerId;
-
+        intern const_expr_id[lookup_const_expr_id](body_loc: ConstExprLoc) -> ConstExprId;
         intern struct_id[lookup_struct_id](loc: StructLoc) -> StructId;
         intern global_id[lookup_global_id](loc: GlobalLoc) -> GlobalId;
         intern function_id[lookup_function_id](loc: FunctionLoc) -> FunctionId;
@@ -220,7 +226,12 @@ define_database_tables! {
             function_body_map: BodyMap  [set_function_body_map]
         } => def::body::function_body_query;
 
-        query (body: BodyId) -> {
+        query (const_expr_id: ConstExprId) -> {
+            const_expr_body: Body  [set_const_expr_body],
+            const_expr_body_map: BodyMap  [set_const_expr_body_map]
+        } => def::body::const_expr_body_query;
+
+        query (body: ConstExprId) -> {
             ty_body: Body  [set_ty_body],
             ty_body_diagnostics: Vec<ty::TyDiagnostic>  [set_ty_body_diagnostics]
         } => ty::body::ty_body_query;
@@ -241,6 +252,9 @@ define_database_tables! {
         } => ty::function_signature_query;
 
         query ty_function_body(function: FunctionId) -> ty::body::Body => ty::body::ty_function_body_query;
+        query ty_const_expr_body(const_expr: ConstExprId) -> ty::body::Body => ty::body::ty_const_expr_body_query;
+
+        query const_eval(const_expr: ConstExprId) -> Result<ConstantValue, ty::TyDiagnostic> => ty::body::const_eval_query;
 
         /*query (body: BodyId) -> {
             const_eval: Option<ConstantValue>  [set_const_eval],
@@ -361,6 +375,24 @@ impl HasTables<CompilerDbStorage> for Compiler {
         &mut self.db_storage
     }
 }
+
+/*
+// Where is this stored? When is this lowered?
+#[derive(AttributeVerifier)]
+pub struct CustomAttribute {
+    ident: Spanned<Ident>,
+    #[attribute(key_value)]
+    string_value: Spanned<String>,
+    const_expr: AstId<ast::Expr>, // AstIds relative to the parent scope
+}*/
+
+// Resolution:
+// resolve(db: &dyn CompilerDb, ast: &[ast::AttrArg], parent_scope: ParentScopeId)
+//
+// -> within resolve, possible to request const eval
+
+// -> hook parsing
+// -> hook
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -492,6 +524,63 @@ impl dyn CompilerDb {
     ) -> InFile<N> {
         let (source_file_id, green_node) = self.module_syntax_tree(module);
         InFile::new(source_file_id, ptr.to_node(&SyntaxNode::new_root(green_node)))
+    }
+
+    /// Collects all compiler diagnostics for the specified module.
+    pub fn module_diagnostics(&self, module: ModuleId) -> Vec<Diagnostic> {
+        // The following queries can emit diagnostics:
+        // - syntax (parsing)
+        // - module_index
+        // - struct_field_types
+        // - function_signatures
+        // - global_ty
+        // - global_initializer
+
+        let mut all_diagnostics = vec![];
+        let source_file = module.source_file(self);
+
+        // syntax errors
+        let syntax_diagnostics = self.syntax_diagnostics(source_file);
+        for diag in syntax_diagnostics.iter() {
+            all_diagnostics.push(diag.render(self));
+        }
+
+        // module_index errors
+        let index = module.index(self);
+        for diag in index.diagnostics.iter() {
+            // TODO
+        }
+
+        // definition errors
+        let scope = module.scope(self);
+        for (_, s) in scope.structs() {
+            let diags = self.struct_field_types_diagnostics(s);
+            for diag in diags {
+                all_diagnostics.push(diag.render(self, s.into()))
+            }
+        }
+
+        for (_, g) in scope.globals() {
+            let diags = self.global_ty_diagnostics(g);
+            for diag in diags {
+                all_diagnostics.push(diag.render(self, g.into()))
+            }
+        }
+
+        for (_, f) in scope.functions() {
+            let diags = self.function_signature_diagnostics(f);
+            for diag in diags {
+                all_diagnostics.push(diag.render(self, ParentScopeId::Def(f.into())))
+            }
+
+            let body = self.ty_function_body(f);
+            for diag in body.diagnostics.iter() {
+                all_diagnostics.push(diag.render(self, ParentScopeId::FunctionBody(f)));
+            }
+        }
+
+        // TODO layout errors
+        all_diagnostics
     }
 
     /*pub fn definition(&self, definition: DefId) -> Arc<Def> {

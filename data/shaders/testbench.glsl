@@ -5,11 +5,22 @@
 // If you intend to reuse this shader, please add credits to 'Danilo Guanabara'
 
 uniform float time;
+
 uniform uint width;
 uniform uint height;
 
-@location(0) in vec2 uv;
+const int BASE_LOC = 0;
+
+
+@location(BASE_LOC) in vec2 uv;
+@location(BASE_LOC+1) in vec4 color;
+
 @location(0) out vec4 color;
+
+
+struct Test {
+    float data;
+}
 
 vec4 mainImage(vec2 fragCoord) {
 	vec3 c;

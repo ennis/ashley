@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ashley::{
-    def::AstMapOwnerId,
+    def::ParentScopeId,
     diagnostic::{Diagnostic, Severity},
     syntax::SyntaxDiagnostic,
     termcolor, Compiler, CompilerDb, ModuleId, SourceFileId,
@@ -112,7 +112,7 @@ fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
 
     // dump struct field types
     let module_scope = db.module_scope(module);
-    for struct_id in module_scope.structs() {
+    for (_, struct_id) in module_scope.structs() {
         let field_types = db.struct_field_types(struct_id);
 
         /*for diag in diags {
@@ -129,14 +129,14 @@ fn recompile(db: &dyn CompilerDb, module: ModuleId, source_file: SourceFileId) {
         }
     }
 
-    for function_id in module_scope.functions() {
+    for (_, function_id) in module_scope.functions() {
         //let body = db.function_body(function_id);
         //let body_map = db.function_body_map(function_id);
         let ty_body = db.ty_function_body(function_id);
         let func_data = db.function_data(function_id);
         trace!("=== Function `{}` ===", func_data.name);
         for d in ty_body.diagnostics.iter() {
-            emit_diagnostic(db, d.render(db, AstMapOwnerId::FunctionBody(function_id)));
+            emit_diagnostic(db, d.render(db, ParentScopeId::FunctionBody(function_id)));
         }
     }
 }

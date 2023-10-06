@@ -3,9 +3,9 @@
 use crate::{
     db::DebugWithDb,
     def::{
-        diagnostic::ItemDiagnostic, ty::TypeKind, AstId, AstMap, DefLoc, Function, FunctionLoc, FunctionParam, Global,
-        GlobalLoc, Import, InFile, Linkage, ModuleIndex, ModuleIndexMap, Qualifier, Struct, StructField, StructLoc,
-        Type, Visibility,
+        diagnostic::ItemDiagnostic, ty::TypeKind, AstId, AstMap, ConstExprLoc, DefId, DefLoc, Function, FunctionLoc,
+        FunctionParam, Global, GlobalLoc, Import, InFile, Linkage, ModuleIndex, ParentScopeId, Qualifier, Struct,
+        StructField, StructLoc, Type, Visibility,
     },
     syntax::{ast, ast::AstToken, Lang, SyntaxNode, SyntaxNodePtr},
     CompilerDb, ModuleId,
@@ -18,32 +18,20 @@ use rowan::{
 use std::{collections::HashMap, marker::PhantomData, ops::Index};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-pub struct ItemLowerCtxt<'a> {
-    compiler: &'a dyn CompilerDb,
-}
 
 fn visibility(vis: &Option<ast::Visibility>) -> Visibility {
     vis.as_ref().and_then(|q| q.visibility()).unwrap_or(Visibility::Private)
 }
 
-pub(crate) fn lower_type_opt(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &Option<ast::Type>) -> Type {
-    match ty {
-        Some(ty) => lower_type(db, def_map, ty),
-        None => Type {
-            ast_id: None,
-            kind: TypeKind::Error,
-        },
-    }
-}
-
-pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &ast::Type) -> Type {
+pub(crate) fn lower_type(db: &dyn CompilerDb, parent: ParentScopeId, ast_map: &mut AstMap, ty: &ast::Type) -> Type {
+    let ast_id = ast_map.push(ty);
     match ty {
         ast::Type::TypeRef(name) => {
             let Some(name) = name.name() else {
-                return Type::error();
+                return Type::error(ast_id);
             };
             Type {
-                ast_id: Some(def_map.push(ty)),
+                ast_id,
                 kind: TypeKind::Name { name: name.text() },
             }
         }
@@ -51,23 +39,29 @@ pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &ast::Ty
             todo!("tuple types")
         }
         ast::Type::ArrayType(array_ty) => {
-            let element = Box::new(lower_type_opt(db, def_map, &array_ty.element_type()));
-            /*let size = if let Some(expr) = array_ty.length() {
-                Some(self.ast_id_map.push(&expr))
+            let Some(element_type) = array_ty.element_type() else {
+                return Type::error(ast_id);
+            };
+            let element = Box::new(lower_type(db, parent, ast_map, &element_type));
+
+            let size = if let Some(expr) = array_ty.length() {
+                let ast_id = ast_map.push(&expr);
+                let const_expr_id = db.const_expr_id(ConstExprLoc { parent, ast_id });
+                Some(const_expr_id)
             } else {
                 None
-            };*/
+            };
 
-            //let mut stride = None;
+            let mut stride = None;
             for qualifier in array_ty.qualifiers() {
                 match qualifier {
                     ast::TypeQualifier::StrideQualifier(stride_qualifier) => {
                         if let Some(expr) = stride_qualifier.stride() {
-                            /*let ast_id = self.ast_id_map.push(&expr);
-                            let body_id = self.compiler.body_id(BodyLoc {
-                                owner: BodyOwnerId::TypeConst(self),
-                                kind: BodyKind::Expr(),
-                            })*/
+                            // lower constexpr body
+
+                            let ast_id = ast_map.push(&expr);
+                            let const_expr_id = db.const_expr_id(ConstExprLoc { parent, ast_id });
+                            stride = Some(const_expr_id)
                         }
                     }
                     _ => {
@@ -81,12 +75,17 @@ pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &ast::Ty
                 }
             }
 
-            /*if let Some(size) = size {
-                Type::Array { element, size, stride }
+            if let Some(size) = size {
+                Type {
+                    ast_id,
+                    kind: TypeKind::Array { element, size, stride },
+                }
             } else {
-                Type::RuntimeArray { element, stride }
-            }*/
-            todo!("array types")
+                Type {
+                    ast_id,
+                    kind: TypeKind::RuntimeArray { element, stride },
+                }
+            }
         }
         ast::Type::ClosureType(_) => {
             todo!("closure types")
@@ -94,9 +93,14 @@ pub(crate) fn lower_type(db: &dyn CompilerDb, def_map: &mut AstMap, ty: &ast::Ty
     }
 }
 
-impl<'a> ItemLowerCtxt<'a> {
-    pub(crate) fn new(compiler: &'a dyn CompilerDb) -> ItemLowerCtxt<'a> {
-        ItemLowerCtxt { compiler }
+pub struct DefLowerCtxt<'a> {
+    compiler: &'a dyn CompilerDb,
+    def_id: DefId,
+}
+
+impl<'a> DefLowerCtxt<'a> {
+    pub(crate) fn new(compiler: &'a dyn CompilerDb, def_id: DefId) -> DefLowerCtxt<'a> {
+        DefLowerCtxt { compiler, def_id }
     }
 
     /*pub(crate) fn lower_module(mut self) -> (ModuleIndex, ModuleItemMap) {
@@ -137,7 +141,7 @@ impl<'a> ItemLowerCtxt<'a> {
 
     fn lower_field(&mut self, def_map: &mut AstMap, field: &ast::StructField) -> Option<StructField> {
         let name = field.name()?.text();
-        let ty = self.lower_type_opt(def_map, &field.ty());
+        let ty = self.lower_type(def_map, &field.ty()?);
         Some(StructField {
             ast: def_map.push(field),
             name,
@@ -219,19 +223,15 @@ impl<'a> ItemLowerCtxt<'a> {
         attributes.map(|attr| def_map.push(&attr)).collect()
     }
 
-    fn lower_function_param(&mut self, def_map: &mut AstMap, func_param: &ast::FnParam) -> Option<FunctionParam> {
-        let ast_id = def_map.push(func_param);
+    fn lower_function_param(&mut self, ast_map: &mut AstMap, func_param: &ast::FnParam) -> Option<FunctionParam> {
+        let ast_id = ast_map.push(func_param);
         let name = func_param.name().map(|name| name.text()).unwrap_or(String::new());
-        let ty = self.lower_type_opt(def_map, &func_param.ty());
+        let ty = self.lower_type(ast_map, &func_param.ty()?);
         Some(FunctionParam { ast: ast_id, name, ty })
     }
 
-    fn lower_type_opt(&mut self, ast_map: &mut AstMap, ty: &Option<ast::Type>) -> Type {
-        lower_type_opt(self.compiler, ast_map, ty)
-    }
-
     fn lower_type(&mut self, ast_map: &mut AstMap, ty: &ast::Type) -> Type {
-        lower_type(self.compiler, ast_map, ty)
+        lower_type(self.compiler, ParentScopeId::Def(self.def_id), ast_map, ty)
     }
 
     pub(super) fn lower_global_variable(mut self, global: &ast::Global) -> (Global, AstMap) {
@@ -247,7 +247,7 @@ impl<'a> ItemLowerCtxt<'a> {
         let attributes = self.lower_attributes(&mut ast_map, global.attrs());
         let storage_class = global.qualifier().and_then(|q| q.qualifier());
 
-        let ty = self.lower_type_opt(&mut ast_map, &global.ty());
+        let ty = global.ty().map(|ty| self.lower_type(&mut ast_map, &ty));
 
         (
             Global {

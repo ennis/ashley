@@ -4,7 +4,7 @@ mod lower;
 use crate::{
     builtins::BuiltinSignature,
     def,
-    def::{BodyOwnerId, FunctionLoc, GlobalLoc},
+    def::{FunctionLoc, GlobalLoc},
     ty,
     ty::{body::lower::TyBodyLowerCtxt, TyOwnerId, Type},
     CompilerDb, ConstantValue,
@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use crate::{
     builtins::{BuiltinOperationPtr, Constructor},
-    def::{BodyId, FunctionId, GlobalId},
+    def::{ConstExprId, FunctionId, GlobalId},
     syntax::ast,
-    ty::TyDiagnostic,
+    ty::{body::const_eval::ConstEvalCtxt, TyDiagnostic},
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -66,13 +66,7 @@ pub enum StmtKind {
     Error,
 }
 
-///
-pub type DefExprId = Id<def::body::Expr>;
-pub type DefStmtId = Id<def::body::Statement>;
-pub type DefLocalVarId = Id<def::body::LocalVar>;
-pub type DefBlockId = Id<def::body::Block>;
 pub type ExprAstId = AstId<ast::Expr>;
-pub type StmtAstId = AstId<ast::Stmt>;
 
 /// Represents an expression with its inferred type.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,7 +215,26 @@ pub struct Body {
     pub diagnostics: Vec<TyDiagnostic>,
 }
 
-pub(crate) fn ty_body_query(compiler: &dyn CompilerDb, body: BodyId) {
+impl Body {
+    fn with_capacity(body: &crate::def::body::Body) -> Body {
+        Body {
+            stmts: IndexVec::with_capacity(body.statements.len()),
+            exprs: IndexVec::with_capacity(body.expressions.len()),
+            local_vars: IndexVec::with_capacity(body.local_vars.len()),
+            blocks: IndexVec::with_capacity(body.blocks.len()),
+            entry_block: None,
+            params: vec![],
+            diagnostics: vec![],
+        }
+    }
+
+    pub fn root_expr(&self) -> Id<Expr> {
+        // TODO do the same as def::body
+        Id::from_index(self.exprs.len() - 1)
+    }
+}
+
+pub(crate) fn ty_body_query(compiler: &dyn CompilerDb, body: ConstExprId) {
     let _span = trace_span!("ty_body_query", ?body).entered();
 
     todo!()
@@ -254,10 +267,16 @@ pub(crate) fn ty_function_body_query(compiler: &dyn CompilerDb, function: Functi
     lower::lower_function_body(compiler, function)
 }
 
-pub(crate) fn const_eval_query(compiler: &dyn CompilerDb, body: BodyId) -> ConstantValue {
-    let _span = trace_span!("const_eval_query", ?body).entered();
-    //
-    //let body = compiler.body(body);
-    //let ty_body = compiler.ty_body(body);
-    todo!("const_eval_query")
+pub(crate) fn ty_const_expr_body_query(compiler: &dyn CompilerDb, const_expr: ConstExprId) -> ty::body::Body {
+    let _span = trace_span!("ty_const_expr_body_query", ?const_expr).entered();
+    lower::lower_const_expr_body(compiler, const_expr)
+}
+
+pub(crate) fn const_eval_query(
+    compiler: &dyn CompilerDb,
+    const_expr: ConstExprId,
+) -> Result<ConstantValue, TyDiagnostic> {
+    let _span = trace_span!("const_eval_query", ?const_expr).entered();
+    let body = compiler.ty_const_expr_body(const_expr);
+    const_eval::eval_const_expr_body(compiler, const_expr, body)
 }

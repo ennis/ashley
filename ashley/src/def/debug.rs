@@ -1,8 +1,8 @@
 use crate::{
     db::{DebugWithDb, ModuleId},
-    def::{BodyId, FieldLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
+    def::{ConstExprId, FieldLoc, FunctionId, FunctionLoc, GlobalId, GlobalLoc, StructId, StructLoc},
+    CompilerDb,
 };
-use ashley::{def::BodyOwnerId, CompilerDb};
 use ashley_db::AsIndex;
 use std::fmt::Formatter;
 

@@ -4,148 +4,63 @@ use std::ptr;
 #[derive(FragmentOutputInterface)]
 struct GBuffers {
     /// Color buffer, R16G16B16A16_SFLOAT
-    #[attachment(
-        color,
-        format = "R16G16B16A16_SFLOAT",
-        samples = 1,
-        load_op = "CLEAR",
-        store_op = "STORE",
-        layout = "COLOR_ATTACHMENT_OPTIMAL"
-    )]
+    #[format(R16G16B16A16_SFLOAT)]
     color: graal::ImageInfo,
 
     /// Normals, RG16_SFLOAT
-    #[attachment(
-        color,
-        format = "R16G16_SFLOAT",
-        samples = 1,
-        load_op = "CLEAR",
-        store_op = "STORE",
-        layout = "COLOR_ATTACHMENT_OPTIMAL"
-    )]
+    #[format(RG16_SFLOAT)]
     normal: graal::ImageInfo,
 
     /// Tangents: RG16_SFLOAT
-    #[attachment(
-        color,
-        format = "R16G16_SFLOAT",
-        samples = 1,
-        load_op = "CLEAR",
-        store_op = "STORE",
-        layout = "COLOR_ATTACHMENT_OPTIMAL"
-    )]
+    #[format(RG16_SFLOAT)]
     tangent: graal::ImageInfo,
 
     /// Depth: D32_SFLOAT
-    #[attachment(
-        depth,
-        format = "D32_SFLOAT",
-        samples = 1,
-        load_op = "CLEAR",
-        store_op = "STORE",
-        layout = "DEPTH_STENCIL_ATTACHMENT_OPTIMAL"
-    )]
+    #[format(D32_SFLOAT)]
     depth: graal::ImageInfo,
-
-    #[framebuffer]
-    framebuffer: vk::Framebuffer,
 }
 
 #[test]
 fn test_fragment_output() {
     let attachments = <GBuffers as FragmentOutputInterface>::ATTACHMENTS;
 
-    assert_eq!(
-        attachments[0].flags,
-        vk::AttachmentDescriptionFlags::empty()
-    );
+    assert_eq!(attachments[0].flags, vk::AttachmentDescriptionFlags::empty());
     assert_eq!(attachments[0].format, vk::Format::R16G16B16A16_SFLOAT);
     assert_eq!(attachments[0].samples, vk::SampleCountFlags::TYPE_1);
     assert_eq!(attachments[0].load_op, vk::AttachmentLoadOp::CLEAR);
     assert_eq!(attachments[0].store_op, vk::AttachmentStoreOp::STORE);
-    assert_eq!(
-        attachments[0].stencil_load_op,
-        vk::AttachmentLoadOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[0].stencil_store_op,
-        vk::AttachmentStoreOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[0].initial_layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
-    assert_eq!(
-        attachments[0].final_layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
+    assert_eq!(attachments[0].stencil_load_op, vk::AttachmentLoadOp::DONT_CARE);
+    assert_eq!(attachments[0].stencil_store_op, vk::AttachmentStoreOp::DONT_CARE);
+    assert_eq!(attachments[0].initial_layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    assert_eq!(attachments[0].final_layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
-    assert_eq!(
-        attachments[1].flags,
-        vk::AttachmentDescriptionFlags::empty()
-    );
+    assert_eq!(attachments[1].flags, vk::AttachmentDescriptionFlags::empty());
     assert_eq!(attachments[1].format, vk::Format::R16G16_SFLOAT);
     assert_eq!(attachments[1].samples, vk::SampleCountFlags::TYPE_1);
     assert_eq!(attachments[1].load_op, vk::AttachmentLoadOp::CLEAR);
     assert_eq!(attachments[1].store_op, vk::AttachmentStoreOp::STORE);
-    assert_eq!(
-        attachments[1].stencil_load_op,
-        vk::AttachmentLoadOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[1].stencil_store_op,
-        vk::AttachmentStoreOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[1].initial_layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
-    assert_eq!(
-        attachments[1].final_layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
+    assert_eq!(attachments[1].stencil_load_op, vk::AttachmentLoadOp::DONT_CARE);
+    assert_eq!(attachments[1].stencil_store_op, vk::AttachmentStoreOp::DONT_CARE);
+    assert_eq!(attachments[1].initial_layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    assert_eq!(attachments[1].final_layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
-    assert_eq!(
-        attachments[2].flags,
-        vk::AttachmentDescriptionFlags::empty()
-    );
+    assert_eq!(attachments[2].flags, vk::AttachmentDescriptionFlags::empty());
     assert_eq!(attachments[2].format, vk::Format::R16G16_SFLOAT);
     assert_eq!(attachments[2].samples, vk::SampleCountFlags::TYPE_1);
     assert_eq!(attachments[2].load_op, vk::AttachmentLoadOp::CLEAR);
     assert_eq!(attachments[2].store_op, vk::AttachmentStoreOp::STORE);
-    assert_eq!(
-        attachments[2].stencil_load_op,
-        vk::AttachmentLoadOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[2].stencil_store_op,
-        vk::AttachmentStoreOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[2].initial_layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
-    assert_eq!(
-        attachments[2].final_layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
+    assert_eq!(attachments[2].stencil_load_op, vk::AttachmentLoadOp::DONT_CARE);
+    assert_eq!(attachments[2].stencil_store_op, vk::AttachmentStoreOp::DONT_CARE);
+    assert_eq!(attachments[2].initial_layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    assert_eq!(attachments[2].final_layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
-    assert_eq!(
-        attachments[3].flags,
-        vk::AttachmentDescriptionFlags::empty()
-    );
+    assert_eq!(attachments[3].flags, vk::AttachmentDescriptionFlags::empty());
     assert_eq!(attachments[3].format, vk::Format::D32_SFLOAT);
     assert_eq!(attachments[3].samples, vk::SampleCountFlags::TYPE_1);
     assert_eq!(attachments[3].load_op, vk::AttachmentLoadOp::CLEAR);
     assert_eq!(attachments[3].store_op, vk::AttachmentStoreOp::STORE);
-    assert_eq!(
-        attachments[3].stencil_load_op,
-        vk::AttachmentLoadOp::DONT_CARE
-    );
-    assert_eq!(
-        attachments[3].stencil_store_op,
-        vk::AttachmentStoreOp::DONT_CARE
-    );
+    assert_eq!(attachments[3].stencil_load_op, vk::AttachmentLoadOp::DONT_CARE);
+    assert_eq!(attachments[3].stencil_store_op, vk::AttachmentStoreOp::DONT_CARE);
     assert_eq!(
         attachments[3].initial_layout,
         vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
@@ -157,20 +72,11 @@ fn test_fragment_output() {
 
     let color_att = <GBuffers as FragmentOutputInterface>::COLOR_ATTACHMENTS;
     assert_eq!(color_att[0].attachment, 0);
-    assert_eq!(
-        color_att[0].layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
+    assert_eq!(color_att[0].layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
     assert_eq!(color_att[1].attachment, 1);
-    assert_eq!(
-        color_att[1].layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
+    assert_eq!(color_att[1].layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
     assert_eq!(color_att[2].attachment, 2);
-    assert_eq!(
-        color_att[2].layout,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-    );
+    assert_eq!(color_att[2].layout, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
     let depth_att = <GBuffers as FragmentOutputInterface>::DEPTH_ATTACHMENT;
     assert!(depth_att.is_some());

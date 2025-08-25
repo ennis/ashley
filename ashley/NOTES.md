@@ -2108,3 +2108,14 @@ Idea: attributes define their syntax like a rust macro. Custom attributes modify
 pub struct 
 
 ```
+
+# Goals revisited
+
+- Debugging a variable in a shader by dumping it to an image: I think this could be done in debugging layers on top of vulkan. Capture the shaders and rewrite them with an additional output for a given variable.
+- Composition / linking: doesn't really require a language on top, SPIR-V already has extensions
+- the incremental framework adds a lot of complexity for something that could probably be recompiled from scratch on every change
+  - not enough resources to build a language server _in addition to_ a compiler
+
+New goals:
+- Reflection. Process a shader file (header) and generate a rust/c++/whatever file for the structures.
+

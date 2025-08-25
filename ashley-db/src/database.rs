@@ -18,7 +18,7 @@ pub trait Database: Send + 'static {
 
     /// Returns the current revision.
     ///
-    /// Short-hand for `self.runtime().current_revision()`.
+    /// Shorthand for `self.runtime().current_revision()`.
     fn current_revision(&self) -> Revision {
         self.runtime().current_revision()
     }

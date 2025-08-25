@@ -26,7 +26,6 @@ pub(crate) fn has_repr_c_attr(ast: &syn::DeriveInput) -> bool {
 /// field of a repr(C) struct.
 ///
 /// This assumes that the derive input is a repr(C) struct.
-///
 pub(crate) fn generate_repr_c_layout_const_fn(derive_input: &syn::DeriveInput) -> Result<TokenStream, syn::Error> {
     let fields = match derive_input.data {
         syn::Data::Struct(ref s) => &s.fields,
